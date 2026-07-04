@@ -1,0 +1,115 @@
+{
+  "schema_version": "0.1",
+  "name": "Axiom Skills Registry",
+  "updated_at": "2026-01-01T00:00:00Z",
+  "skills": [
+    {
+      "id": "file.read",
+      "version": "0.1.0",
+      "category": "filesystem",
+      "platforms": ["windows", "linux", "macos"],
+      "manifest_url": "skills/file.read/skill.toml",
+      "min_axiom_version": "0.1.0"
+    },
+    {
+      "id": "file.write",
+      "version": "0.1.0",
+      "category": "filesystem",
+      "platforms": ["windows", "linux", "macos"],
+      "manifest_url": "skills/file.write/skill.toml",
+      "min_axiom_version": "0.1.0"
+    },
+    {
+      "id": "project.scan",
+      "version": "0.1.0",
+      "category": "project",
+      "platforms": ["windows", "linux", "macos"],
+      "manifest_url": "skills/project.scan/skill.toml",
+      "min_axiom_version": "0.1.0"
+    },
+    {
+      "id": "web.fetch",
+      "version": "0.1.0",
+      "category": "web",
+      "platforms": ["windows", "linux", "macos"],
+      "manifest_url": "skills/web.fetch/skill.toml",
+      "min_axiom_version": "0.1.0"
+    },
+    {
+      "id": "shell.powershell.safe",
+      "version": "0.1.0",
+      "category": "shell",
+      "platforms": ["windows"],
+      "manifest_url": "skills/shell.powershell.safe/skill.toml",
+      "min_axiom_version": "0.1.0"
+    },
+    {
+      "id": "shell.bash.safe",
+      "version": "0.1.0",
+      "category": "shell",
+      "platforms": ["linux"],
+      "manifest_url": "skills/shell.bash.safe/skill.toml",
+      "min_axiom_version": "0.1.0"
+    },
+    {
+      "id": "shell.zsh.safe",
+      "version": "0.1.0",
+      "category": "shell",
+      "platforms": ["macos"],
+      "manifest_url": "skills/shell.zsh.safe/skill.toml",
+      "min_axiom_version": "0.1.0"
+    },
+    {
+      "id": "git.status",
+      "version": "0.1.0",
+      "category": "git",
+      "platforms": ["windows", "linux", "macos"],
+      "manifest_url": "skills/git.status/skill.toml",
+      "min_axiom_version": "0.1.0"
+    },
+    {
+      "id": "git.diff",
+      "version": "0.1.0",
+      "category": "git",
+      "platforms": ["windows", "linux", "macos"],
+      "manifest_url": "skills/git.diff/skill.toml",
+      "min_axiom_version": "0.1.0"
+    },
+    {
+      "id": "python.write",
+      "version": "0.1.0",
+      "category": "coding",
+      "platforms": ["windows", "linux", "macos"],
+      "manifest_url": "skills/python.write/skill.toml",
+      "min_axiom_version": "0.1.0"
+    },
+    {
+      "id": "python.run",
+      "version": "0.1.0",
+      "category": "coding",
+      "platforms": ["windows", "linux", "macos"],
+      "manifest_url": "skills/python.run/skill.toml",
+      "min_axiom_version": "0.1.0"
+    }
+  ],
+  "bundles": [
+    {
+      "id": "essential.windows",
+      "name": "Essential Windows Skills",
+      "platform": "windows",
+      "bundle_url": "bundles/essential.windows.toml"
+    },
+    {
+      "id": "essential.linux",
+      "name": "Essential Linux Skills",
+      "platform": "linux",
+      "bundle_url": "bundles/essential.linux.toml"
+    },
+    {
+      "id": "essential.macos",
+      "name": "Essential macOS Skills",
+      "platform": "macos",
+      "bundle_url": "bundles/essential.macos.toml"
+    }
+  ]
+}

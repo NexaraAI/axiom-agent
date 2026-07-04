@@ -1,0 +1,30 @@
+# Build output
+target/
+node_modules/
+dist/
+vendor/bin/
+
+# Binaries (keep bin/axiom.js)
+bin/axiom-*
+bin/*.exe
+
+# Environment and secrets
+.env
+.env.*
+*.pem
+*.key
+id_rsa
+id_dsa
+credentials.json
+token.json
+
+# Logs
+npm-debug.log
+*.log
+
+# Proof output (generated at runtime)
+proofs/
+
+# OS files
+.DS_Store
+Thumbs.db

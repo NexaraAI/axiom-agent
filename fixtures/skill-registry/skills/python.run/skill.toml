@@ -1,0 +1,20 @@
+id = "python.run"
+name = "Run Python Safely"
+version = "0.1.0"
+description = "Runs Python commands through safe shell execution."
+category = "coding"
+skill_type = "tool"
+risk_level = "high"
+permissions = ["shell_run"]
+platforms = ["windows", "linux", "macos"]
+entrypoint = "builtin:python.run"
+author = "Axiom Agent"
+license = "MIT"
+min_axiom_version = "0.1.0"
+
+[llm_card]
+summary = "Use this when the user asks to run or test Python code."
+when_to_use = ["User asks to run Python", "User asks to execute tests for a Python script"]
+input_contract = "command, working_directory, safety_level"
+output_contract = "exit_code, stdout, stderr"
+token_budget = 260

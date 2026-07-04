@@ -1,0 +1,20 @@
+id = "shell.zsh.safe"
+name = "Run Safe Zsh"
+version = "0.1.0"
+description = "Runs allowlisted zsh commands with safety checks."
+category = "shell"
+skill_type = "tool"
+risk_level = "high"
+permissions = ["shell_run"]
+platforms = ["macos"]
+entrypoint = "builtin:shell.zsh.safe"
+author = "Axiom Agent"
+license = "MIT"
+min_axiom_version = "0.1.0"
+
+[llm_card]
+summary = "Use safe zsh command execution for terminal tasks on macOS."
+when_to_use = ["User asks to run a command", "User asks to test or inspect via terminal"]
+input_contract = "command, working_directory, safety_level"
+output_contract = "exit_code, stdout, stderr"
+token_budget = 260

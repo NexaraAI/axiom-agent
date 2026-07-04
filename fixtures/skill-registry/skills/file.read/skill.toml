@@ -1,0 +1,20 @@
+id = "file.read"
+name = "Read Workspace File"
+version = "0.1.0"
+description = "Reads UTF-8 text from a file inside the active workspace."
+category = "files"
+skill_type = "tool"
+risk_level = "low"
+permissions = ["file_system_read"]
+platforms = ["windows", "linux", "macos"]
+entrypoint = "builtin:file.read"
+author = "Axiom Agent"
+license = "MIT"
+min_axiom_version = "0.1.0"
+
+[llm_card]
+summary = "Read UTF-8 text files inside the active workspace."
+when_to_use = ["User asks to inspect a file", "User asks to read project text"]
+input_contract = "path"
+output_contract = "content, bytes_read"
+token_budget = 180

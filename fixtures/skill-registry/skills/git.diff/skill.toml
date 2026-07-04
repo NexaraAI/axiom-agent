@@ -1,0 +1,20 @@
+id = "git.diff"
+name = "Git Diff"
+version = "0.1.0"
+description = "Shows repository diffs safely."
+category = "git"
+skill_type = "tool"
+risk_level = "low"
+permissions = ["shell_run"]
+platforms = ["windows", "linux", "macos"]
+entrypoint = "builtin:git.diff"
+author = "Axiom Agent"
+license = "MIT"
+min_axiom_version = "0.1.0"
+
+[llm_card]
+summary = "Inspect git diffs without modifying the repository."
+when_to_use = ["User asks for git diff", "User asks to review changes"]
+input_contract = "repository_path, staged"
+output_contract = "diff"
+token_budget = 220

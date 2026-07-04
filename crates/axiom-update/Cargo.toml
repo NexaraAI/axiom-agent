@@ -1,0 +1,14 @@
+[package]
+name = "axiom-update"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[lib]
+name = "axiom_upd"
+path = "src/lib.rs"
+
+[dependencies]
+semver.workspace = true
+sha2.workspace = true

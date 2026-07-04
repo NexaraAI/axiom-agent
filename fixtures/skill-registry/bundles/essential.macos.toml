@@ -1,0 +1,13 @@
+id = "essential.macos"
+name = "macOS Essential Skills"
+description = "Essential local skills for macOS terminal use."
+platforms = ["macos"]
+skills = [
+  "file.read",
+  "file.write",
+  "project.scan",
+  "web.fetch",
+  "shell.zsh.safe",
+  "git.status",
+  "git.diff",
+]

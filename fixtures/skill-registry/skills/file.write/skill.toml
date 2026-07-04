@@ -1,0 +1,20 @@
+id = "file.write"
+name = "Write Workspace File"
+version = "0.1.0"
+description = "Writes UTF-8 text to a file inside the active workspace."
+category = "files"
+skill_type = "tool"
+risk_level = "medium"
+permissions = ["file_system_write"]
+platforms = ["windows", "linux", "macos"]
+entrypoint = "builtin:file.write"
+author = "Axiom Agent"
+license = "MIT"
+min_axiom_version = "0.1.0"
+
+[llm_card]
+summary = "Write or save text files inside the active workspace."
+when_to_use = ["User asks to write a file", "User asks to save generated content"]
+input_contract = "path, content, overwrite_confirmation"
+output_contract = "written_path, bytes_written"
+token_budget = 220

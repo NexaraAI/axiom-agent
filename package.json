@@ -1,0 +1,28 @@
+{
+  "name": "axiom-agent",
+  "version": "0.1.0",
+  "description": "Terminal-first Rust CLI for Axiom Agent.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/NexaraAI/axiom-agent.git"
+  },
+  "axiomAgent": {
+    "releaseRepo": "https://github.com/NexaraAI/axiom-agent"
+  },
+  "bin": {
+    "axiom": "./bin/axiom.js"
+  },
+  "scripts": {
+    "postinstall": "node scripts/postinstall.js",
+    "smoke": "node scripts/smoke-test.js",
+    "check-version-sync": "node scripts/check-version-sync.js"
+  },
+  "files": [
+    "bin/",
+    "scripts/",
+    "README.md",
+    "LICENSE",
+    "package.json"
+  ]
+}

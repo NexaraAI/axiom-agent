@@ -1,0 +1,13 @@
+id = "essential.windows"
+name = "Windows Essential Skills"
+description = "Essential local skills for Windows terminal use."
+platforms = ["windows"]
+skills = [
+  "file.read",
+  "file.write",
+  "project.scan",
+  "web.fetch",
+  "shell.powershell.safe",
+  "git.status",
+  "git.diff",
+]

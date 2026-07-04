@@ -1,0 +1,20 @@
+id = "git.status"
+name = "Git Status"
+version = "0.1.0"
+description = "Shows repository status safely."
+category = "git"
+skill_type = "tool"
+risk_level = "low"
+permissions = ["shell_run"]
+platforms = ["windows", "linux", "macos"]
+entrypoint = "builtin:git.status"
+author = "Axiom Agent"
+license = "MIT"
+min_axiom_version = "0.1.0"
+
+[llm_card]
+summary = "Inspect git working tree status without changing files."
+when_to_use = ["User asks for git status", "User asks what changed"]
+input_contract = "repository_path"
+output_contract = "branch, staged, unstaged, untracked"
+token_budget = 180

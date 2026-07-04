@@ -1,0 +1,13 @@
+id = "essential.linux"
+name = "Linux Essential Skills"
+description = "Essential local skills for Linux terminal use."
+platforms = ["linux"]
+skills = [
+  "file.read",
+  "file.write",
+  "project.scan",
+  "web.fetch",
+  "shell.bash.safe",
+  "git.status",
+  "git.diff",
+]

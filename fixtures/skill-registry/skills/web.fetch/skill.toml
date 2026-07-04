@@ -1,0 +1,20 @@
+id = "web.fetch"
+name = "Fetch Web Text"
+version = "0.1.0"
+description = "Fetches URL text with timeout and response size limits."
+category = "web"
+skill_type = "tool"
+risk_level = "medium"
+permissions = ["network"]
+platforms = ["windows", "linux", "macos"]
+entrypoint = "builtin:web.fetch"
+author = "Axiom Agent"
+license = "MIT"
+min_axiom_version = "0.1.0"
+
+[llm_card]
+summary = "Fetch text from a URL when current web content is needed."
+when_to_use = ["User gives a URL", "User asks to fetch website text"]
+input_contract = "url, timeout_ms, max_bytes"
+output_contract = "status, text, content_type"
+token_budget = 220

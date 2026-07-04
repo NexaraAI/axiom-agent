@@ -1,0 +1,20 @@
+id = "project.scan"
+name = "Scan Project"
+version = "0.1.0"
+description = "Scans a project tree while ignoring common generated directories."
+category = "project"
+skill_type = "tool"
+risk_level = "low"
+permissions = ["project_scan", "file_system_read"]
+platforms = ["windows", "linux", "macos"]
+entrypoint = "builtin:project.scan"
+author = "Axiom Agent"
+license = "MIT"
+min_axiom_version = "0.1.0"
+
+[llm_card]
+summary = "Inspect project structure without reading generated dependency folders."
+when_to_use = ["User asks about project layout", "User asks to find relevant files"]
+input_contract = "workspace_root, ignore_patterns"
+output_contract = "file_tree, summary"
+token_budget = 200

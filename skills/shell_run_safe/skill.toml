@@ -1,0 +1,21 @@
+id = "shell_run_safe"
+name = "Run Safe Shell Command"
+version = "0.1.0"
+description = "Runs allowlisted shell commands and blocks destructive commands by default."
+risk_level = "high"
+permissions = ["shell_run"]
+platforms = ["windows", "linux", "macos"]
+entrypoint = "builtin:shell_run_safe"
+author = "Axiom Agent"
+license = "MIT"
+
+[updates]
+auto_update = false
+channel = "stable"
+
+[input_schema]
+type = "object"
+
+[output_schema]
+type = "object"
+
