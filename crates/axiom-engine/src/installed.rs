@@ -537,14 +537,15 @@ mod tests {
         let skills_dir = dir.join("skills");
         let registry_root = fixture_registry_root();
 
-        let records =
-            install_bundle_from_local_registry(&registry_root, "essential.windows", &skills_dir)
-                .expect("install bundle");
+        let bundle_id = crate::registry::essential_bundle_id_for_os(std::env::consts::OS)
+            .expect("current platform has essential bundle");
+        let records = install_bundle_from_local_registry(&registry_root, bundle_id, &skills_dir)
+            .expect("install bundle");
         let installed = InstalledSkills::load_from_dir(&skills_dir).expect("load installed");
 
         assert!(records.iter().any(|record| record.id == "file.read"));
         assert!(installed_skills_path(&skills_dir).exists());
-        assert!(installed.skills.contains_key("shell.powershell.safe"));
+        assert!(installed.skills.contains_key("file.read"));
         let _ = fs::remove_dir_all(dir);
     }
 
