@@ -14,7 +14,7 @@ Proof Mode records what happened during each session: what was asked, which skil
 
 ## Current Status
 
-v0.1.0. Terminal foundation is built.
+v0.5.0-beta. Terminal foundation is built and release assets are being validated.
 
 What works:
 - Terminal CLI with onboarding, chat, coding mode, and proof commands
@@ -33,7 +33,7 @@ What works:
 
 What is not done yet:
 - npm package is not published. Install from source for now.
-- GitHub Release assets do not exist until the release workflow runs from a tag.
+- GitHub Release assets are built by the release workflow from version tags.
 - Streaming responses are not implemented.
 - External executable skill binaries are not supported.
 - Core binary updates require published GitHub Releases before normal installs can activate.
@@ -255,10 +255,8 @@ See `docs/TESTING.md` and `docs/DEMO.md` for isolated local runs without API key
 
 ## Roadmap
 
-- v0.1: terminal foundation, config, chat, Skill Lens, tool execution, registry, npm scaffold, Coder v0.1, Proof v0.1
-- v0.2: stronger editing workflows, richer patch application
-- v0.3: proof analytics, multi-step workflows
-- v0.4: broader skill ecosystem work and repository publishing flow
+- v0.5.0-beta: terminal foundation, config, chat, Skill Lens, tool execution, registry, npm scaffold, Coder mode, Proof Mode, offline demos, release assets, and release safety checks
+- Next: stronger editing workflows, richer patch application, proof analytics, and broader skill ecosystem polish
 - Later: external skill binaries, remote registry publishing, app layers
 
 ## License

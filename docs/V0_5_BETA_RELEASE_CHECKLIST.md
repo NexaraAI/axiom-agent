@@ -1,6 +1,6 @@
-# v0.1 Release Checklist
+# v0.5.0-beta Release Checklist
 
-Use this checklist before creating a `v0.1.0` release tag. Do not publish npm until the release assets and checksums are confirmed.
+Use this checklist before creating a `v0.5.0-beta` release tag. Do not publish npm until the release assets and checksums are confirmed.
 
 ## Pre-Release Checks
 
@@ -37,8 +37,8 @@ The E2E test must use a temporary `AXIOM_HOME`, the mock provider, and the local
 Only tag after the checks above pass:
 
 ```bash
-git tag v0.1.0
-git push origin v0.1.0
+git tag v0.5.0-beta
+git push origin v0.5.0-beta
 ```
 
 ## After Tag

@@ -86,7 +86,7 @@ checksum = "1505bd5d3d116872e7271a6d4e16d81d0c8570876c8de68093a09ac269d8aac0"
 
 [[package]]
 name = "axiom-cli"
-version = "0.1.0"
+version = "0.5.0-beta"
 dependencies = [
  "anyhow",
  "axiom-coder",
@@ -104,7 +104,7 @@ dependencies = [
 
 [[package]]
 name = "axiom-coder"
-version = "0.1.0"
+version = "0.5.0-beta"
 dependencies = [
  "axiom-core",
  "serde",
@@ -114,7 +114,7 @@ dependencies = [
 
 [[package]]
 name = "axiom-core"
-version = "0.1.0"
+version = "0.5.0-beta"
 dependencies = [
  "dirs",
  "serde",
@@ -124,7 +124,7 @@ dependencies = [
 
 [[package]]
 name = "axiom-engine"
-version = "0.1.0"
+version = "0.5.0-beta"
 dependencies = [
  "axiom-core",
  "reqwest",
@@ -139,7 +139,7 @@ dependencies = [
 
 [[package]]
 name = "axiom-lens"
-version = "0.1.0"
+version = "0.5.0-beta"
 dependencies = [
  "axiom-engine",
  "serde",
@@ -147,7 +147,7 @@ dependencies = [
 
 [[package]]
 name = "axiom-llm"
-version = "0.1.0"
+version = "0.5.0-beta"
 dependencies = [
  "async-trait",
  "reqwest",
@@ -159,7 +159,7 @@ dependencies = [
 
 [[package]]
 name = "axiom-proof"
-version = "0.1.0"
+version = "0.5.0-beta"
 dependencies = [
  "serde",
  "serde_json",
@@ -168,7 +168,7 @@ dependencies = [
 
 [[package]]
 name = "axiom-update"
-version = "0.1.0"
+version = "0.5.0-beta"
 dependencies = [
  "reqwest",
  "semver",

@@ -1,6 +1,6 @@
 # Release
 
-Axiom has release workflow plumbing for GitHub Release binaries and npm installation. This document describes the manual v0.1 release path. It does not publish anything automatically.
+Axiom has release workflow plumbing for GitHub Release binaries and npm installation. This document describes the manual `0.5.0-beta` release path. It does not publish anything automatically.
 
 ## Version Sync
 
@@ -31,7 +31,7 @@ npm run security-check
 `.github/workflows/release.yml` triggers on tags like:
 
 ```bash
-v0.1.0
+v0.5.0-beta
 ```
 
 It builds:
@@ -60,7 +60,7 @@ https://github.com/NexaraAI/axiom-agent
 
 It expects the asset names listed above plus `SHA256SUMS`. Stable channel ignores prereleases. Nightly channel can use prereleases. Dev channel can read mocked release metadata from a local JSON file or directory for testing.
 
-This repository still needs a tagged release before normal users can install through the updater. Do not claim update availability until matching release assets exist.
+Normal installs and updater installs require a matching tagged GitHub Release with the assets listed above. Do not claim update availability for a version until matching release assets exist.
 
 ## npm Publish Flow
 

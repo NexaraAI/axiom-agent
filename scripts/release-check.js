@@ -109,7 +109,7 @@ function assertReleaseFiles() {
   expectFile("docs/RELEASE.md");
   expectFile("docs/TESTING.md");
   expectFile("docs/DEMO.md");
-  expectFile("docs/V0_1_RELEASE_CHECKLIST.md");
+  expectFile("docs/V0_5_BETA_RELEASE_CHECKLIST.md");
 }
 
 function runReleaseCheck() {
