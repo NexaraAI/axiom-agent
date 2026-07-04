@@ -15,6 +15,8 @@ pub struct AxiomConfig {
     #[serde(default)]
     pub providers: BTreeMap<String, ProviderConfig>,
     pub skills: SkillsConfig,
+    #[serde(default)]
+    pub update: UpdateConfig,
     pub coder: CoderConfig,
     pub proof: ProofConfig,
 }
@@ -38,6 +40,7 @@ pub struct LlmConfig {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ProviderConfig {
+    Mock {},
     CloudflareAiGateway {
         account_id: String,
         gateway_id: String,
@@ -62,6 +65,47 @@ pub struct SkillsConfig {
     pub allow_untrusted_registries: bool,
     #[serde(default = "default_fallback_to_bundled_registry")]
     pub fallback_to_bundled_registry: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UpdateConfig {
+    #[serde(default = "default_update_channel")]
+    pub channel: String,
+    #[serde(default = "default_update_policy")]
+    pub policy: String,
+    #[serde(default = "default_update_release_repo")]
+    pub release_repo: String,
+    #[serde(default = "default_update_check_interval_hours")]
+    pub check_interval_hours: u64,
+    #[serde(default)]
+    pub allow_prerelease: bool,
+    #[serde(default = "default_update_backup_previous_binary")]
+    pub backup_previous_binary: bool,
+    #[serde(default = "default_update_verify_checksums")]
+    pub verify_checksums: bool,
+    #[serde(default)]
+    pub last_checked_at: Option<String>,
+    #[serde(default)]
+    pub last_available_version: Option<String>,
+    #[serde(default)]
+    pub last_update_error: Option<String>,
+}
+
+impl Default for UpdateConfig {
+    fn default() -> Self {
+        Self {
+            channel: default_update_channel(),
+            policy: default_update_policy(),
+            release_repo: default_update_release_repo(),
+            check_interval_hours: default_update_check_interval_hours(),
+            allow_prerelease: false,
+            backup_previous_binary: default_update_backup_previous_binary(),
+            verify_checksums: default_update_verify_checksums(),
+            last_checked_at: None,
+            last_available_version: None,
+            last_update_error: None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -99,6 +143,7 @@ pub struct ProofConfig {
 impl Default for AxiomConfig {
     fn default() -> Self {
         let mut providers = BTreeMap::new();
+        providers.insert("mock".to_string(), ProviderConfig::Mock {});
         providers.insert(
             "cloudflare".to_string(),
             ProviderConfig::CloudflareAiGateway {
@@ -139,6 +184,7 @@ impl Default for AxiomConfig {
                 allow_untrusted_registries: false,
                 fallback_to_bundled_registry: true,
             },
+            update: UpdateConfig::default(),
             coder: CoderConfig {
                 auto_route_from_chat: default_coder_auto_route_from_chat(),
                 auto_route_mode: default_coder_auto_route_mode(),
@@ -168,6 +214,30 @@ fn default_registry_cache_ttl_hours() -> u64 {
 }
 
 fn default_fallback_to_bundled_registry() -> bool {
+    true
+}
+
+fn default_update_channel() -> String {
+    "stable".to_string()
+}
+
+fn default_update_policy() -> String {
+    "notify".to_string()
+}
+
+fn default_update_release_repo() -> String {
+    "https://github.com/NexaraAI/axiom-agent".to_string()
+}
+
+fn default_update_check_interval_hours() -> u64 {
+    24
+}
+
+fn default_update_backup_previous_binary() -> bool {
+    true
+}
+
+fn default_update_verify_checksums() -> bool {
     true
 }
 
@@ -221,6 +291,11 @@ fn default_proof_max_capture_chars() -> usize {
 
 impl AxiomConfig {
     pub fn default_config_dir() -> Result<PathBuf> {
+        if let Ok(home) = std::env::var("AXIOM_HOME") {
+            if !home.trim().is_empty() {
+                return Ok(PathBuf::from(home));
+            }
+        }
         let base = dirs::config_dir().ok_or(AxiomError::MissingConfigDirectory)?;
         Ok(base.join("axiom-agent"))
     }
@@ -285,6 +360,7 @@ fn expand_home(path: &str) -> PathBuf {
 
 #[cfg(test)]
 mod tests {
+    use std::ffi::OsString;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use super::*;
@@ -354,6 +430,20 @@ format = "json"
         assert_eq!(config.proof.default_format, "json");
         assert!(config.proof.trace_json);
         assert!(config.proof.auto_export_markdown);
+        assert_eq!(config.update.channel, "stable");
+        assert_eq!(config.update.policy, "notify");
+    }
+
+    #[test]
+    fn axiom_home_overrides_default_config_dir() {
+        let dir = unique_temp_dir();
+        let _guard = EnvVarGuard::set("AXIOM_HOME", dir.as_os_str().to_os_string());
+
+        let config_dir = AxiomConfig::default_config_dir().expect("config dir");
+        let config_path = AxiomConfig::default_config_path().expect("config path");
+
+        assert_eq!(config_dir, dir);
+        assert!(config_path.ends_with("config.toml"));
     }
 
     fn unique_temp_dir() -> PathBuf {
@@ -362,5 +452,28 @@ format = "json"
             .expect("system time")
             .as_nanos();
         std::env::temp_dir().join(format!("axiom-core-config-test-{nanos}"))
+    }
+
+    struct EnvVarGuard {
+        key: &'static str,
+        previous: Option<OsString>,
+    }
+
+    impl EnvVarGuard {
+        fn set(key: &'static str, value: OsString) -> Self {
+            let previous = std::env::var_os(key);
+            std::env::set_var(key, value);
+            Self { key, previous }
+        }
+    }
+
+    impl Drop for EnvVarGuard {
+        fn drop(&mut self) {
+            if let Some(previous) = self.previous.as_ref() {
+                std::env::set_var(self.key, previous);
+            } else {
+                std::env::remove_var(self.key);
+            }
+        }
     }
 }

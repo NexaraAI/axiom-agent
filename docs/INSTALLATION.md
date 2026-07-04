@@ -1,6 +1,15 @@
 # Installation
 
-The first public install method for Axiom Agent is npm:
+Axiom Agent is currently installed from source for normal development and testing. The npm installer scaffold exists, but the package is not published yet.
+
+Source install:
+
+```bash
+cargo build -p axiom-cli
+cargo run -p axiom-cli -- doctor
+```
+
+After npm is published, the intended install command is:
 
 ```bash
 npm install -g axiom-agent
@@ -13,13 +22,43 @@ Axiom itself remains Rust. Node.js is only used for installation and command for
 
 ## First Run
 
-After installation:
+After installation or a source build:
 
 ```bash
 axiom
 ```
 
 If no config exists, onboarding starts. After onboarding is complete, `axiom` opens terminal chat.
+
+For non-interactive setup:
+
+```bash
+axiom onboarding --non-interactive --provider mock --workspace ./demo-workspace --yes
+axiom onboarding --non-interactive --skip-provider --workspace ./demo-workspace --yes
+```
+
+`--provider mock` creates an offline demo config with no API keys. `--provider openai-compatible` and `--provider cloudflare` require `--model`. Use `--registry <url-or-path>` to pin the skills registry used by setup.
+
+## Test-Safe Config
+
+Set `AXIOM_HOME` to isolate config writes:
+
+```bash
+AXIOM_HOME=/tmp/axiom-test-home axiom doctor
+```
+
+When set, Axiom stores config and runtime state under that directory:
+
+```text
+config.toml
+skills/
+  installed_skills.json
+proofs/
+updates/
+registry-cache/
+```
+
+If `AXIOM_HOME` is not set, Axiom uses the normal platform config directory.
 
 ## Local Development Install
 
@@ -69,3 +108,17 @@ AXIOM_AGENT_RELEASE_REPO=https://github.com/example/axiom-agent npm install -g a
 - `axiom-aarch64-apple-darwin`
 
 Unsupported platforms fail with a clear installer error.
+
+## In-Place Updates
+
+After Axiom is installed from a release binary, the core updater can check and stage binary updates:
+
+```bash
+axiom update status
+axiom update check
+axiom update install
+```
+
+The updater uses the same release asset names as the npm installer and verifies `SHA256SUMS` before replacing a binary. Running from a Cargo build supports checks, but install is blocked because self-replacing `target/debug` or `target/release` builds is not a supported install mode.
+
+For npm-global installs, Axiom tries to update the installed `vendor/bin` binary if permissions allow. If the package location is not writable, reinstall with npm after a release is available.

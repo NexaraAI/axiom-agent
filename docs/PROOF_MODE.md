@@ -21,6 +21,8 @@ Proof files are stored in the user config directory:
 - Windows: `%APPDATA%\axiom-agent\proofs`
 - Linux/macOS: `~/.config/axiom-agent/proofs`
 
+If `AXIOM_HOME` is set, proofs are stored under `$AXIOM_HOME/proofs` instead. This is how integration tests avoid writing to real user config.
+
 The directory structure is:
 
 ```text
@@ -43,6 +45,8 @@ Proof traces can record:
 - workspace path;
 - Axiom Lens selected skills and routing decision;
 - tool calls and summaries;
+- core update checks, installs, rollback, channel changes, policy changes, and failures;
+- skill update checks, skill update installs, enable, disable, remove, and reset-stats actions;
 - file reads and writes;
 - approvals requested and the user decision;
 - patches and diffs;
@@ -50,7 +54,7 @@ Proof traces can record:
 - recoverable errors;
 - final response and summary.
 
-Chat creates one proof task per user message. `axiom skill run` creates a skill proof task. Axiom Coder records plan-only, apply, and test flows.
+Chat creates one proof task per user message. `axiom run` creates the same chat proof trace for a single non-interactive message. `axiom update` commands create update proof tasks. `axiom skill run`, skill update commands, and lifecycle commands create skill proof tasks. Axiom Coder records plan-only, apply, and test flows.
 
 ## Redaction
 
@@ -96,3 +100,7 @@ Inside chat:
 Markdown proof reports are meant to be clean enough to review later. They show what was asked, what Axiom selected, what it executed, what it changed, which approvals were given, and how the task ended.
 
 Proof Mode does not store raw provider headers, API tokens, full secret file contents, or huge command outputs.
+
+Core update proofs record compact metadata such as current version, available version, channel, policy, asset name, checksum result, install result, rollback result, and error summary where available. They do not store full release JSON.
+
+Skill update proofs record compact metadata such as old version, new version, registry source, selected action, status, and error summary where available. They do not store full registry contents.

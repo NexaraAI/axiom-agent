@@ -59,6 +59,8 @@ pub struct RegistrySkillEntry {
     #[serde(default, alias = "checksum")]
     pub sha256: Option<String>,
     pub min_axiom_version: Version,
+    #[serde(default)]
+    pub max_axiom_version: Option<Version>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -94,9 +96,17 @@ pub struct HttpRegistrySource {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CachedRegistrySource {
+    pub registry_path: PathBuf,
+    pub original_location: String,
+    pub timeout_secs: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RegistrySource {
     Local(LocalRegistrySource),
     Http(HttpRegistrySource),
+    Cached(CachedRegistrySource),
 }
 
 #[derive(Debug, Clone)]
@@ -156,6 +166,7 @@ impl RegistryClient {
                 load_registry_from_url_with_timeout(&source.registry_url, source.timeout_secs)
                     .await?
             }
+            RegistrySource::Cached(source) => load_registry_from_path(&source.registry_path)?,
         };
 
         Ok(Self { source, index })
@@ -191,7 +202,7 @@ impl RegistryClient {
     pub fn source_label(&self) -> &'static str {
         match self.source {
             RegistrySource::Local(_) => "local",
-            RegistrySource::Http(_) => "remote",
+            RegistrySource::Http(_) | RegistrySource::Cached(_) => "remote",
         }
     }
 
@@ -199,6 +210,7 @@ impl RegistryClient {
         match &self.source {
             RegistrySource::Local(source) => source.registry_path.display().to_string(),
             RegistrySource::Http(source) => source.registry_url.clone(),
+            RegistrySource::Cached(source) => source.original_location.clone(),
         }
     }
 
@@ -262,12 +274,36 @@ impl RegistryClient {
     ) -> Result<RegistryResource> {
         let (content, location) = match &self.source {
             RegistrySource::Local(source) => {
-                let registry_dir = source
-                    .registry_path
-                    .parent()
-                    .unwrap_or_else(|| Path::new("."));
-                let path = registry_dir.join(relative_or_url);
+                let path = resource_path_for_registry(&source.registry_path, relative_or_url);
                 (fs::read_to_string(&path)?, path.display().to_string())
+            }
+            RegistrySource::Cached(source) => {
+                let cached_path =
+                    resource_path_for_registry(&source.registry_path, relative_or_url);
+                match fs::read_to_string(&cached_path) {
+                    Ok(content) => (content, cached_path.display().to_string()),
+                    Err(error) => {
+                        let original_path = PathBuf::from(&source.original_location);
+                        if original_path.exists() {
+                            let path = resource_path_for_registry(
+                                &normalize_registry_path(&original_path),
+                                relative_or_url,
+                            );
+                            (fs::read_to_string(&path)?, path.display().to_string())
+                        } else if source.original_location.starts_with("https://")
+                            || source.original_location.starts_with("http://")
+                        {
+                            let url = resolve_registry_relative_url(
+                                &source.original_location,
+                                relative_or_url,
+                            )?;
+                            let content = fetch_url_text(&url, source.timeout_secs).await?;
+                            (content, url)
+                        } else {
+                            return Err(error.into());
+                        }
+                    }
+                }
             }
             RegistrySource::Http(source) => {
                 let url = resolve_registry_relative_url(&source.registry_url, relative_or_url)?;
@@ -384,6 +420,13 @@ fn normalize_registry_path(path: &Path) -> PathBuf {
     }
 }
 
+fn resource_path_for_registry(registry_path: &Path, relative_or_url: &str) -> PathBuf {
+    registry_path
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .join(relative_or_url)
+}
+
 async fn fetch_url_text(url: &str, timeout_secs: u64) -> Result<String> {
     validate_remote_registry_url(url)?;
     let client = reqwest::Client::builder()
@@ -417,7 +460,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parses_stage7_registry_index() {
+    fn parses_registry_index() {
         let registry: RegistryIndex = serde_json::from_str(
             r#"{
                 "schema_version": "0.1",
@@ -553,11 +596,21 @@ mod tests {
             id: "python.write".to_string(),
             version: Version::new(0, 1, 0),
             installed_at: "test".to_string(),
+            updated_at: None,
             source: "local".to_string(),
             registry_url: None,
             manifest_url: None,
             checksum: None,
             enabled: true,
+            state: crate::SkillLifecycleState::Enabled,
+            trust_level: crate::TrustLevel::Trusted,
+            last_checked_at: None,
+            last_update_error: None,
+            last_runtime_error: None,
+            success_count: 0,
+            failure_count: 0,
+            last_used_at: None,
+            average_latency_ms: None,
         });
 
         let updates = check_skill_updates(&installed, &registry);

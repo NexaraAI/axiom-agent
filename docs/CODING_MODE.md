@@ -15,6 +15,15 @@ axiom code --test
 axiom code --explain
 ```
 
+For offline plan demos:
+
+```powershell
+axiom onboarding --non-interactive --provider mock --workspace .\demo-workspace --yes
+axiom code --plan-only "add a small test"
+```
+
+The `mock` provider returns a deterministic plan. It is for tests and demos only and does not require API keys.
+
 Inside `axiom code`:
 
 ```text

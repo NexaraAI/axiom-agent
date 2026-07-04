@@ -39,6 +39,8 @@ pub struct SkillManifest {
     #[serde(default = "default_min_axiom_version")]
     pub min_axiom_version: Version,
     #[serde(default)]
+    pub max_axiom_version: Option<Version>,
+    #[serde(default)]
     pub llm_card: Option<LlmCardManifest>,
     #[serde(default)]
     pub updates: UpdatePolicy,
@@ -140,6 +142,14 @@ impl Platform {
             "linux" => Some(Self::Linux),
             "macos" => Some(Self::Macos),
             _ => None,
+        }
+    }
+
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Windows => "windows",
+            Self::Linux => "linux",
+            Self::Macos => "macos",
         }
     }
 }

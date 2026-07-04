@@ -16,7 +16,8 @@ use axiom_engine::{
 };
 use axiom_lens::{build_skill_context_message, select_relevant_skills};
 use axiom_llm::{
-    ChatMessage, ChatRequest, CloudflareAiGatewayProvider, LlmProvider, OpenAiCompatibleProvider,
+    ChatMessage, ChatRequest, CloudflareAiGatewayProvider, LlmProvider, MockProvider,
+    OpenAiCompatibleProvider,
 };
 use axiom_proof::{
     new_approval, CommandProof, FileWriteProof, LensSelectionRecord, PatchProof, ProofMode,
@@ -807,6 +808,7 @@ impl CoderSession {
             .ok_or_else(|| anyhow!("provider is not configured: {provider_name}"))?;
 
         match provider_config {
+            ProviderConfig::Mock {} => Ok(Box::new(MockProvider::new(provider_name))),
             ProviderConfig::CloudflareAiGateway {
                 account_id,
                 gateway_id,

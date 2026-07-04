@@ -11,7 +11,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use thiserror::Error;
 
-use crate::{InstalledSkill, SkillType};
+use crate::{
+    check_manifest_compatibility, current_axiom_version, InstalledSkill, Platform,
+    SkillLifecycleState, SkillType, TrustLevel,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ToolRequest {
@@ -72,6 +75,14 @@ pub enum SkillExecutionError {
     MissingToolBlock,
     #[error("skill is not installed or enabled: {0}")]
     SkillNotInstalled(String),
+    #[error("skill is disabled or blocked: {skill_id} (state: {state}, trust: {trust})")]
+    SkillBlocked {
+        skill_id: String,
+        state: SkillLifecycleState,
+        trust: TrustLevel,
+    },
+    #[error("skill is incompatible: {skill_id}: {reason}")]
+    SkillIncompatible { skill_id: String, reason: String },
     #[error("skill is not executable in this stage: {0}")]
     SkillNotExecutable(String),
     #[error("unsupported built-in skill: {0}")]
@@ -124,8 +135,28 @@ pub async fn execute_installed_tool(
 ) -> Result<SkillExecutionResult, SkillExecutionError> {
     let skill = installed_skills
         .iter()
-        .find(|skill| skill.record.enabled && skill.manifest.id == request.skill_id)
+        .find(|skill| skill.manifest.id == request.skill_id)
         .ok_or_else(|| SkillExecutionError::SkillNotInstalled(request.skill_id.clone()))?;
+
+    if !skill.record.is_executable() {
+        return Err(SkillExecutionError::SkillBlocked {
+            skill_id: request.skill_id.clone(),
+            state: skill.record.state,
+            trust: skill.record.trust_level,
+        });
+    }
+
+    let compatibility = check_manifest_compatibility(
+        &skill.manifest,
+        &current_axiom_version(),
+        &Platform::current(),
+    );
+    if !compatibility.compatible {
+        return Err(SkillExecutionError::SkillIncompatible {
+            skill_id: request.skill_id.clone(),
+            reason: compatibility.reason,
+        });
+    }
 
     if skill.manifest.skill_type != SkillType::Tool {
         return Err(SkillExecutionError::SkillNotExecutable(
@@ -606,6 +637,50 @@ mod tests {
         let _ = fs::remove_dir_all(root);
     }
 
+    #[tokio::test]
+    async fn disabled_skill_cannot_execute() {
+        let root = unique_temp_dir();
+        fs::create_dir_all(&root).expect("root");
+        let mut skill = installed_tool("file.read");
+        skill.record.enabled = false;
+        skill.record.state = SkillLifecycleState::Disabled;
+        let request = ToolRequest {
+            skill_id: "file.read".to_string(),
+            arguments: json!({ "path": "hello.txt" }),
+        };
+        let mut approval = AllowAllApprover;
+
+        let error = execute_installed_tool(&request, &[skill], &context(&root), &mut approval)
+            .await
+            .expect_err("disabled skill should be blocked");
+
+        assert!(matches!(error, SkillExecutionError::SkillBlocked { .. }));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn incompatible_skill_cannot_execute() {
+        let root = unique_temp_dir();
+        fs::create_dir_all(&root).expect("root");
+        let mut skill = installed_tool("file.read");
+        skill.manifest.min_axiom_version = Version::new(99, 0, 0);
+        let request = ToolRequest {
+            skill_id: "file.read".to_string(),
+            arguments: json!({ "path": "hello.txt" }),
+        };
+        let mut approval = AllowAllApprover;
+
+        let error = execute_installed_tool(&request, &[skill], &context(&root), &mut approval)
+            .await
+            .expect_err("incompatible skill should be blocked");
+
+        assert!(matches!(
+            error,
+            SkillExecutionError::SkillIncompatible { .. }
+        ));
+        let _ = fs::remove_dir_all(root);
+    }
+
     fn installed_tool(skill_id: &str) -> InstalledSkill {
         let manifest = SkillManifest::parse_toml(&format!(
             r#"
@@ -631,11 +706,21 @@ min_axiom_version = "0.1.0"
                 id: skill_id.to_string(),
                 version: Version::new(0, 1, 0),
                 installed_at: "test".to_string(),
+                updated_at: None,
                 source: "test".to_string(),
                 registry_url: None,
                 manifest_url: None,
                 checksum: None,
                 enabled: true,
+                state: SkillLifecycleState::Enabled,
+                trust_level: TrustLevel::Trusted,
+                last_checked_at: None,
+                last_update_error: None,
+                last_runtime_error: None,
+                success_count: 0,
+                failure_count: 0,
+                last_used_at: None,
+                average_latency_ms: None,
             },
             manifest,
         }

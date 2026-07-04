@@ -1,4 +1,4 @@
-use axiom_engine::{InstalledSkill, Platform, SkillCard, SkillType};
+use axiom_engine::{current_axiom_version, InstalledSkill, Platform, SkillCard, SkillType};
 
 use crate::analyze_intent;
 
@@ -27,8 +27,9 @@ pub fn select_relevant_skills(
     let prompt_lower = prompt.to_ascii_lowercase();
     let mut scored = installed_skills
         .iter()
-        .filter(|skill| skill.record.enabled)
+        .filter(|skill| skill.record.is_selectable())
         .filter(|skill| skill.manifest.is_platform_compatible(&platform))
+        .filter(|skill| skill.manifest.min_axiom_version <= current_axiom_version())
         .filter_map(|skill| {
             let score = score_skill(skill, &intent.candidate_skill_ids, &prompt_lower);
             (score > 0).then_some((score, skill.manifest.to_skill_card()))
@@ -92,7 +93,9 @@ fn score_skill(skill: &InstalledSkill, candidate_skill_ids: &[String], prompt_lo
 
 #[cfg(test)]
 mod tests {
-    use axiom_engine::{InstalledSkillRecord, RiskLevel, SkillManifest};
+    use axiom_engine::{
+        InstalledSkillRecord, RiskLevel, SkillLifecycleState, SkillManifest, TrustLevel,
+    };
 
     use super::*;
 
@@ -156,6 +159,19 @@ mod tests {
     }
 
     #[test]
+    fn quarantined_skills_are_not_selected() {
+        let mut skill = installed_skill(include_str!(
+            "../../../fixtures/skill-registry/skills/python.write/skill.toml"
+        ));
+        skill.record.enabled = false;
+        skill.record.state = SkillLifecycleState::Quarantined;
+
+        let cards = select_relevant_skills("write python", &[skill], 5);
+
+        assert!(cards.is_empty());
+    }
+
+    #[test]
     fn max_cards_limit_is_respected() {
         let skills = vec![
             installed_skill(include_str!(
@@ -178,11 +194,21 @@ mod tests {
                 id: manifest.id.clone(),
                 version: manifest.version.clone(),
                 installed_at: "test".to_string(),
+                updated_at: None,
                 source: "test".to_string(),
                 registry_url: None,
                 manifest_url: None,
                 checksum: None,
                 enabled: true,
+                state: SkillLifecycleState::Enabled,
+                trust_level: TrustLevel::Trusted,
+                last_checked_at: None,
+                last_update_error: None,
+                last_runtime_error: None,
+                success_count: 0,
+                failure_count: 0,
+                last_used_at: None,
+                average_latency_ms: None,
             },
             manifest,
         }

@@ -62,7 +62,7 @@ skills/
     README.md
 ```
 
-`installed_skills.json` tracks skill id, version, install time, source, registry URL, manifest URL, optional checksum, and enabled status.
+`installed_skills.json` tracks skill id, version, install and update timestamps, source, registry URL, manifest URL, optional checksum, enabled status, lifecycle state, trust level, update errors, runtime errors, and health counters.
 
 Sources are:
 
@@ -79,6 +79,14 @@ axiom skill search python
 axiom skill install python.write
 axiom skill install-bundle essential.windows
 axiom skill update --check
+axiom skill update python.write
+axiom skill update --all
+axiom skill update --apply-patches
+axiom skill health
+axiom skill disable python.write
+axiom skill enable python.write
+axiom skill reset-stats python.write
+axiom skill remove python.write
 ```
 
 For local development and tests:
@@ -87,7 +95,9 @@ For local development and tests:
 axiom skill install python.write --from-local-registry fixtures/skill-registry
 ```
 
-Stage 7 supports remote manifests and prompt cards, plus built-in entrypoints already implemented by Axiom. Unknown external executable entrypoints install disabled so they cannot run.
+Stage 11 supports remote manifests and prompt cards, plus built-in entrypoints already implemented by Axiom. Unknown external executable entrypoints install disabled or quarantined so they cannot run.
+
+Lifecycle details are in [SKILL_LIFECYCLE.md](SKILL_LIFECYCLE.md).
 
 ## Local Registry Fixture
 
@@ -97,4 +107,4 @@ The main Axiom Agent repository includes `fixtures/skill-registry/` for tests an
 - OS essential bundles
 - skill manifests and README files
 
-Future published skills will come from a separate `axiom-skills` GitHub repository. The later npm installer will install the Axiom binary; it will not embed the whole remote skill catalog.
+Published registry skills live in the separate `axiom-skills` GitHub repository. The npm installer will install the Axiom binary; it will not embed the whole remote skill catalog.

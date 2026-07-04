@@ -4,6 +4,7 @@ mod onboarding;
 mod proof_commands;
 mod skill_commands;
 mod startup;
+mod update_commands;
 
 use std::{path::PathBuf, process::Command};
 
@@ -29,9 +30,11 @@ enum Commands {
         command: ConfigCommands,
     },
     /// Run or update terminal onboarding.
-    Onboarding,
+    Onboarding(OnboardingCommand),
     /// Open the terminal chat interface.
     Chat,
+    /// Send one non-interactive chat message and exit.
+    Run(RunCommand),
     /// Open Axiom Coder mode.
     Code(CodeCommand),
     /// Inspect Axiom proof traces and reports.
@@ -43,6 +46,11 @@ enum Commands {
     Skill {
         #[command(subcommand)]
         command: SkillCommands,
+    },
+    /// Check, install, and manage core Axiom binary updates.
+    Update {
+        #[command(subcommand)]
+        command: UpdateCommands,
     },
 }
 
@@ -94,6 +102,49 @@ struct CodeCommand {
     task: Vec<String>,
 }
 
+#[derive(Debug, Default, Args)]
+struct OnboardingCommand {
+    /// Run setup without prompts.
+    #[arg(long)]
+    non_interactive: bool,
+    /// Workspace path for non-interactive setup.
+    #[arg(long)]
+    workspace: Option<String>,
+    /// Provider for non-interactive setup: mock, openai-compatible, or cloudflare.
+    #[arg(long)]
+    provider: Option<String>,
+    /// Default model for non-interactive provider setup.
+    #[arg(long)]
+    model: Option<String>,
+    /// Registry URL or local registry path for starter skills.
+    #[arg(long)]
+    registry: Option<String>,
+    /// Configure no active provider.
+    #[arg(long)]
+    skip_provider: bool,
+    /// Confirm non-interactive setup.
+    #[arg(long)]
+    yes: bool,
+}
+
+#[derive(Debug, Args)]
+struct RunCommand {
+    /// User message.
+    message: String,
+    /// Disable tool execution for this run.
+    #[arg(long = "no-tools")]
+    no_tools: bool,
+    /// Disable proof recording for this run.
+    #[arg(long = "no-proof")]
+    no_proof: bool,
+    /// Override provider for this run without editing config.
+    #[arg(long)]
+    provider: Option<String>,
+    /// Override model for this run without editing config.
+    #[arg(long)]
+    model: Option<String>,
+}
+
 #[derive(Debug, Subcommand)]
 enum ConfigCommands {
     /// Print the active TOML configuration.
@@ -139,11 +190,26 @@ enum SkillCommands {
         #[arg(long = "from-local-registry")]
         from_local_registry: Option<PathBuf>,
     },
-    /// Check for available skill updates.
+    /// Check or apply skill updates.
     Update {
         #[arg(long)]
         check: bool,
+        #[arg(long)]
+        all: bool,
+        #[arg(long = "apply-patches")]
+        apply_patches: bool,
+        skill_id: Option<String>,
     },
+    /// Show installed skill health and lifecycle status.
+    Health,
+    /// Enable an installed skill.
+    Enable { skill_id: String },
+    /// Disable an installed skill.
+    Disable { skill_id: String },
+    /// Reset runtime health stats for a skill.
+    ResetStats { skill_id: String },
+    /// Remove an installed skill.
+    Remove { skill_id: String },
 }
 
 #[derive(Debug, Subcommand)]
@@ -154,6 +220,22 @@ enum SkillRegistryCommands {
     Set { url: String },
     /// Load the configured registry and print a summary.
     Refresh,
+}
+
+#[derive(Debug, Subcommand)]
+enum UpdateCommands {
+    /// Show core updater status.
+    Status,
+    /// Check GitHub Releases or a dev manifest for updates.
+    Check,
+    /// Download, verify, stage, and install an available update.
+    Install,
+    /// Restore the previous binary backup.
+    Rollback,
+    /// Set release channel: stable, nightly, or dev.
+    SetChannel { channel: String },
+    /// Set update policy: manual, notify, or auto-patch.
+    SetPolicy { policy: String },
 }
 
 #[tokio::main]
@@ -170,11 +252,13 @@ async fn main() -> Result<()> {
         Some(Commands::Config {
             command: ConfigCommands::List,
         }) => config_list(),
-        Some(Commands::Onboarding) => run_onboarding_then_doctor().await,
+        Some(Commands::Onboarding(command)) => run_onboarding_then_doctor(command).await,
         Some(Commands::Chat) => chat().await,
+        Some(Commands::Run(command)) => chat::run_one_shot(command).await,
         Some(Commands::Code(command)) => code_commands::run(command).await,
         Some(Commands::Proof { command }) => proof_commands::run(command),
         Some(Commands::Skill { command }) => skill_commands::run(command).await,
+        Some(Commands::Update { command }) => update_commands::run(command).await,
         None => startup().await,
     }
 }
@@ -191,14 +275,14 @@ async fn startup() -> Result<()> {
     match startup::route_for_config_path(&config_path)? {
         StartupRoute::Onboarding => {
             println!("Axiom Agent setup is not complete. Starting onboarding.");
-            run_onboarding_then_doctor().await
+            run_onboarding_then_doctor(OnboardingCommand::default()).await
         }
         StartupRoute::Chat => chat().await,
     }
 }
 
-async fn run_onboarding_then_doctor() -> Result<()> {
-    onboarding::run_terminal_onboarding().await?;
+async fn run_onboarding_then_doctor(command: OnboardingCommand) -> Result<()> {
+    onboarding::run_onboarding_command(command).await?;
     doctor()
 }
 
@@ -207,7 +291,7 @@ async fn chat() -> Result<()> {
     if startup::route_for_config_path(&config_path)? == StartupRoute::Onboarding {
         println!("Onboarding is required before chat can start.");
         if chat::confirm("Start onboarding now?", true)? {
-            run_onboarding_then_doctor().await?;
+            run_onboarding_then_doctor(OnboardingCommand::default()).await?;
         } else {
             println!("Run `axiom onboarding` when you are ready.");
             return Ok(());

@@ -12,10 +12,20 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
       - name: Format
         run: cargo fmt --check
       - name: Clippy
         run: cargo clippy --all-targets --all-features -- -D warnings
       - name: Test
         run: cargo test
-
+      - name: Node smoke
+        run: node scripts/smoke-test.js
+      - name: E2E
+        run: node scripts/e2e-test.js
+      - name: Release check
+        run: node scripts/release-check.js
+      - name: Security check
+        run: node scripts/security-check.js

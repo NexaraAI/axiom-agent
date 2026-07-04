@@ -16,6 +16,9 @@
   "scripts": {
     "postinstall": "node scripts/postinstall.js",
     "smoke": "node scripts/smoke-test.js",
+    "e2e": "node scripts/e2e-test.js",
+    "release-check": "node scripts/release-check.js",
+    "security-check": "node scripts/security-check.js",
     "check-version-sync": "node scripts/check-version-sync.js"
   },
   "files": [

@@ -95,6 +95,7 @@ dependencies = [
  "axiom-lens",
  "axiom-llm",
  "axiom-proof",
+ "axiom-update",
  "clap",
  "serde_json",
  "tokio",
@@ -153,6 +154,7 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 1.0.69",
+ "tokio",
 ]
 
 [[package]]
@@ -168,8 +170,13 @@ dependencies = [
 name = "axiom-update"
 version = "0.1.0"
 dependencies = [
+ "reqwest",
  "semver",
+ "serde",
+ "serde_json",
  "sha2",
+ "thiserror 1.0.69",
+ "tokio",
 ]
 
 [[package]]

@@ -1,24 +1,32 @@
 use std::{
     io::{self, Write},
     path::{Path, PathBuf},
+    time::Instant,
 };
 
 use anyhow::{anyhow, Result};
 use axiom_core::{AxiomConfig, ProviderConfig};
 use axiom_engine::{
-    execute_installed_tool, extract_tool_request, load_installed_skills, ApprovalRequest,
-    SkillApproval, SkillCard, SkillExecutionContext, SkillExecutionError, SkillExecutionResult,
+    check_skill_update_statuses, current_axiom_version, execute_installed_tool,
+    extract_tool_request, load_installed_skills, load_registry_from_path,
+    record_skill_execution_failure, record_skill_execution_success, registry_cache_dir,
+    registry_cache_registry_path, ApprovalRequest, Platform, SkillApproval, SkillAutoUpdatePolicy,
+    SkillCard, SkillExecutionContext, SkillExecutionError, SkillExecutionResult,
 };
 use axiom_lens::{
     auto_route_action, build_skill_context_message, select_relevant_skills, AutoRouteAction,
 };
 use axiom_llm::{
-    ChatMessage, ChatRequest, CloudflareAiGatewayProvider, LlmProvider, OpenAiCompatibleProvider,
+    ChatMessage, ChatRequest, CloudflareAiGatewayProvider, LlmProvider, MockProvider,
+    OpenAiCompatibleProvider,
 };
 use axiom_proof::{
     new_approval, new_tool_call, FileReadProof, FileWriteProof, LensSelectionRecord, ProofMode,
     ProofRecorder, SkillCardProof,
 };
+use axiom_upd::{parse_version, UpdateDirs, UpdatePolicy, UpdateState};
+
+use crate::{startup::StartupRoute, RunCommand};
 
 pub(crate) struct ChatSession {
     config_path: PathBuf,
@@ -77,7 +85,7 @@ impl ChatSession {
     pub(crate) fn installed_skill_cards(&self) -> Result<Vec<SkillCard>> {
         Ok(load_installed_skills(self.skills_dir())?
             .into_iter()
-            .filter(|skill| skill.record.enabled)
+            .filter(|skill| skill.record.is_selectable())
             .map(|skill| skill.manifest.to_skill_card())
             .collect())
     }
@@ -125,11 +133,47 @@ impl ChatSession {
         self.save_config()
     }
 
+    pub(crate) fn override_provider_for_run(
+        &mut self,
+        provider_name: impl Into<String>,
+    ) -> Result<()> {
+        let provider_name = provider_name.into();
+        if !self.config.providers.contains_key(&provider_name) {
+            return Err(anyhow!("provider is not configured: {provider_name}"));
+        }
+        self.config.llm.active_provider = Some(provider_name);
+        Ok(())
+    }
+
+    pub(crate) fn override_model_for_run(&mut self, model: impl Into<String>) -> Result<()> {
+        let model = model.into();
+        if model.trim().is_empty() {
+            return Err(anyhow!("model name cannot be empty"));
+        }
+        self.config.llm.active_model = Some(model);
+        Ok(())
+    }
+
+    pub(crate) fn disable_proof_for_run(&mut self) {
+        self.config.proof.enabled = false;
+    }
+
     pub(crate) async fn send_user_message(
         &mut self,
         content: String,
         skill_cards: &[SkillCard],
         approval: &mut dyn SkillApproval,
+    ) -> Result<ChatTurnResult> {
+        self.send_user_message_with_options(content, skill_cards, approval, true)
+            .await
+    }
+
+    pub(crate) async fn send_user_message_with_options(
+        &mut self,
+        content: String,
+        skill_cards: &[SkillCard],
+        approval: &mut dyn SkillApproval,
+        allow_tools: bool,
     ) -> Result<ChatTurnResult> {
         let model = self
             .active_model()
@@ -186,94 +230,109 @@ impl ChatSession {
         };
 
         if let Some(tool_request) = tool_request {
-            let mut tool_call =
-                new_tool_call(&tool_request.skill_id, tool_request.arguments.to_string());
-            let installed_skills = load_installed_skills(self.skills_dir())?;
-            let execution_context = self.execution_context();
-            let execution_result = {
-                let mut recording_approval = RecordingApprover {
-                    inner: approval,
-                    proof: &mut proof,
+            if allow_tools {
+                let mut tool_call =
+                    new_tool_call(&tool_request.skill_id, tool_request.arguments.to_string());
+                let installed_skills = load_installed_skills(self.skills_dir())?;
+                let execution_context = self.execution_context();
+                let started_at = Instant::now();
+                let execution_result = {
+                    let mut recording_approval = RecordingApprover {
+                        inner: approval,
+                        proof: &mut proof,
+                    };
+                    execute_installed_tool(
+                        &tool_request,
+                        &installed_skills,
+                        &execution_context,
+                        &mut recording_approval,
+                    )
+                    .await
                 };
-                execute_installed_tool(
-                    &tool_request,
-                    &installed_skills,
-                    &execution_context,
-                    &mut recording_approval,
-                )
-                .await
-            };
-            let tool_result = match execution_result {
-                Ok(result) => result,
-                Err(error) => {
-                    tool_call.error = Some(error.to_string());
-                    proof.record_tool_call(tool_call);
-                    proof.record_error("tool", error.to_string(), "execute_tool", true);
-                    proof.fail_trace("tool execution failed", "execute_tool");
-                    let _ = proof.export();
-                    return Err(error.into());
-                }
-            };
-            tool_call.success = true;
-            tool_call.ended_at = Some(axiom_proof::trace::now_timestamp());
-            tool_call.output_summary = Some(tool_result.output.to_string());
-            self.record_tool_output_files(&mut proof, &tool_result);
-            proof.record_tool_call(tool_call);
-            let tool_result_message = ChatMessage {
-                role: "user".to_string(),
-                content: format_tool_result_message(&tool_result),
-            };
-            let final_instruction = ChatMessage {
-                role: "user".to_string(),
-                content: "Use the Axiom Tool Result to answer the user's original request. Do not request the same tool again unless more data is required.".to_string(),
-            };
-            let mut follow_up_messages = Vec::new();
-            if let Some(skill_context) = build_skill_context_message(skill_cards) {
-                follow_up_messages.push(ChatMessage {
-                    role: "system".to_string(),
-                    content: skill_context,
-                });
-            }
-            follow_up_messages.extend(self.history.clone());
-            follow_up_messages.push(user_message.clone());
-            follow_up_messages.push(ChatMessage {
-                role: "assistant".to_string(),
-                content: response_content.clone(),
-            });
-            follow_up_messages.push(tool_result_message.clone());
-            follow_up_messages.push(final_instruction);
-
-            let provider = self.build_provider(&provider_name)?;
-            let final_content =
-                match provider_chat(provider.as_ref(), model.clone(), follow_up_messages).await {
-                    Ok(response) => response,
+                let tool_result = match execution_result {
+                    Ok(result) => result,
                     Err(error) => {
-                        proof.record_error("llm", error.to_string(), "tool_follow_up", true);
-                        proof.fail_trace("provider follow-up failed", "tool_follow_up");
+                        let _ = record_skill_execution_failure(
+                            self.skills_dir(),
+                            &tool_request.skill_id,
+                            error.to_string(),
+                        );
+                        tool_call.error = Some(error.to_string());
+                        proof.record_tool_call(tool_call);
+                        proof.record_error("tool", error.to_string(), "execute_tool", true);
+                        proof.fail_trace("tool execution failed", "execute_tool");
                         let _ = proof.export();
-                        return Err(error);
+                        return Err(error.into());
                     }
                 };
+                let latency_ms = started_at.elapsed().as_millis().min(u128::from(u64::MAX)) as u64;
+                let _ = record_skill_execution_success(
+                    self.skills_dir(),
+                    &tool_request.skill_id,
+                    latency_ms,
+                );
+                tool_call.success = true;
+                tool_call.ended_at = Some(axiom_proof::trace::now_timestamp());
+                tool_call.output_summary = Some(tool_result.output.to_string());
+                self.record_tool_output_files(&mut proof, &tool_result);
+                proof.record_tool_call(tool_call);
+                let tool_result_message = ChatMessage {
+                    role: "user".to_string(),
+                    content: format_tool_result_message(&tool_result),
+                };
+                let final_instruction = ChatMessage {
+                    role: "user".to_string(),
+                    content: "Use the Axiom Tool Result to answer the user's original request. Do not request the same tool again unless more data is required.".to_string(),
+                };
+                let mut follow_up_messages = Vec::new();
+                if let Some(skill_context) = build_skill_context_message(skill_cards) {
+                    follow_up_messages.push(ChatMessage {
+                        role: "system".to_string(),
+                        content: skill_context,
+                    });
+                }
+                follow_up_messages.extend(self.history.clone());
+                follow_up_messages.push(user_message.clone());
+                follow_up_messages.push(ChatMessage {
+                    role: "assistant".to_string(),
+                    content: response_content.clone(),
+                });
+                follow_up_messages.push(tool_result_message.clone());
+                follow_up_messages.push(final_instruction);
 
-            self.history.push(user_message);
-            self.history.push(ChatMessage {
-                role: "assistant".to_string(),
-                content: response_content,
-            });
-            self.history.push(tool_result_message);
-            self.history.push(ChatMessage {
-                role: "assistant".to_string(),
-                content: final_content.clone(),
-            });
-            tool_results.push(tool_result);
-            proof.set_final_response(&final_content);
-            proof.finish_trace("chat turn completed with tool execution");
-            let _ = proof.export();
+                let provider = self.build_provider(&provider_name)?;
+                let final_content =
+                    match provider_chat(provider.as_ref(), model.clone(), follow_up_messages).await
+                    {
+                        Ok(response) => response,
+                        Err(error) => {
+                            proof.record_error("llm", error.to_string(), "tool_follow_up", true);
+                            proof.fail_trace("provider follow-up failed", "tool_follow_up");
+                            let _ = proof.export();
+                            return Err(error);
+                        }
+                    };
 
-            return Ok(ChatTurnResult {
-                content: final_content,
-                tool_results,
-            });
+                self.history.push(user_message);
+                self.history.push(ChatMessage {
+                    role: "assistant".to_string(),
+                    content: response_content,
+                });
+                self.history.push(tool_result_message);
+                self.history.push(ChatMessage {
+                    role: "assistant".to_string(),
+                    content: final_content.clone(),
+                });
+                tool_results.push(tool_result);
+                proof.set_final_response(&final_content);
+                proof.finish_trace("chat turn completed with tool execution");
+                let _ = proof.export();
+
+                return Ok(ChatTurnResult {
+                    content: final_content,
+                    tool_results,
+                });
+            }
         }
 
         self.history.push(user_message);
@@ -299,6 +358,7 @@ impl ChatSession {
             .ok_or_else(|| anyhow!("provider is not configured: {provider_name}"))?;
 
         match provider_config {
+            ProviderConfig::Mock {} => Ok(Box::new(MockProvider::new(provider_name))),
             ProviderConfig::CloudflareAiGateway {
                 account_id,
                 gateway_id,
@@ -432,6 +492,8 @@ pub(crate) async fn run_terminal_chat() -> Result<()> {
     );
     println!("workspace: {}", session.workspace_path().display());
     println!("Type !help for commands or !exit to leave.");
+    maybe_show_cached_core_update_notice(&session);
+    maybe_show_cached_skill_update_notice(&session);
 
     loop {
         print!("axiom> ");
@@ -499,6 +561,116 @@ pub(crate) async fn run_terminal_chat() -> Result<()> {
     Ok(())
 }
 
+pub(crate) async fn run_one_shot(command: RunCommand) -> Result<()> {
+    let config_path = AxiomConfig::default_config_path()?;
+    if crate::startup::route_for_config_path(&config_path)? == StartupRoute::Onboarding {
+        return Err(anyhow!(
+            "onboarding is required before `axiom run`. Run `axiom onboarding` or `axiom onboarding --non-interactive --provider mock --workspace <path> --yes`."
+        ));
+    }
+
+    let mut session = ChatSession::load(&config_path)?;
+    if let Some(provider) = command.provider {
+        session.override_provider_for_run(provider)?;
+    }
+    if let Some(model) = command.model {
+        session.override_model_for_run(model)?;
+    }
+    if command.no_proof {
+        session.disable_proof_for_run();
+    }
+
+    let skill_cards = session.select_skill_cards(&command.message, 5)?;
+    if skill_cards.is_empty() {
+        println!("Axiom Lens: selected no skills.");
+    } else {
+        let selected = skill_cards
+            .iter()
+            .map(|card| card.id.as_str())
+            .collect::<Vec<_>>()
+            .join(", ");
+        println!("Axiom Lens: selected {selected}");
+    }
+
+    let mut approval = NonInteractiveApprover;
+    let turn = session
+        .send_user_message_with_options(
+            command.message,
+            &skill_cards,
+            &mut approval,
+            !command.no_tools,
+        )
+        .await?;
+
+    for result in turn.tool_results {
+        println!("Axiom Tool: executed {}", result.skill_id);
+    }
+    println!("{}", turn.content);
+
+    Ok(())
+}
+
+fn maybe_show_cached_core_update_notice(session: &ChatSession) {
+    let Ok(policy) = UpdatePolicy::parse(&session.config.update.policy) else {
+        return;
+    };
+    if policy == UpdatePolicy::Manual {
+        return;
+    }
+    let available = session
+        .config
+        .update
+        .last_available_version
+        .clone()
+        .or_else(|| {
+            let config_dir = session.config_path.parent()?;
+            let state = UpdateState::load(UpdateDirs::new(config_dir).state_path).ok()?;
+            state.available_version
+        });
+    let Some(available) = available else {
+        return;
+    };
+    let Ok(current) = parse_version(env!("CARGO_PKG_VERSION")) else {
+        return;
+    };
+    let Ok(latest) = parse_version(&available) else {
+        return;
+    };
+    if latest > current {
+        println!("Axiom update available: v{latest}. Run `axiom update install`.");
+    }
+}
+
+fn maybe_show_cached_skill_update_notice(session: &ChatSession) {
+    let policy = SkillAutoUpdatePolicy::parse(&session.config.skills.auto_update_policy);
+    if policy == SkillAutoUpdatePolicy::Manual {
+        return;
+    }
+    let Some(config_dir) = session.config_path.parent() else {
+        return;
+    };
+    let cache_path = registry_cache_registry_path(registry_cache_dir(config_dir));
+    if !cache_path.exists() {
+        return;
+    }
+    let Ok(registry) = load_registry_from_path(&cache_path) else {
+        return;
+    };
+    let Ok(installed) = axiom_engine::InstalledSkills::load_from_dir(session.skills_dir()) else {
+        return;
+    };
+    let updates = check_skill_update_statuses(
+        &installed,
+        &registry,
+        &session.config.skills.registry_url,
+        &current_axiom_version(),
+        &Platform::current(),
+    );
+    if !updates.is_empty() {
+        println!("Skill updates available. Run `axiom skill update --check`.");
+    }
+}
+
 async fn provider_chat(
     provider: &dyn LlmProvider,
     model: String,
@@ -541,6 +713,14 @@ impl SkillApproval for TerminalApprover {
             request.risk_level, request.message
         );
         confirm("Approve skill execution?", false).unwrap_or(false)
+    }
+}
+
+struct NonInteractiveApprover;
+
+impl SkillApproval for NonInteractiveApprover {
+    fn approve(&mut self, _request: &ApprovalRequest) -> bool {
+        false
     }
 }
 

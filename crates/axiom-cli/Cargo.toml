@@ -17,6 +17,7 @@ axiom-engine = { path = "../axiom-engine" }
 axiom-lens = { path = "../axiom-lens" }
 axiom-llm = { path = "../axiom-llm" }
 axiom-proof = { path = "../axiom-proof" }
+axiom-upd = { package = "axiom-update", path = "../axiom-update" }
 clap.workspace = true
 serde_json.workspace = true
 tokio.workspace = true

@@ -4,12 +4,14 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use axiom_core::{AxiomConfig, ProviderConfig};
 use axiom_engine::{
     essential_bundle_id_for_os, install_bundle_from_registry_client, LocalRegistrySource,
     RegistryClient, RegistrySource,
 };
+
+use crate::OnboardingCommand;
 
 const DEFAULT_WORKSPACE: &str = "~/Axiom";
 
@@ -21,6 +23,9 @@ pub(crate) struct OnboardingPlan {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ProviderSetup {
+    Mock {
+        default_model: String,
+    },
     Cloudflare {
         account_id: String,
         gateway_id: String,
@@ -84,6 +89,86 @@ pub(crate) async fn run_terminal_onboarding() -> Result<OnboardingResult> {
     Ok(result)
 }
 
+pub(crate) async fn run_onboarding_command(command: OnboardingCommand) -> Result<OnboardingResult> {
+    if command.non_interactive {
+        run_non_interactive_onboarding(command).await
+    } else {
+        run_terminal_onboarding().await
+    }
+}
+
+async fn run_non_interactive_onboarding(command: OnboardingCommand) -> Result<OnboardingResult> {
+    if !command.yes {
+        bail!("non-interactive onboarding requires --yes");
+    }
+    let workspace = command
+        .workspace
+        .ok_or_else(|| anyhow!("non-interactive onboarding requires --workspace"))?;
+    if command.skip_provider && command.provider.is_some() {
+        bail!("use either --skip-provider or --provider, not both");
+    }
+
+    let provider = if command.skip_provider {
+        ProviderSetup::Skip
+    } else {
+        let provider = command.provider.as_deref().ok_or_else(|| {
+            anyhow!("non-interactive onboarding requires --provider or --skip-provider")
+        })?;
+        match provider {
+            "mock" => ProviderSetup::Mock {
+                default_model: command.model.unwrap_or_else(|| "mock-model".to_string()),
+            },
+            "openai-compatible" => ProviderSetup::OpenAiCompatible {
+                provider_name: "openai-compatible".to_string(),
+                base_url: "https://api.openai.com/v1".to_string(),
+                api_key_env: "OPENAI_API_KEY".to_string(),
+                default_model: command
+                    .model
+                    .ok_or_else(|| anyhow!("--provider openai-compatible requires --model"))?,
+            },
+            "cloudflare" => ProviderSetup::Cloudflare {
+                account_id: "YOUR_ACCOUNT_ID".to_string(),
+                gateway_id: "default".to_string(),
+                api_token_env: "CLOUDFLARE_API_TOKEN".to_string(),
+                default_model: command
+                    .model
+                    .ok_or_else(|| anyhow!("--provider cloudflare requires --model"))?,
+            },
+            other => bail!("unsupported provider for non-interactive onboarding: {other}"),
+        }
+    };
+
+    let plan = OnboardingPlan {
+        workspace,
+        provider,
+    };
+    let registry = command.registry.or_else(|| match &plan.provider {
+        ProviderSetup::Mock { .. } | ProviderSetup::Skip => {
+            Some(bundled_registry_path().display().to_string())
+        }
+        _ => None,
+    });
+    let config_path = AxiomConfig::default_config_path()?;
+    let result = apply_onboarding_plan_with_registry_url(
+        &config_path,
+        &plan,
+        registry,
+        bundled_registry_path(),
+        std::env::consts::OS,
+    )
+    .await?;
+
+    println!("Saved config: {}", result.config_path.display());
+    println!("Workspace: {}", result.workspace_path.display());
+    println!(
+        "Installed starter skills from {} registry: {}",
+        result.registry_source,
+        result.installed_skills.join(", ")
+    );
+
+    Ok(result)
+}
+
 pub(crate) async fn apply_onboarding_plan(
     config_path: impl AsRef<Path>,
     plan: &OnboardingPlan,
@@ -133,7 +218,10 @@ pub(crate) async fn apply_onboarding_plan_with_registry_url(
 
     let skills_dir = config_dir.join(&config.skills.local_dir);
     println!("Installing essential skills for {os}...");
-    let registry_url = registry_url_override.unwrap_or_else(|| config.skills.registry_url.clone());
+    if let Some(registry_url) = registry_url_override.as_ref() {
+        config.skills.registry_url = registry_url.clone();
+    }
+    let registry_url = config.skills.registry_url.clone();
     let install_result = install_essential_skills_for_os(
         &skills_dir,
         os,
@@ -217,6 +305,13 @@ pub(crate) fn build_config(plan: &OnboardingPlan) -> AxiomConfig {
     config.llm.active_model = None;
 
     match &plan.provider {
+        ProviderSetup::Mock { default_model } => {
+            config
+                .providers
+                .insert("mock".to_string(), ProviderConfig::Mock {});
+            config.llm.active_provider = Some("mock".to_string());
+            config.llm.active_model = Some(default_model.clone());
+        }
         ProviderSetup::Cloudflare {
             account_id,
             gateway_id,
@@ -381,6 +476,7 @@ pub(crate) async fn load_registry_client_from_location(location: &str) -> Result
 
 #[cfg(test)]
 mod tests {
+    use std::ffi::OsString;
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -427,6 +523,26 @@ mod tests {
         assert!(config.providers.is_empty());
         assert!(config.llm.active_provider.is_none());
         assert!(config.llm.active_model.is_none());
+    }
+
+    #[test]
+    fn mock_onboarding_plan_creates_mock_provider_config() {
+        let plan = OnboardingPlan {
+            workspace: "~/Axiom".to_string(),
+            provider: ProviderSetup::Mock {
+                default_model: "mock-model".to_string(),
+            },
+        };
+
+        let config = build_config(&plan);
+
+        assert!(config.agent.first_run_completed);
+        assert_eq!(config.llm.active_provider.as_deref(), Some("mock"));
+        assert_eq!(config.llm.active_model.as_deref(), Some("mock-model"));
+        assert!(matches!(
+            config.providers.get("mock"),
+            Some(ProviderConfig::Mock {})
+        ));
     }
 
     #[tokio::test]
@@ -530,6 +646,52 @@ mod tests {
         let _ = fs::remove_dir_all(dir);
     }
 
+    #[tokio::test]
+    async fn non_interactive_onboarding_uses_axiom_home_and_installs_essential_skills() {
+        let dir = unique_temp_dir();
+        let home = dir.join("home");
+        let workspace = dir.join("workspace");
+        let _guard = EnvVarGuard::set("AXIOM_HOME", home.as_os_str().to_os_string());
+
+        let result = run_non_interactive_onboarding(OnboardingCommand {
+            non_interactive: true,
+            workspace: Some(workspace.display().to_string()),
+            provider: Some("mock".to_string()),
+            model: None,
+            registry: Some(bundled_registry_path().display().to_string()),
+            skip_provider: false,
+            yes: true,
+        })
+        .await
+        .expect("non-interactive onboarding");
+        let saved = AxiomConfig::load_from_path(home.join("config.toml")).expect("load config");
+
+        assert_eq!(result.config_path, home.join("config.toml"));
+        assert!(workspace.exists());
+        assert_eq!(saved.llm.active_provider.as_deref(), Some("mock"));
+        assert!(result.installed_skills.contains(&"file.read".to_string()));
+        assert!(home.join("skills").join("installed_skills.json").exists());
+
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn non_interactive_onboarding_requires_required_flags() {
+        let error = run_non_interactive_onboarding(OnboardingCommand {
+            non_interactive: true,
+            workspace: None,
+            provider: Some("mock".to_string()),
+            model: None,
+            registry: Some(bundled_registry_path().display().to_string()),
+            skip_provider: false,
+            yes: false,
+        })
+        .await
+        .expect_err("missing --yes should fail");
+
+        assert!(error.to_string().contains("--yes"));
+    }
+
     fn unique_temp_dir() -> PathBuf {
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -540,5 +702,28 @@ mod tests {
             "axiom-cli-onboarding-test-{}-{nanos}-{counter}",
             std::process::id()
         ))
+    }
+
+    struct EnvVarGuard {
+        key: &'static str,
+        previous: Option<OsString>,
+    }
+
+    impl EnvVarGuard {
+        fn set(key: &'static str, value: OsString) -> Self {
+            let previous = std::env::var_os(key);
+            std::env::set_var(key, value);
+            Self { key, previous }
+        }
+    }
+
+    impl Drop for EnvVarGuard {
+        fn drop(&mut self) {
+            if let Some(previous) = self.previous.as_ref() {
+                std::env::set_var(self.key, previous);
+            } else {
+                std::env::remove_var(self.key);
+            }
+        }
     }
 }

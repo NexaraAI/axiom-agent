@@ -22,7 +22,11 @@ What works:
 - Skill Lens intent matching and skill card injection
 - 11 built-in skills with TOML manifests
 - Built-in tool execution (file.read, file.write, project.scan, web.fetch, git.status, git.diff)
-- Skill registry with remote fetch, local fixture fallback, bundles, and install tracking
+- Skill registry with cache, local fixture fallback, bundles, install tracking, lifecycle state, trust levels, and skill updates
+- Core binary updater plumbing with release channels, checksum verification, staged install, and rollback
+- Offline mock provider for demos and integration tests
+- One-shot `axiom run` command for scripts and non-interactive demos
+- Test-safe `AXIOM_HOME` config isolation
 - Coder mode with project scan, plan, patch, diff preview, safe writes, and test detection
 - Proof Mode with JSON traces, Markdown reports, and secret redaction
 - npm installer scaffold (not publicly released yet)
@@ -32,7 +36,7 @@ What is not done yet:
 - GitHub Release URLs are placeholders until the release workflow runs against this repo.
 - Streaming responses are not implemented.
 - External executable skill binaries are not supported.
-- Auto-updater is a placeholder crate.
+- Core binary updates require published GitHub Releases before normal installs can activate.
 - No desktop, mobile, or web interfaces.
 
 ## Features
@@ -44,7 +48,8 @@ What is not done yet:
 - **Coder Mode**: scan, plan, diff, approve, test
 - **Proof Mode**: JSON traces and Markdown reports with secret redaction
 - **Safety**: workspace-only file access, blocked secret paths, approval-gated writes and commands
-- **Registry**: remote HTTPS registry with SHA-256 verification and bundled fixture fallback
+- **Registry**: remote HTTPS registry with SHA-256 verification, cache, bundled fallback, trust checks, and controlled skill updates
+- **Core updater**: release channel checks, verified binary downloads, staged install, backups, and rollback
 
 ## Installation
 
@@ -84,9 +89,30 @@ Config is saved to:
 
 API keys are never stored in config. Provider entries reference environment variable names.
 
+For scripted setup and tests:
+
+```bash
+AXIOM_HOME=/tmp/axiom-test-home \
+cargo run -p axiom-cli -- onboarding --non-interactive --provider mock --workspace ./demo-workspace --yes
+```
+
+`AXIOM_HOME` changes the config root for the process. When set, Axiom writes `config.toml`, `skills/installed_skills.json`, `proofs/`, `updates/`, and `registry-cache/` under that directory instead of the real user config directory.
+
+The built-in `mock` provider is for tests and demos only. It returns deterministic responses and does not require API keys.
+
 ## Chat Mode
 
 `axiom` or `axiom chat` opens terminal chat.
+
+For one-shot non-interactive chat:
+
+```bash
+axiom run "hello"
+axiom run "read README.md and summarize it"
+axiom run "hello" --no-tools --no-proof
+```
+
+`axiom run` uses the same Skill Lens, skill context injection, provider call, one tool loop, and Proof Mode recording as normal chat.
 
 Chat commands:
 
@@ -135,9 +161,17 @@ axiom skill search python
 axiom skill install python.write
 axiom skill install-bundle essential.windows
 axiom skill update --check
+axiom skill update python.write
+axiom skill update --all
+axiom skill update --apply-patches
+axiom skill health
+axiom skill disable python.write
+axiom skill enable python.write
 ```
 
 The remote registry URL is configurable. If it fails, onboarding falls back to the bundled fixture at `fixtures/skill-registry/`.
+
+Installed skills have lifecycle state and trust metadata. Disabled, incompatible, quarantined, and blocked skills are not selected by Skill Lens and cannot execute. External executable skill binaries are still not supported; unknown external entrypoints are installed disabled or quarantined.
 
 ## Coder Mode
 
@@ -176,6 +210,21 @@ Axiom enforces workspace-only file access. Secret-looking paths (`.env`, `*.pem`
 
 Coder mode shows plans and diffs before writes. Even in trusted approval mode, v0.1 asks before every file write.
 
+Core updates verify `SHA256SUMS` before staging a binary. Missing or mismatched checksums block installation. Axiom does not execute release scripts.
+
+## Core Updates
+
+```bash
+axiom update status
+axiom update check
+axiom update install
+axiom update rollback
+axiom update set-channel stable
+axiom update set-policy notify
+```
+
+`stable` uses normal releases, `nightly` can use prereleases, and `dev` is for local mocked release metadata. Running from Cargo `target/` supports update checks but blocks self-replacement.
+
 ## Development Setup
 
 ```bash
@@ -183,7 +232,9 @@ cargo fmt
 cargo clippy --all-targets --all-features
 cargo test
 node scripts/smoke-test.js
-npm run check-version-sync
+node scripts/e2e-test.js
+node scripts/release-check.js
+node scripts/security-check.js
 ```
 
 Doctor check:
@@ -192,12 +243,22 @@ Doctor check:
 cargo run -p axiom-cli -- doctor
 ```
 
+Offline demo:
+
+```bash
+cargo run -p axiom-cli -- onboarding --non-interactive --provider mock --workspace ./demo-workspace --yes
+cargo run -p axiom-cli -- run "read README.md and summarize it"
+cargo run -p axiom-cli -- code --plan-only "explain how to add a test"
+```
+
+See `docs/TESTING.md` and `docs/DEMO.md` for isolated local runs without API keys.
+
 ## Roadmap
 
 - v0.1: terminal foundation, config, chat, Skill Lens, tool execution, registry, npm scaffold, Coder v0.1, Proof v0.1
 - v0.2: stronger editing workflows, richer patch application
 - v0.3: proof analytics, multi-step workflows
-- v0.4: safe update checks, skill update installation
+- v0.4: broader skill ecosystem work and repository publishing flow
 - Later: external skill binaries, remote registry publishing, app layers
 
 ## License
