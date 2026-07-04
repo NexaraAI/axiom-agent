@@ -203,7 +203,3 @@ cargo run -p axiom-cli -- doctor
 ## License
 
 MIT
-
----
-
-Docs cleaned using [Stop Slop](https://github.com/hardikpandya/stop-slop) style guidance.
