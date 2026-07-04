@@ -134,15 +134,29 @@ mod tests {
 
     #[test]
     fn selects_shell_safe_for_terminal_prompt() {
-        let skills = vec![installed_skill(include_str!(
-            "../../../fixtures/skill-registry/skills/shell.powershell.safe/skill.toml"
-        ))];
+        let (manifest, expected_skill_id) = match std::env::consts::OS {
+            "windows" => (
+                include_str!(
+                    "../../../fixtures/skill-registry/skills/shell.powershell.safe/skill.toml"
+                ),
+                "shell.powershell.safe",
+            ),
+            "macos" => (
+                include_str!("../../../fixtures/skill-registry/skills/shell.zsh.safe/skill.toml"),
+                "shell.zsh.safe",
+            ),
+            _ => (
+                include_str!("../../../fixtures/skill-registry/skills/shell.bash.safe/skill.toml"),
+                "shell.bash.safe",
+            ),
+        };
+        let skills = vec![installed_skill(manifest)];
 
         let cards = select_relevant_skills("run this command in terminal", &skills, 5);
 
         assert_eq!(
             cards.first().map(|card| card.id.as_str()),
-            Some("shell.powershell.safe")
+            Some(expected_skill_id)
         );
     }
 
