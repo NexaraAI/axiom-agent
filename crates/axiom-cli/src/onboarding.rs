@@ -565,7 +565,7 @@ mod tests {
             &plan,
             Some(bundled_registry_path().display().to_string()),
             bundled_registry_path(),
-            "windows",
+            std::env::consts::OS,
         )
         .await
         .expect("apply onboarding");
@@ -591,7 +591,7 @@ mod tests {
 
         let result = install_essential_skills_for_os(
             &skills_dir,
-            "windows",
+            std::env::consts::OS,
             &dir.join("missing-registry").display().to_string(),
             true,
             bundled_registry_path(),
@@ -627,7 +627,7 @@ mod tests {
             &plan,
             None,
             bundled_registry_path(),
-            "windows",
+            std::env::consts::OS,
         )
         .await
         .expect("apply onboarding");

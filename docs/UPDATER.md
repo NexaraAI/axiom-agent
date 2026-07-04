@@ -5,7 +5,7 @@ The core updater updates the Axiom Rust binary. It is separate from skill update
 - Core update: replaces the `axiom` executable after checksum verification.
 - Skill update: updates installed skill manifests from the skill registry.
 
-Stage 12 adds release-ready plumbing. It will become active for normal users after tagged GitHub Releases are published for this repo.
+The updater has release-ready plumbing. It will become active for normal users after tagged GitHub Releases are published for this repo.
 
 ## Commands
 

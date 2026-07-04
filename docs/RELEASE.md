@@ -1,6 +1,6 @@
 # Release
 
-Stage 8 adds the foundation for GitHub Release binaries and npm installation. It does not publish anything automatically.
+Axiom has release workflow plumbing for GitHub Release binaries and npm installation. This document describes the manual v0.1 release path. It does not publish anything automatically.
 
 ## Version Sync
 
@@ -74,12 +74,13 @@ Publishing is manual only:
 
 Release publish events run validation but do not publish to npm.
 
-## Placeholder Repository URL
+## Release Repository URL
 
-The GitHub URL in `package.json` is currently a placeholder. Before public release, update:
+The GitHub URL in `package.json` should remain:
 
-- `repository.url`
-- `axiomAgent.releaseRepo`
+```text
+https://github.com/NexaraAI/axiom-agent
+```
 
 The installer also supports `AXIOM_AGENT_RELEASE_REPO` for testing alternate release locations.
 
@@ -105,6 +106,7 @@ node scripts/smoke-test.js
 node scripts/e2e-test.js
 node scripts/release-check.js
 node scripts/security-check.js
+npm pack --dry-run
 ```
 
 The E2E test uses a temporary `AXIOM_HOME`, a temporary workspace, the local skill registry fixture, and the `mock` provider. It does not require real API keys and should not make network calls.

@@ -2,7 +2,7 @@
 
 Axiom Skills Registry is the source of reusable skill manifests and bundles. The main Axiom Agent repository is separate from the `axiom-skills` GitHub repository. Later, npm will install the Axiom binary; skills will still come from the registry.
 
-Stage 11 supports:
+The registry implementation supports:
 
 - Local fixture registries for tests and offline fallback.
 - HTTPS registry URLs, with HTTP allowed only for localhost development.

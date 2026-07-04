@@ -33,7 +33,7 @@ What works:
 
 What is not done yet:
 - npm package is not published. Install from source for now.
-- GitHub Release URLs are placeholders until the release workflow runs against this repo.
+- GitHub Release assets do not exist until the release workflow runs from a tag.
 - Streaming responses are not implemented.
 - External executable skill binaries are not supported.
 - Core binary updates require published GitHub Releases before normal installs can activate.
@@ -169,7 +169,7 @@ axiom skill disable python.write
 axiom skill enable python.write
 ```
 
-The remote registry URL is configurable. If it fails, onboarding falls back to the bundled fixture at `fixtures/skill-registry/`.
+The default remote registry is `https://raw.githubusercontent.com/NexaraAI/axiom-skills/main/registry.json`. The registry URL is configurable. If it fails, onboarding falls back to the bundled fixture at `fixtures/skill-registry/`.
 
 Installed skills have lifecycle state and trust metadata. Disabled, incompatible, quarantined, and blocked skills are not selected by Skill Lens and cannot execute. External executable skill binaries are still not supported; unknown external entrypoints are installed disabled or quarantined.
 

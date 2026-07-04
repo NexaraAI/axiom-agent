@@ -86,15 +86,15 @@ axiom doctor
 
 The Rust binary must be named `axiom` on Linux/macOS and `axiom.exe` on Windows. The current Cargo binary is already configured that way.
 
-## Release Repository Placeholder
+## Release Repository Configuration
 
-`package.json` currently contains a placeholder release repository:
+`package.json` points at the release repository:
 
 ```text
 https://github.com/NexaraAI/axiom-agent
 ```
 
-Replace it before publishing if the final repository changes. For testing, override it without editing package metadata:
+For testing alternate release locations, override it without editing package metadata:
 
 ```bash
 AXIOM_AGENT_RELEASE_REPO=https://github.com/example/axiom-agent npm install -g axiom-agent

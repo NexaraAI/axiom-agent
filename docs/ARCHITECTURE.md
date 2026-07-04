@@ -22,7 +22,7 @@ npm install -g axiom-agent
 -> axiom starts onboarding or chat
 ```
 
-The npm package is intentionally thin. It does not implement agent logic and does not replace the Rust CLI. Development can override the release repository with `AXIOM_AGENT_RELEASE_REPO`.
+This is the intended npm flow after publishing. The npm package is intentionally thin. It does not implement agent logic and does not replace the Rust CLI. Development can override the release repository with `AXIOM_AGENT_RELEASE_REPO`.
 
 ## Core Update Flow
 

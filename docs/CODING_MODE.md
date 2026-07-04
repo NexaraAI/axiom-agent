@@ -97,7 +97,7 @@ Provider output for edits must use:
 ```
 ````
 
-Stage 9 supports full-file `create_or_update` only. Complex partial patches are intentionally deferred.
+v0.1 supports full-file `create_or_update` only. Complex partial patches are intentionally deferred.
 
 ## Safety Model
 

@@ -63,6 +63,7 @@ node scripts/smoke-test.js
 node scripts/e2e-test.js
 node scripts/release-check.js
 node scripts/security-check.js
+npm pack --dry-run
 ```
 
 `scripts/e2e-test.js` creates a temporary `AXIOM_HOME`, a temporary workspace, builds or locates the Axiom binary, runs non-interactive onboarding, checks doctor, skill commands, `axiom run`, coder plan-only, proof list, and updater status. It uses the local registry fixture and mock provider.

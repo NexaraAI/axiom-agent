@@ -95,7 +95,7 @@ For local development and tests:
 axiom skill install python.write --from-local-registry fixtures/skill-registry
 ```
 
-Stage 11 supports remote manifests and prompt cards, plus built-in entrypoints already implemented by Axiom. Unknown external executable entrypoints install disabled or quarantined so they cannot run.
+The current registry flow supports remote manifests and prompt cards, plus built-in entrypoints already implemented by Axiom. Unknown external executable entrypoints install disabled or quarantined so they cannot run.
 
 Lifecycle details are in [SKILL_LIFECYCLE.md](SKILL_LIFECYCLE.md).
 
