@@ -94,8 +94,8 @@ function assertDefaultRegistry() {
 
 function assertReadmeStatus() {
   const readme = fs.readFileSync(path.join(REPO_ROOT, "README.md"), "utf8").toLowerCase();
-  if (!readme.includes("not published yet")) {
-    fail("README.md must state that npm is not published yet.");
+  if (readme.includes("not published yet")) {
+    fail("README.md still says npm is not published, but axiom-agent@beta is live on npm.");
   }
 }
 
