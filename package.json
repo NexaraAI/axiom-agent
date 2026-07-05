@@ -5,13 +5,13 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/NexaraAI/axiom-agent.git"
+    "url": "git+https://github.com/NexaraAI/axiom-agent.git"
   },
   "axiomAgent": {
     "releaseRepo": "https://github.com/NexaraAI/axiom-agent"
   },
   "bin": {
-    "axiom": "./bin/axiom.js"
+    "axiom": "bin/axiom.js"
   },
   "scripts": {
     "postinstall": "node scripts/postinstall.js",
