@@ -1,24 +1,22 @@
 # Installation
 
-Axiom Agent is currently installed from source for normal development and testing. The npm installer scaffold exists, but the package is not published yet.
+## From npm (recommended)
 
-Source install:
+```bash
+npm install -g axiom-agent@beta
+axiom
+```
+
+The npm package is a thin installer and wrapper. It detects your OS and architecture, downloads the matching prebuilt Rust binary from GitHub Releases, verifies `SHA256SUMS`, stores the binary under `vendor/bin/`, and exposes the `axiom` command through `bin/axiom.js`.
+
+Axiom itself is Rust. Node.js handles installation and command forwarding only.
+
+## From Source
 
 ```bash
 cargo build -p axiom-cli
 cargo run -p axiom-cli -- doctor
 ```
-
-After npm is published, the intended install command is:
-
-```bash
-npm install -g axiom-agent
-axiom
-```
-
-The npm package is a thin installer and wrapper. It detects the current OS and architecture, downloads the matching prebuilt Rust binary from GitHub Releases, verifies `SHA256SUMS`, stores the binary in the installed package under `vendor/bin/`, and exposes the `axiom` command through `bin/axiom.js`.
-
-Axiom itself remains Rust. Node.js is only used for installation and command forwarding.
 
 ## First Run
 
@@ -28,7 +26,7 @@ After installation or a source build:
 axiom
 ```
 
-If no config exists, onboarding starts. After onboarding is complete, `axiom` opens terminal chat.
+If no config exists, onboarding starts. Once onboarding finishes, `axiom` opens terminal chat.
 
 For non-interactive setup:
 
@@ -37,7 +35,7 @@ axiom onboarding --non-interactive --provider mock --workspace ./demo-workspace 
 axiom onboarding --non-interactive --skip-provider --workspace ./demo-workspace --yes
 ```
 
-`--provider mock` creates an offline demo config with no API keys. `--provider openai-compatible` and `--provider cloudflare` require `--model`. Use `--registry <url-or-path>` to pin the skills registry used by setup.
+`--provider mock` creates an offline demo config with no API keys. `--provider openai-compatible` and `--provider cloudflare` require `--model`. Use `--registry <url-or-path>` to pin the skills registry during setup.
 
 ## Test-Safe Config
 
@@ -47,7 +45,7 @@ Set `AXIOM_HOME` to isolate config writes:
 AXIOM_HOME=/tmp/axiom-test-home axiom doctor
 ```
 
-When set, Axiom stores config and runtime state under that directory:
+Axiom stores config and runtime state under that directory when set:
 
 ```text
 config.toml
@@ -58,11 +56,11 @@ updates/
 registry-cache/
 ```
 
-If `AXIOM_HOME` is not set, Axiom uses the normal platform config directory.
+Without `AXIOM_HOME`, Axiom uses the platform config directory.
 
 ## Local Development Install
 
-Use `AXIOM_AGENT_BINARY_PATH` to avoid GitHub downloads while developing.
+Set `AXIOM_AGENT_BINARY_PATH` to skip GitHub downloads during development.
 
 Windows PowerShell:
 
@@ -84,7 +82,7 @@ axiom --version
 axiom doctor
 ```
 
-The Rust binary must be named `axiom` on Linux/macOS and `axiom.exe` on Windows. The current Cargo binary is already configured that way.
+Name the Rust binary `axiom` on Linux/macOS and `axiom.exe` on Windows. The Cargo config already handles this.
 
 ## Release Repository Configuration
 
@@ -94,7 +92,7 @@ The Rust binary must be named `axiom` on Linux/macOS and `axiom.exe` on Windows.
 https://github.com/NexaraAI/axiom-agent
 ```
 
-For testing alternate release locations, override it without editing package metadata:
+To test alternate release locations, override it without editing package metadata:
 
 ```bash
 AXIOM_AGENT_RELEASE_REPO=https://github.com/example/axiom-agent npm install -g axiom-agent
@@ -107,11 +105,11 @@ AXIOM_AGENT_RELEASE_REPO=https://github.com/example/axiom-agent npm install -g a
 - `axiom-x86_64-apple-darwin`
 - `axiom-aarch64-apple-darwin`
 
-Unsupported platforms fail with a clear installer error.
+The installer fails with a clear error on unsupported platforms.
 
 ## In-Place Updates
 
-After Axiom is installed from a release binary, the core updater can check and stage binary updates:
+After installing from a release binary, the updater can check and stage binary updates:
 
 ```bash
 axiom update status
@@ -119,6 +117,6 @@ axiom update check
 axiom update install
 ```
 
-The updater uses the same release asset names as the npm installer and verifies `SHA256SUMS` before replacing a binary. Running from a Cargo build supports checks, but install is blocked because self-replacing `target/debug` or `target/release` builds is not a supported install mode.
+The updater uses the same release asset names as the npm installer and verifies `SHA256SUMS` before replacing a binary. Cargo builds support checks, but `install` is blocked because self-replacing `target/debug` or `target/release` builds is not a supported install mode.
 
-For npm-global installs, Axiom tries to update the installed `vendor/bin` binary if permissions allow. If the package location is not writable, reinstall with npm after a release is available.
+For npm-global installs, Axiom tries to update the `vendor/bin` binary if permissions allow. If the package location is read-only, reinstall with npm after a new release.

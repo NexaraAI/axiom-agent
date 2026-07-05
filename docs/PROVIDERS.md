@@ -1,13 +1,13 @@
 # Providers
 
-Provider support currently includes non-streaming chat completions for:
+Axiom supports non-streaming chat completions for:
 
 - OpenAI-compatible endpoints.
 - Cloudflare AI Gateway.
 
 ## OpenAI-Compatible
 
-Configure any endpoint that accepts OpenAI-style `/chat/completions` requests.
+Point Axiom at any endpoint that accepts OpenAI-style `/chat/completions` requests.
 
 ```toml
 [llm]
@@ -53,7 +53,7 @@ axiom chat
 
 ## Notes
 
-- API keys and tokens are read from environment variables.
-- Tokens are not stored in `config.toml`.
-- Streaming is not implemented yet; chat uses normal non-streaming responses.
-- CI tests request construction and response parsing without real API calls.
+- Axiom reads API keys and tokens from environment variables.
+- Axiom does not store tokens in `config.toml`.
+- Streaming is not implemented yet; chat uses non-streaming responses.
+- CI tests cover request construction and response parsing without making real API calls.

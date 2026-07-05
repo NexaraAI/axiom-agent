@@ -1,6 +1,6 @@
 # v0.5.0-beta Release Checklist
 
-Use this checklist before creating a `v0.5.0-beta` release tag. Do not publish npm until the release assets and checksums are confirmed.
+Use this checklist before creating a `v0.5.0-beta` release tag. Do not publish to npm until you confirm the release assets and checksums.
 
 ## Pre-Release Checks
 
@@ -17,13 +17,13 @@ node scripts/security-check.js
 npm pack --dry-run
 ```
 
-The E2E test must use a temporary `AXIOM_HOME`, the mock provider, and the local skill registry fixture. It must not require API keys or real network calls.
+The E2E test must use a temporary `AXIOM_HOME`, the mock provider, and the local skill registry fixture. It must not require API keys or make real network calls.
 
 ## Repo Checks
 
 - `main` branch is clean.
-- CI is green for the commit to tag.
-- `README.md` is accurate and does not claim npm is published.
+- CI is green for the commit you plan to tag.
+- `README.md` is accurate.
 - `LICENSE` is present.
 - No secrets are committed.
 - No built binaries are committed.
@@ -34,7 +34,7 @@ The E2E test must use a temporary `AXIOM_HOME`, the mock provider, and the local
 
 ## Tagging
 
-Only tag after the checks above pass:
+Tag only after the checks above pass:
 
 ```bash
 git tag v0.5.0-beta
@@ -47,7 +47,7 @@ git push origin v0.5.0-beta
 2. Verify release assets for Windows, Linux, Intel macOS, and Apple Silicon macOS.
 3. Verify `SHA256SUMS`.
 4. Test npm local install using the release binary.
-5. Publish npm manually later, only after release assets are confirmed.
+5. Publish to npm after you confirm release assets.
 
 ## Rollback
 
@@ -57,6 +57,6 @@ If the release fails before npm publish:
 2. Delete the failed GitHub Release if one was created.
 3. Fix the issue on `main`.
 4. Rerun the pre-release checks.
-5. Create a fresh tag only after the fix is verified.
+5. Create a fresh tag after you verify the fix.
 
-Do not publish npm until release assets and checksums are confirmed.
+Do not publish to npm until you confirm release assets and checksums.

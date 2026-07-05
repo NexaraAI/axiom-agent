@@ -1,6 +1,6 @@
 # Coding Mode
 
-Axiom Coder is the terminal project-coding mode for Axiom Agent. Normal chat answers general questions and simple code snippets. Coder mode is for workspace-aware tasks such as fixing build errors, editing project files, scanning the repository, explaining the codebase, or running tests.
+Axiom Coder is the terminal project-coding mode for Axiom Agent. Normal chat answers general questions and simple code snippets. Use coder mode for workspace-aware tasks: fixing build errors, editing project files, scanning the repository, explaining the codebase, or running tests.
 
 ## Commands
 
@@ -22,7 +22,7 @@ axiom onboarding --non-interactive --provider mock --workspace .\demo-workspace 
 axiom code --plan-only "add a small test"
 ```
 
-The `mock` provider returns a deterministic plan. It is for tests and demos only and does not require API keys.
+The `mock` provider returns a deterministic plan. It exists for tests and demos only and requires no API keys.
 
 Inside `axiom code`:
 
@@ -61,7 +61,7 @@ Modes:
 
 - `off`: never route from chat.
 - `ask`: detect project coding tasks and ask before switching.
-- `smart`: switch automatically for obvious project coding tasks and ask for ambiguous ones.
+- `smart`: switch for obvious project coding tasks, ask for ambiguous ones.
 
 Simple code generation, regex help, language examples, and conceptual questions stay in normal chat.
 
@@ -97,7 +97,7 @@ Provider output for edits must use:
 ```
 ````
 
-v0.1 supports full-file `create_or_update` only. Complex partial patches are intentionally deferred.
+v0.1 supports full-file `create_or_update` only. Complex partial patches are deferred.
 
 ## Safety Model
 
@@ -125,19 +125,19 @@ Coder plan-only, apply, and test flows create Proof Mode reports when proof is e
 
 ## Test Commands
 
-Safe test detection currently supports:
+Safe test detection supports:
 
 - Rust: `cargo test`
 - Node: `npm test`, `pnpm test`, `yarn test`
 - Python: `python -m pytest`, `pytest`
 
-Commands are never run automatically.
+Commands never run without your approval.
 
 ## Proof Reports
 
 When Proof Mode is enabled, coder tasks record project scan context, selected Skill Lens cards, plan text, patch summary, diff, approval decisions, files written through Axiom Engine, detected test commands, command results, and the final result or recoverable error.
 
-Reports are stored under the user config proofs directory and can be inspected with:
+Axiom stores reports under the user config proofs directory. You can inspect them with:
 
 ```powershell
 axiom proof latest

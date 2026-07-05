@@ -1,19 +1,19 @@
 # Skill Registry
 
-Axiom Skills Registry is the source of reusable skill manifests and bundles. The main Axiom Agent repository is separate from the `axiom-skills` GitHub repository. Later, npm will install the Axiom binary; skills will still come from the registry.
+The Axiom Skills Registry holds reusable skill manifests and bundles. It lives in the `axiom-skills` GitHub repository, separate from the main Axiom Agent repo. npm installs the Axiom binary; skills come from the registry.
 
-The registry implementation supports:
+What you can do with the registry:
 
-- Local fixture registries for tests and offline fallback.
-- HTTPS registry URLs, with HTTP allowed only for localhost development.
-- Relative manifest and bundle URLs resolved against `registry.json`.
-- Optional SHA-256 verification for registry entries.
-- Manifests, prompt cards, and built-in Axiom entrypoints only.
-- Registry caching with stale-cache fallback.
-- Skill update checks and controlled update installation.
-- Lifecycle state and trust metadata for installed skills.
+- Use local fixture registries for tests and offline fallback.
+- Fetch from HTTPS registry URLs (HTTP is allowed for localhost development only).
+- Resolve relative manifest and bundle URLs against `registry.json`.
+- Verify registry entries with optional SHA-256 checksums.
+- Install manifests, prompt cards, and built-in Axiom entrypoints.
+- Cache registry data with stale-cache fallback.
+- Check for skill updates and install them in a controlled way.
+- Track lifecycle state and trust metadata for installed skills.
 
-External executable skill binaries are intentionally not supported yet.
+External executable skill binaries are not supported yet.
 
 ## Remote Shape
 
@@ -76,7 +76,7 @@ allow_untrusted_registries = false
 fallback_to_bundled_registry = true
 ```
 
-The default remote URL points at the NexaraAI `axiom-skills` registry. If loading it fails and fallback is enabled, onboarding and skill commands use the bundled local fixture registry.
+The default remote URL points at the NexaraAI `axiom-skills` registry. If loading fails and fallback is enabled, onboarding and skill commands use the bundled local fixture registry instead.
 
 ## Commands
 
@@ -103,13 +103,13 @@ axiom skill reset-stats <skill_id>
 axiom skill remove <skill_id>
 ```
 
-`axiom skill update --check` compares installed skill versions with the active registry. `axiom skill update <skill_id>` asks before installing that update. `--all` asks before applying compatible updates. `--apply-patches` applies compatible patch updates only when policy allows it.
+`axiom skill update --check` compares installed skill versions against the active registry. `axiom skill update <skill_id>` prompts before installing that update. `--all` prompts before applying compatible updates. `--apply-patches` applies compatible patch updates when policy allows it.
 
-Update output includes skill id, current version, available version, lifecycle state, source, trust level, update type, and compatibility result.
+Update output shows: skill id, current version, available version, lifecycle state, source, trust level, update type, and compatibility result.
 
 ## Cache
 
-Registry cache is stored under the user config directory:
+Axiom stores the registry cache under the user config directory:
 
 ```text
 registry-cache/
@@ -119,16 +119,16 @@ registry-cache/
   cache-metadata.json
 ```
 
-The cache uses `registry_cache_ttl_hours`. If refresh fails and stale cache exists, Axiom uses the stale cache with a warning. If no cache exists and fallback is enabled, Axiom uses the bundled fixture registry.
+The cache respects `registry_cache_ttl_hours`. If a refresh fails and a stale cache exists, Axiom uses the stale cache and prints a warning. If no cache exists and fallback is enabled, Axiom falls back to the bundled fixture registry.
 
 ## Trust Rules
 
-If a registry entry includes `sha256`, Axiom verifies the downloaded manifest or bundle content before installing it. A checksum mismatch fails the install.
+When a registry entry includes `sha256`, Axiom verifies the downloaded manifest or bundle content before installing. A checksum mismatch fails the install.
 
-If a custom registry is used, Axiom warns:
+When you use a custom registry, Axiom warns:
 
 ```text
 Custom registries can change agent behavior. Only use registries you trust.
 ```
 
-Trusted skills come from the official NexaraAI registry or the bundled fixture registry. Community custom registry skills show a warning. Untrusted custom skills require explicit confirmation. Blocked skills cannot be installed or executed.
+Trusted skills come from the official NexaraAI registry or the bundled fixture registry. Community custom registry skills show a warning. Untrusted custom skills require explicit confirmation. You cannot install or execute blocked skills.

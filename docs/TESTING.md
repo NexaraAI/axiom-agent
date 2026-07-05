@@ -1,6 +1,6 @@
 # Testing
 
-Axiom tests should be safe to run without API keys and without writing to real user config.
+All Axiom tests run without API keys and without writing to real user config.
 
 ## Config Isolation
 
@@ -10,7 +10,7 @@ Set `AXIOM_HOME` for local tests:
 AXIOM_HOME=/tmp/axiom-test-home cargo run -p axiom-cli -- doctor
 ```
 
-When `AXIOM_HOME` is set, Axiom writes:
+When `AXIOM_HOME` is set, Axiom writes to:
 
 ```text
 config.toml
@@ -21,7 +21,7 @@ updates/
 registry-cache/
 ```
 
-If it is not set, Axiom uses the normal platform config directory.
+Without it, Axiom uses the normal platform config directory.
 
 ## Offline Setup
 
@@ -31,13 +31,13 @@ Use the mock provider and bundled registry:
 cargo run -p axiom-cli -- onboarding --non-interactive --provider mock --workspace ./demo-workspace --yes
 ```
 
-For a fully pinned registry:
+For a pinned registry:
 
 ```bash
 cargo run -p axiom-cli -- onboarding --non-interactive --provider mock --workspace ./demo-workspace --registry ./fixtures/skill-registry --yes
 ```
 
-The mock provider is deterministic and lives in `axiom-llm`. It is for tests and demos only.
+The mock provider lives in `axiom-llm`. It returns deterministic responses and exists for tests and demos.
 
 ## One-Shot Chat
 
@@ -66,7 +66,7 @@ node scripts/security-check.js
 npm pack --dry-run
 ```
 
-`scripts/e2e-test.js` creates a temporary `AXIOM_HOME`, a temporary workspace, builds or locates the Axiom binary, runs non-interactive onboarding, checks doctor, skill commands, `axiom run`, coder plan-only, proof list, and updater status. It uses the local registry fixture and mock provider.
+`scripts/e2e-test.js` creates a temporary `AXIOM_HOME` and workspace, builds or locates the Axiom binary, runs non-interactive onboarding, and checks doctor, skill commands, `axiom run`, coder plan-only, proof list, and updater status. It uses the local registry fixture and mock provider.
 
 `scripts/release-check.js` verifies version sync, repository URLs, registry URL, workflows, docs, license, npm status text, and tracked-file safety.
 

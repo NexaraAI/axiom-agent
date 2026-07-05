@@ -7,7 +7,7 @@ The Cloudflare provider uses:
 - Token source: environment variable configured by `api_token_env`
 - Optional gateway header: `cf-aig-gateway-id`
 
-Tokens must not be stored in `config.toml`.
+Do not store tokens in `config.toml`.
 
 ## Example Config
 
@@ -40,10 +40,10 @@ Inside chat:
 hello
 ```
 
-If the token is missing, Axiom prints the environment variable name to set. It does not print the token value.
+If the token is missing, Axiom prints the environment variable name you need to set. It does not print the token value.
 
 ## Troubleshooting
 
 - `API key/token environment variable is not set`: set the env var named by `api_token_env`.
 - `missing provider field: account_id`: rerun `axiom onboarding` and update Cloudflare setup.
-- HTTP errors are summarized without printing request headers or tokens.
+- Axiom summarizes HTTP errors without printing request headers or tokens.

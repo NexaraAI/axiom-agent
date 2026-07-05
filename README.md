@@ -4,17 +4,17 @@ A terminal-first Rust CLI that routes requests through Skill Lens, executes safe
 
 ## What is Axiom Agent?
 
-Axiom is not a chatbot. It is a terminal agent that understands what you need and picks the right tools.
+Axiom is a terminal agent that understands what you need and picks the right tools.
 
-When you send a message, Skill Lens scans your installed skills and selects only the ones that match your request. Those skill cards get injected as compact context for the LLM. If the model asks to run a tool, Axiom Engine executes it with safety checks and sends the result back.
+When you send a message, Skill Lens scans your installed skills and selects the ones that match your request. Those skill cards get injected as compact context for the LLM. If the model asks to run a tool, Axiom Engine executes it with safety checks and sends the result back.
 
 Coder Mode handles project-level tasks: scan the workspace, generate a plan, show diffs, apply changes after approval, run tests.
 
-Proof Mode records what happened during each session: what was asked, which skills were selected, what tools ran, what files changed, and how it ended.
+Proof Mode records what happened during each session: what you asked, which skills were selected, what tools ran, what files changed, and how the session ended.
 
 ## Current Status
 
-v0.5.0-beta. Terminal foundation is built and release assets are being validated.
+v0.5.0-beta. The npm package `axiom-agent` is published on npm. Install with `npm install -g axiom-agent@beta`.
 
 What works:
 - Terminal CLI with onboarding, chat, coding mode, and proof commands
@@ -29,10 +29,9 @@ What works:
 - Test-safe `AXIOM_HOME` config isolation
 - Coder mode with project scan, plan, patch, diff preview, safe writes, and test detection
 - Proof Mode with JSON traces, Markdown reports, and secret redaction
-- npm installer scaffold (not publicly released yet)
+- npm package published (`axiom-agent@beta`)
 
 What is not done yet:
-- npm package is not published. Install from source for now.
 - GitHub Release assets are built by the release workflow from version tags.
 - Streaming responses are not implemented.
 - External executable skill binaries are not supported.
@@ -53,17 +52,23 @@ What is not done yet:
 
 ## Installation
 
-From source (recommended for now):
+Install from npm (recommended):
+
+```bash
+npm install -g axiom-agent@beta
+axiom
+```
+
+From source:
 
 ```bash
 cargo build -p axiom-cli
 cargo run -p axiom-cli
 ```
 
-npm installer scaffold exists but is not published yet:
+Local npm testing with a source-built binary:
 
 ```bash
-# Local testing only
 cargo build -p axiom-cli --release
 export AXIOM_AGENT_BINARY_PATH="$PWD/target/release/axiom"
 npm install -g .
@@ -83,7 +88,7 @@ axiom
 
 Run `axiom` with no arguments. If no config exists, onboarding starts. It asks for your provider, API key environment variable, and model. After setup, it installs the essential skill bundle for your OS.
 
-Config is saved to:
+Axiom saves config to:
 - Windows: `%APPDATA%\axiom-agent\config.toml`
 - Linux/macOS: `~/.config/axiom-agent/config.toml`
 
@@ -98,7 +103,7 @@ cargo run -p axiom-cli -- onboarding --non-interactive --provider mock --workspa
 
 `AXIOM_HOME` changes the config root for the process. When set, Axiom writes `config.toml`, `skills/installed_skills.json`, `proofs/`, `updates/`, and `registry-cache/` under that directory instead of the real user config directory.
 
-The built-in `mock` provider is for tests and demos only. It returns deterministic responses and does not require API keys.
+The built-in `mock` provider is for tests and demos. It returns deterministic responses and does not require API keys.
 
 ## Chat Mode
 
@@ -154,7 +159,7 @@ Skills are TOML manifests with `[llm_card]` sections. Types: `prompt` (LLM guida
 
 Only `tool` skills with built-in entrypoints execute in v0.1. Prompt skills guide the model but do not run code.
 
-Installed skills live in the platform config directory. The registry supports bundles (groups of skills for a platform) and individual installs.
+You can find installed skills in the platform config directory. You can install bundles (groups of skills for a platform) or individual skills.
 
 ```bash
 axiom skill search python
@@ -169,9 +174,9 @@ axiom skill disable python.write
 axiom skill enable python.write
 ```
 
-The default remote registry is `https://raw.githubusercontent.com/NexaraAI/axiom-skills/main/registry.json`. The registry URL is configurable. If it fails, onboarding falls back to the bundled fixture at `fixtures/skill-registry/`.
+The default remote registry is `https://raw.githubusercontent.com/NexaraAI/axiom-skills/main/registry.json`. You can change the registry URL in config. If fetching fails, onboarding falls back to the bundled fixture at `fixtures/skill-registry/`.
 
-Installed skills have lifecycle state and trust metadata. Disabled, incompatible, quarantined, and blocked skills are not selected by Skill Lens and cannot execute. External executable skill binaries are still not supported; unknown external entrypoints are installed disabled or quarantined.
+Installed skills carry lifecycle state and trust metadata. Skill Lens skips disabled, incompatible, quarantined, and blocked skills, and they cannot execute. External executable skill binaries are not supported yet; Axiom installs unknown external entrypoints as disabled or quarantined.
 
 ## Coder Mode
 
@@ -190,7 +195,7 @@ Coder mode does not commit, push, deploy, delete files, or run arbitrary command
 
 Proof Mode records terminal agent sessions. Each task gets a JSON trace and a Markdown report.
 
-Recorded data: user request, provider, model, selected skills, tool calls, approvals, file writes, commands, test results, errors, and final response. Secrets are redacted.
+Recorded data: user request, provider, model, selected skills, tool calls, approvals, file writes, commands, test results, errors, and final response. Axiom redacts secrets.
 
 ```bash
 axiom proof list
@@ -200,13 +205,13 @@ axiom proof export latest --format markdown
 axiom proof clean --older-than 30
 ```
 
-Proofs are stored at:
+Axiom stores proofs at:
 - Windows: `%APPDATA%\axiom-agent\proofs`
 - Linux/macOS: `~/.config/axiom-agent/proofs`
 
 ## Safety Model
 
-Axiom enforces workspace-only file access. Secret-looking paths (`.env`, `*.pem`, `*.key`, `credentials.json`) are blocked. Medium and high risk actions require terminal approval. Tool execution stays within built-in executors; external binaries are rejected.
+Axiom enforces workspace-only file access. It blocks secret-looking paths (`.env`, `*.pem`, `*.key`, `credentials.json`). Medium and high risk actions require terminal approval. Tool execution stays within built-in executors; Axiom rejects external binaries.
 
 Coder mode shows plans and diffs before writes. Even in trusted approval mode, v0.1 asks before every file write.
 
@@ -223,7 +228,7 @@ axiom update set-channel stable
 axiom update set-policy notify
 ```
 
-`stable` uses normal releases, `nightly` can use prereleases, and `dev` is for local mocked release metadata. Running from Cargo `target/` supports update checks but blocks self-replacement.
+`stable` uses normal releases, `nightly` can use prereleases, and `dev` is for local mocked release metadata. Running from Cargo `target/` lets you check for updates but blocks self-replacement.
 
 ## Development Setup
 
@@ -255,8 +260,8 @@ See `docs/TESTING.md` and `docs/DEMO.md` for isolated local runs without API key
 
 ## Roadmap
 
-- v0.5.0-beta: terminal foundation, config, chat, Skill Lens, tool execution, registry, npm scaffold, Coder mode, Proof Mode, offline demos, release assets, and release safety checks
-- Next: stronger editing workflows, richer patch application, proof analytics, and broader skill ecosystem polish
+- v0.5.0-beta: terminal foundation, config, chat, Skill Lens, tool execution, registry, npm package, Coder mode, Proof Mode, offline demos, release assets, and release safety checks
+- Next: stronger editing workflows, richer patch application, proof analytics, broader skill ecosystem
 - Later: external skill binaries, remote registry publishing, app layers
 
 ## License

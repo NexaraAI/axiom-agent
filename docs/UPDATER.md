@@ -1,11 +1,11 @@
 # Core Updater
 
-The core updater updates the Axiom Rust binary. It is separate from skill updates.
+The core updater replaces the Axiom Rust binary. Skill updates are separate (see `SKILL_REGISTRY.md`).
 
 - Core update: replaces the `axiom` executable after checksum verification.
 - Skill update: updates installed skill manifests from the skill registry.
 
-The updater has release-ready plumbing. It will become active for normal users after tagged GitHub Releases are published for this repo.
+The updater has release-ready plumbing. It will become active after tagged GitHub Releases are published for this repo.
 
 ## Commands
 
@@ -35,38 +35,38 @@ backup_previous_binary = true
 verify_checksums = true
 ```
 
-Cached fields such as `last_checked_at`, `last_available_version`, and `last_update_error` are also stored in config.
+Axiom also stores cached fields in config: `last_checked_at`, `last_available_version`, and `last_update_error`.
 
 ## Channels
 
 - `stable`: uses non-prerelease GitHub Releases.
 - `nightly`: can use prereleases.
-- `dev`: local testing channel. It can read mocked release metadata from a local JSON file or directory.
+- `dev`: local testing channel. Reads mocked release metadata from a local JSON file or directory.
 
 ## Policies
 
-- `manual`: only check when the user runs `axiom update check`.
+- `manual`: check only when you run `axiom update check`.
 - `notify`: check on explicit command and show cached notices on startup.
-- `auto-patch`: allows patch updates without an extra confirmation during explicit update install flow. Minor and major updates still require confirmation.
+- `auto-patch`: apply patch updates without extra confirmation during explicit update install flow. Minor and major updates still require confirmation.
 
-Normal chat startup does not make network calls. It only reads cached update information and may print one short notice.
+Normal chat startup makes no network calls. It reads cached update info and may print one short notice.
 
 ## Safety
 
-Axiom downloads a release asset and `SHA256SUMS`, finds the matching checksum line, and verifies the binary before staging or installing it.
+Axiom downloads a release asset and `SHA256SUMS`, finds the matching checksum line, and verifies the binary before staging or installing.
 
-If the checksum is missing, installation is blocked. If the checksum mismatches, installation fails and no binary replacement is attempted.
+A missing checksum blocks installation. A mismatched checksum fails the install, and Axiom does not attempt binary replacement.
 
-Axiom does not download or run release scripts. Releases contain prebuilt binaries and checksum metadata only.
+Axiom does not download or run release scripts. Releases contain prebuilt binaries and checksum metadata.
 
 ## Install Modes
 
-- `cargo-dev`: running from `target/debug` or `target/release`. Install is blocked.
+- `cargo-dev`: running from `target/debug` or `target/release`. Axiom blocks self-install.
 - `npm-global`: running from the npm package vendor binary. Axiom tries to update in place if permissions allow.
 - `standalone`: direct binary path. Axiom can replace it if writable.
-- `unknown`: check works; install handles errors conservatively.
+- `unknown`: check works; Axiom handles install errors by preserving the current state.
 
-For Cargo builds, use:
+For Cargo builds, Axiom prints:
 
 ```text
 Axiom is running from a Cargo build, so it will not replace this binary.
@@ -74,7 +74,7 @@ Axiom is running from a Cargo build, so it will not replace this binary.
 
 ## Staging And Rollback
 
-Updater files live under the user config directory:
+Axiom stores updater files under the user config directory:
 
 ```text
 updates/
@@ -84,7 +84,7 @@ updates/
   update-state.json
 ```
 
-If `AXIOM_HOME` is set, this tree is written under `$AXIOM_HOME/updates`. Integration tests use that path so updater status checks do not touch real user config.
+If `AXIOM_HOME` is set, this tree goes under `$AXIOM_HOME/updates`. Integration tests use that path so updater status checks do not touch real user config.
 
 Install flow:
 
@@ -109,4 +109,4 @@ node scripts/release-check.js
 node scripts/security-check.js
 ```
 
-These checks do not create releases and do not publish npm. They verify repository metadata, workflows, docs, tracked-file safety, and obvious secret leaks.
+These checks do not create releases and do not publish to npm. They verify repository metadata, workflows, docs, tracked-file safety, and obvious secret leaks.

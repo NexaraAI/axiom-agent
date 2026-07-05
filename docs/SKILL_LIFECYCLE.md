@@ -1,24 +1,24 @@
 # Skill Lifecycle
 
-Axiom tracks installed skills as local records plus a copied `skill.toml` manifest. The record is the safety gate. Skill Lens and Axiom Engine both consult it before a skill can be selected or executed.
+Axiom tracks installed skills as local records plus a copied `skill.toml` manifest. The record acts as the safety gate. Both Skill Lens and Axiom Engine check it before selecting or executing a skill.
 
 ## States
 
-- `enabled`: the skill can be selected and, if it is a supported tool, executed.
+- `enabled`: Lens can select the skill, and Engine can execute it (if it is a supported tool).
 - `disabled`: the user turned it off. Lens ignores it and Engine blocks it.
-- `update_available`: the installed version is usable, but the registry has a newer compatible version.
-- `incompatible`: the skill does not match the current Axiom version or platform. It is disabled.
-- `quarantined`: the manifest has an unsupported entrypoint, such as an external executable. It is disabled.
+- `update_available`: the installed version works, but the registry has a newer compatible version.
+- `incompatible`: the skill does not match the Axiom version or platform. Axiom disables it.
+- `quarantined`: the manifest has an unsupported entrypoint (e.g., an external executable). Axiom disables it.
 - `failed_update`: the last update attempt failed. Axiom keeps the old manifest and version.
 
-Disabled, incompatible, quarantined, and blocked skills are not selected by Skill Lens and cannot execute.
+Skill Lens never selects disabled, incompatible, quarantined, or blocked skills. Engine never executes them.
 
 ## Trust Levels
 
 - `trusted`: bundled skills and skills from the official NexaraAI registry.
 - `community`: valid custom registry skills with enough metadata to review.
-- `untrusted`: custom registry skills with missing checksum, suspicious metadata, or unsupported entrypoints.
-- `blocked`: incompatible or known unsupported skills. They cannot be installed or executed.
+- `untrusted`: custom registry skills with a missing checksum, suspicious metadata, or unsupported entrypoints.
+- `blocked`: incompatible or known unsupported skills. Axiom refuses to install or execute them.
 
 Community installs show a warning. Untrusted installs require explicit confirmation. Blocked skills fail closed.
 
@@ -28,12 +28,12 @@ Axiom checks:
 
 - `min_axiom_version`
 - optional `max_axiom_version`
-- current platform
+- the platform
 - `skill_type`
 - `entrypoint`
 - permissions and risk metadata
 
-External executable entrypoints are not supported yet. Axiom only accepts `prompt-only` and built-in entrypoints such as `builtin:file.read`.
+Axiom does not support external executable entrypoints yet. It only accepts `prompt-only` and built-in entrypoints like `builtin:file.read`.
 
 ## Updates
 
@@ -46,11 +46,11 @@ axiom skill update --all
 axiom skill update --apply-patches
 ```
 
-Update checks compare `installed_skills.json` with the configured registry and show current version, available version, state, source, trust level, update type, and compatibility result.
+Update checks compare `installed_skills.json` with the configured registry. Output shows: installed version, available version, state, source, trust level, update type, and compatibility result.
 
-Update types are `patch`, `minor`, and `major`. Minor and major updates require confirmation. `--apply-patches` only applies compatible patch updates when `skills.auto_update_policy = "auto-patch"`.
+Update types: `patch`, `minor`, `major`. Minor and major updates require confirmation. `--apply-patches` applies compatible patch updates when `skills.auto_update_policy = "auto-patch"`.
 
-If an update fails, Axiom keeps the old manifest and old installed version, sets `state = "failed_update"`, and records `last_update_error`.
+If an update fails, Axiom keeps the old manifest and installed version, sets `state = "failed_update"`, and records `last_update_error`.
 
 ## Policy
 
@@ -61,11 +61,11 @@ auto_update_policy = "notify"
 
 Supported values:
 
-- `manual`: never check unless the user runs a skill update command.
-- `notify`: show that updates are available, but do not install.
-- `auto-patch`: allow patch updates through `--apply-patches`; minor and major updates still require confirmation.
+- `manual`: Axiom never checks unless you run a skill update command.
+- `notify`: Axiom shows available updates but does not install them.
+- `auto-patch`: Axiom applies patch updates through `--apply-patches`; minor and major updates still require confirmation.
 
-Chat startup does not make registry network calls. If a local cache already shows updates, chat prints one short notice.
+Chat startup makes no registry network calls. If a local cache shows available updates, chat prints one short notice.
 
 ## Registry Cache
 
@@ -79,7 +79,7 @@ registry-cache/
   cache-metadata.json
 ```
 
-Cache metadata records source URL, fetch time, TTL, last error, and whether stale cache was used. If the cache is valid, Axiom uses it. If refresh fails and stale cache exists, Axiom uses stale cache with a warning. If no cache exists, Axiom can fall back to the bundled fixture registry.
+Cache metadata records source URL, fetch time, TTL, last error, and whether Axiom used stale data. If the cache is valid, Axiom uses it. If a refresh fails and stale cache exists, Axiom uses stale cache with a warning. If no cache exists, Axiom falls back to the bundled fixture registry.
 
 ## Health
 
@@ -88,7 +88,7 @@ axiom skill health
 axiom skill reset-stats SKILL_ID
 ```
 
-Successful execution increments `success_count`, updates `average_latency_ms`, and clears `last_runtime_error`. Failed execution increments `failure_count` and records the last runtime error. Trusted skills are not automatically disabled just because they fail, but repeated failures are shown in health output.
+A successful execution increments `success_count`, updates `average_latency_ms`, and clears `last_runtime_error`. A failed execution increments `failure_count` and records the error. Axiom does not auto-disable trusted skills on failure, but repeated failures show up in health output.
 
 ## Enable, Disable, Remove
 
@@ -98,4 +98,4 @@ axiom skill disable SKILL_ID
 axiom skill remove SKILL_ID
 ```
 
-Enable only works for compatible, non-blocked skills. Disable keeps the installed manifest but prevents selection and execution. Remove deletes the installed record and local manifest directory, but it does not clear the registry cache.
+You can only enable compatible, non-blocked skills. Disabling a skill keeps the installed manifest but prevents Lens selection and Engine execution. Removing a skill deletes the installed record and local manifest directory but leaves the registry cache intact.

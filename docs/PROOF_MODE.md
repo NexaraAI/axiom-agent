@@ -1,8 +1,8 @@
 # Proof Mode
 
-Axiom Proof Mode records what happened during important terminal agent tasks. It exists for transparency, debugging, safety review, and portfolio proof of work.
+Proof Mode records what happened during terminal agent tasks. Use it for transparency, debugging, safety review, and portfolio proof of work.
 
-Proof Mode is enabled by default:
+Proof Mode is on by default:
 
 ```toml
 [proof]
@@ -16,26 +16,26 @@ max_capture_chars = 4000
 
 ## Storage
 
-Proof files are stored in the user config directory:
+Axiom stores proof files in the user config directory:
 
 - Windows: `%APPDATA%\axiom-agent\proofs`
 - Linux/macOS: `~/.config/axiom-agent/proofs`
 
-If `AXIOM_HOME` is set, proofs are stored under `$AXIOM_HOME/proofs` instead. This is how integration tests avoid writing to real user config.
+If you set `AXIOM_HOME`, Axiom stores proofs under `$AXIOM_HOME/proofs` instead. Integration tests use this to avoid writing to real user config.
 
-The directory structure is:
+The directory structure:
 
 ```text
 proofs/
-2026-07-04/
-session-abc123/
-task-001.json
-task-001.md
+  2026-07-04/
+    session-abc123/
+      task-001.json
+      task-001.md
 ```
 
 Each task gets a stable session id, task id, and event ids for recorded actions.
 
-## What Is Recorded
+## What Gets Recorded
 
 Proof traces can record:
 
@@ -58,7 +58,7 @@ Chat creates one proof task per user message. `axiom run` creates the same chat 
 
 ## Redaction
 
-Proof Mode never intentionally stores secrets. It redacts:
+Proof Mode never stores secrets. It redacts:
 
 - API-key-looking values;
 - Bearer tokens;
@@ -67,9 +67,9 @@ Proof Mode never intentionally stores secrets. It redacts:
 - credential and token fields;
 - long captured text over `proof.max_capture_chars`.
 
-Secret-looking file paths such as `.env`, `.env.*`, `*.pem`, `*.key`, `credentials.json`, and `token.json` are blocked by execution safety before contents are read or written.
+Execution safety blocks secret-looking file paths (`.env`, `.env.*`, `*.pem`, `*.key`, `credentials.json`, `token.json`) before Axiom reads or writes their contents.
 
-Markdown reports are designed to be readable and compact. JSON traces keep structured fields, but tool outputs and command output are summarized and redacted.
+Markdown reports are readable and compact. JSON traces keep structured fields, but summarize and redact tool outputs and command output.
 
 ## Commands
 
@@ -84,7 +84,7 @@ axiom proof open latest
 axiom proof clean --older-than 30
 ```
 
-`show` supports `latest`, full task ids, and unique partial task ids. `open` prints the report path in v0.1.
+`show` accepts `latest`, full task ids, and unique partial task ids. `open` prints the report path in v0.1.
 
 Inside chat:
 
@@ -95,12 +95,12 @@ Inside chat:
 !proof latest
 ```
 
-## Portfolio And Debugging Use
+## Portfolio and Debugging Use
 
-Markdown proof reports are meant to be clean enough to review later. They show what was asked, what Axiom selected, what it executed, what it changed, which approvals were given, and how the task ended.
+Markdown proof reports are clean enough to review later. They show what you asked, what Axiom selected, what it executed, what it changed, which approvals you gave, and how the task ended.
 
-Proof Mode does not store raw provider headers, API tokens, full secret file contents, or huge command outputs.
+Proof Mode does not store raw provider headers, API tokens, full secret file contents, or large command outputs.
 
-Core update proofs record compact metadata such as current version, available version, channel, policy, asset name, checksum result, install result, rollback result, and error summary where available. They do not store full release JSON.
+Core update proofs record compact metadata: current version, available version, channel, policy, asset name, checksum result, install result, rollback result, and error summary where available. They exclude full release JSON.
 
-Skill update proofs record compact metadata such as old version, new version, registry source, selected action, status, and error summary where available. They do not store full registry contents.
+Skill update proofs record compact metadata: old version, new version, registry source, selected action, status, and error summary where available. They exclude full registry contents.

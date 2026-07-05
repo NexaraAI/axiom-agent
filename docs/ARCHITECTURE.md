@@ -1,6 +1,6 @@
 # Architecture
 
-Axiom Agent is a Cargo workspace with focused crates. The product is a skill-powered terminal agent, not only a chatbot.
+Axiom Agent is a Cargo workspace with focused crates. It ships as a skill-powered terminal agent for code tasks, not a chatbot.
 
 - `axiom-cli`: terminal command interface and display.
 - `axiom-core`: config, sessions, workspace safety, and shared errors.
@@ -22,7 +22,7 @@ npm install -g axiom-agent
 -> axiom starts onboarding or chat
 ```
 
-This is the intended npm flow after publishing. The npm package is intentionally thin. It does not implement agent logic and does not replace the Rust CLI. Development can override the release repository with `AXIOM_AGENT_RELEASE_REPO`.
+The npm package is thin on purpose. It contains no agent logic and does not replace the Rust CLI. Developers can override the release repository with `AXIOM_AGENT_RELEASE_REPO`.
 
 ## Core Update Flow
 
@@ -45,7 +45,7 @@ axiom update install
 -> rollback if post-install verification fails
 ```
 
-The CLI owns terminal prompts and display. `axiom-update` owns release, checksum, staging, install, and rollback logic. No release scripts are downloaded or executed.
+`axiom-cli` handles terminal prompts and display. `axiom-update` handles release, checksum, staging, install, and rollback logic. No release scripts get downloaded or executed.
 
 ## Skill Flow
 
@@ -61,9 +61,9 @@ User message
 -> Axiom Proof JSON and Markdown export
 ```
 
-The CLI does not parse skill manifests directly. Engine owns skill storage and parsing. Lens owns selection. LLM owns provider transport.
+`axiom-cli` does not parse skill manifests. `axiom-engine` handles skill storage and parsing. `axiom-lens` handles selection. `axiom-llm` handles provider transport.
 
-`axiom run "message"` uses this same flow once and exits. It is the non-interactive entry point for integration tests, scripted demos, and automation. It can run one provider-requested tool loop unless `--no-tools` is supplied, and it records Proof traces unless `--no-proof` is supplied.
+`axiom run "message"` uses this same flow once and exits. Integration tests, scripted demos, and automation use it as the non-interactive entry point. It can run one provider-requested tool loop unless you pass `--no-tools`, and it records Proof traces unless you pass `--no-proof`.
 
 ## Coder Flow
 
@@ -78,7 +78,7 @@ User coding task
 -> axiom-engine file.write applies approved full-file changes
 ```
 
-Coder mode keeps normal chat history separate from coding session history. Auto-routing from chat can ask first or switch automatically for obvious project-level coding tasks, but it never grants write permissions. File writes and command execution remain approval-gated.
+Coder mode keeps normal chat history separate from coding session history. Auto-routing from chat can ask first or switch for obvious project-level coding tasks, but it never grants write permissions. File writes and command execution stay approval-gated.
 
 ## Proof Flow
 
@@ -91,7 +91,7 @@ Chat, skill run, or coder task
 -> axiom proof commands list, show, export, and clean reports
 ```
 
-`axiom-proof` owns trace shape, storage traversal, redaction, and report rendering. The CLI owns terminal display and command routing. Axiom Engine still owns executable skill behavior, while coder mode records metadata about approved plans, patches, and command results.
+`axiom-proof` handles trace shape, storage traversal, redaction, and report rendering. `axiom-cli` handles terminal display and command routing. `axiom-engine` handles executable skill behavior. Coder mode records metadata about approved plans, patches, and command results.
 
 ## Registry Flow
 
@@ -107,11 +107,11 @@ Configured registry URL
 -> installed_skills.json source tracking
 ```
 
-Onboarding first attempts the configured registry. If it fails and `fallback_to_bundled_registry = true`, it installs the OS essential bundle from `fixtures/skill-registry/`. This preserves offline setup and keeps tests independent of GitHub.
+Onboarding first tries the configured registry. If that fails and `fallback_to_bundled_registry = true`, it installs the OS essential bundle from `fixtures/skill-registry/`. This preserves offline setup and keeps tests independent of GitHub.
 
-For tests and demos, `AXIOM_HOME` overrides the config root. That path resolution lives in `axiom-core`, so CLI commands, proof recording, skills, registry cache, and updater state all use the same isolated root.
+For tests and demos, `AXIOM_HOME` overrides the config root. That path resolution lives in `axiom-core`, so CLI commands, proof recording, skills, registry cache, and updater state all share the same isolated root.
 
-Axiom never executes remote skill code. Registry downloads are limited to manifests and bundles. A skill is enabled only when it is compatible, trusted enough for the install path, and its entrypoint is `prompt-only` or a built-in Axiom executor such as `builtin:file.read`, `builtin:file.write`, `builtin:web.fetch`, `builtin:git.status`, or `builtin:git.diff`.
+Axiom never executes remote skill code. Registry downloads are limited to manifests and bundles. A skill gets enabled when it is compatible, trusted enough for the install path, and its entrypoint is `prompt-only` or a built-in Axiom executor (`builtin:file.read`, `builtin:file.write`, `builtin:web.fetch`, `builtin:git.status`, or `builtin:git.diff`).
 
 ## Skill Lifecycle Flow
 
@@ -124,8 +124,8 @@ installed_skills.json
 -> optional proof trace summary
 ```
 
-The CLI owns prompts and display. Engine owns state transitions, compatibility checks, update application, cache behavior, and execution blocking. Lens does not decide trust policy; it receives installed skills and ignores records Engine marks as disabled, incompatible, quarantined, or blocked.
+`axiom-cli` handles prompts and display. `axiom-engine` handles state transitions, compatibility checks, update application, cache behavior, and execution blocking. `axiom-lens` does not decide trust policy; it receives installed skills and ignores records that `axiom-engine` marks as disabled, incompatible, quarantined, or blocked.
 
 ## Mock Provider
 
-The `mock` provider lives in `axiom-llm`. It is clearly labeled for tests and demos only. It returns deterministic chat responses, can request `file.read` for README requests, returns a simple coder plan, emits a harmless `axiom-patch`, and summarizes one tool result. It does not make network calls and does not require API keys.
+The `mock` provider lives in `axiom-llm`. It is labeled for tests and demos only. It returns deterministic chat responses, can request `file.read` for README requests, returns a simple coder plan, emits a harmless `axiom-patch`, and summarizes one tool result. It makes no network calls and requires no API keys.

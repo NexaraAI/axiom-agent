@@ -29,9 +29,9 @@ The LLM receives selected `SkillCard` data, not full manifests.
 
 ## Execution
 
-Only `tool` skills execute in the current stage. `prompt`, `workflow`, and `guard` skills parse and can guide the model, but they do not run yet.
+Only `tool` skills execute in the current stage. `prompt`, `workflow`, and `guard` skills parse and can guide the model, but Axiom does not run them yet.
 
-The provider-independent tool request format is:
+The provider-independent tool request format:
 
 ````text
 ```axiom-tool
@@ -39,7 +39,7 @@ The provider-independent tool request format is:
 ```
 ````
 
-Implemented built-in executors:
+Built-in executors:
 
 - `file.read`
 - `file.write`
@@ -48,11 +48,11 @@ Implemented built-in executors:
 - `git.status`
 - `git.diff`
 
-Execution is constrained to the active workspace where applicable. Secret-looking paths such as `.env`, private keys, `.pem`, and `.key` files are blocked by default. Medium-risk actions ask for terminal approval unless policy allows auto execution.
+Axiom constrains execution to the active workspace where applicable. It blocks secret-looking paths (`.env`, private keys, `.pem`, `.key` files) by default. Medium-risk actions prompt for terminal approval unless policy allows auto execution.
 
 ## Installed Skills
 
-Installed skills are stored under the Axiom config directory:
+Axiom stores installed skills under the config directory:
 
 ```text
 skills/
@@ -64,15 +64,15 @@ skills/
 
 `installed_skills.json` tracks skill id, version, install and update timestamps, source, registry URL, manifest URL, optional checksum, enabled status, lifecycle state, trust level, update errors, runtime errors, and health counters.
 
-Sources are:
+Sources:
 
-- `remote` for the configured remote registry.
-- `bundled` for the built-in fixture fallback.
-- `local` for explicit local registry development installs.
+- `remote`: the configured remote registry.
+- `bundled`: the built-in fixture fallback.
+- `local`: explicit local registry development installs.
 
 ## Registry Installs
 
-Skills can be searched and installed from the configured registry:
+You can search and install skills from the configured registry:
 
 ```powershell
 axiom skill search python
@@ -95,16 +95,16 @@ For local development and tests:
 axiom skill install python.write --from-local-registry fixtures/skill-registry
 ```
 
-The current registry flow supports remote manifests and prompt cards, plus built-in entrypoints already implemented by Axiom. Unknown external executable entrypoints install disabled or quarantined so they cannot run.
+The registry flow supports remote manifests and prompt cards, plus built-in entrypoints that Axiom already implements. Unknown external executable entrypoints install as disabled or quarantined so they cannot run.
 
-Lifecycle details are in [SKILL_LIFECYCLE.md](SKILL_LIFECYCLE.md).
+Lifecycle details: [SKILL_LIFECYCLE.md](SKILL_LIFECYCLE.md).
 
 ## Local Registry Fixture
 
-The main Axiom Agent repository includes `fixtures/skill-registry/` for tests and offline fallback. It contains:
+The Axiom Agent repository includes `fixtures/skill-registry/` for tests and offline fallback. It contains:
 
 - `registry.json`
 - OS essential bundles
 - skill manifests and README files
 
-Published registry skills live in the separate `axiom-skills` GitHub repository. The npm installer will install the Axiom binary; it will not embed the whole remote skill catalog.
+Published registry skills live in the separate `axiom-skills` GitHub repository. The npm installer installs the Axiom binary; it does not embed the remote skill catalog.

@@ -2,5 +2,4 @@
 
 Coding mode is not implemented in this stage.
 
-The `axiom-coder` crate exists as a foundation for future project scanning, planning, patching, test running, and guard rails.
-
+The `axiom-coder` crate provides the scaffold for project scanning, planning, patching, test running, and guard rails.
