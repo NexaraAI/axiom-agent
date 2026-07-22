@@ -33,7 +33,7 @@ sha2 = "0.10"
 thiserror = "1.0"
 tiktoken-rs = "0.12"
 tokio = { version = "1.39", features = ["macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
-toml = "0.8"
+toml = "1.1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 nu-ansi-term = "0.50"
