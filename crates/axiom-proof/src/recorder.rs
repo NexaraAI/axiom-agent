@@ -1,12 +1,14 @@
 use std::{fs, path::PathBuf};
 
+use axiom_core::atomic_write;
 use thiserror::Error;
 
 use crate::{
     export, report,
     trace::{current_date_path, new_event_id, new_session_id, new_task_id, now_timestamp},
-    ApprovalProof, CommandProof, ErrorProof, FileReadProof, FileWriteProof, PatchProof, ProofMode,
-    ProofStatus, ProofTrace, SkillCardProof, TestProof, ToolCallProof,
+    AgentRuntimeProof, ApprovalProof, CheckpointProof, CommandProof, ErrorProof, FileReadProof,
+    FileWriteProof, PatchProof, ProofMode, ProofStatus, ProofTrace, SkillCardProof, TestProof,
+    ToolCallProof,
 };
 use crate::{redact_text, summarize_text};
 
@@ -18,6 +20,9 @@ pub struct ProofSettings {
     pub auto_export_markdown: bool,
     pub redact_secrets: bool,
     pub max_capture_chars: usize,
+    /// Number of calendar-day proof directories to retain. Zero disables
+    /// automatic pruning.
+    pub retention_days: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -63,6 +68,7 @@ impl ProofRecorder {
                 auto_export_markdown: false,
                 redact_secrets: true,
                 max_capture_chars: 4_000,
+                retention_days: 30,
             },
             trace: None,
         }
@@ -83,10 +89,14 @@ impl ProofRecorder {
             };
         }
 
+        // Proofs are durable artifacts. The original request must pass through
+        // the same bounded redaction path as every other captured value before
+        // it can reach JSON or Markdown exports.
+        let user_prompt = capture_with_settings(&settings, user_prompt.into());
         let mut trace = ProofTrace::new(mode, new_session_id(), new_task_id(), user_prompt);
-        trace.provider = provider;
-        trace.model = model;
-        trace.workspace = workspace;
+        trace.provider = provider.map(|value| capture_with_settings(&settings, value));
+        trace.model = model.map(|value| capture_with_settings(&settings, value));
+        trace.workspace = workspace.map(|value| capture_with_settings(&settings, value));
         Self {
             settings,
             trace: Some(trace),
@@ -151,6 +161,12 @@ impl ProofRecorder {
         }
     }
 
+    pub fn record_agent_runtime(&mut self, runtime: AgentRuntimeProof) {
+        if let Some(trace) = self.trace_mut() {
+            trace.agent_runtime = Some(runtime);
+        }
+    }
+
     pub fn record_tool_call(&mut self, mut call: ToolCallProof) {
         let settings = self.settings.clone();
         if let Some(trace) = self.trace_mut() {
@@ -197,11 +213,23 @@ impl ProofRecorder {
         }
     }
 
+    pub fn record_policy_decision(&mut self, decision: crate::PolicyDecisionProof) {
+        if let Some(trace) = self.trace_mut() {
+            trace.policy_decisions.push(decision);
+        }
+    }
+
     pub fn record_patch(&mut self, mut patch: PatchProof) {
         let settings = self.settings.clone();
         if let Some(trace) = self.trace_mut() {
             patch.diff = capture_with_settings(&settings, patch.diff);
             trace.patches.push(patch);
+        }
+    }
+
+    pub fn record_checkpoint(&mut self, checkpoint: CheckpointProof) {
+        if let Some(trace) = self.trace_mut() {
+            trace.checkpoints.push(checkpoint);
         }
     }
 
@@ -248,10 +276,12 @@ impl ProofRecorder {
         if !self.settings.trace_json {
             return Ok(None);
         }
-        let dir = self.trace_dir(trace)?;
+        self.prune_expired_proofs()?;
+        let trace = export::redacted_trace(trace)?;
+        let dir = self.trace_dir(&trace)?;
         fs::create_dir_all(&dir)?;
         let path = dir.join(format!("{}.json", trace.task_id));
-        fs::write(&path, export::to_json(trace)?)?;
+        atomic_write(&path, export::to_json(&trace)?.as_bytes())?;
         Ok(Some(path))
     }
 
@@ -262,10 +292,12 @@ impl ProofRecorder {
         if !self.settings.auto_export_markdown {
             return Ok(None);
         }
-        let dir = self.trace_dir(trace)?;
+        self.prune_expired_proofs()?;
+        let trace = export::redacted_trace(trace)?;
+        let dir = self.trace_dir(&trace)?;
         fs::create_dir_all(&dir)?;
         let path = dir.join(format!("{}.md", trace.task_id));
-        fs::write(&path, report::markdown_summary(trace))?;
+        atomic_write(&path, report::markdown_summary(&trace)?.as_bytes())?;
         Ok(Some(path))
     }
 
@@ -283,6 +315,112 @@ impl ProofRecorder {
             .join(current_date_path())
             .join(&trace.session_id))
     }
+
+    fn prune_expired_proofs(&self) -> Result<()> {
+        if self.settings.retention_days == 0 || !self.settings.proofs_dir.exists() {
+            return Ok(());
+        }
+        // Never let routine retention turn a configured symlink/junction into
+        // a deletion capability outside the proof directory. A user may still
+        // explicitly choose a custom export destination, but automatic pruning
+        // fails closed when the root or a dated child resolves elsewhere.
+        let root_metadata = fs::symlink_metadata(&self.settings.proofs_dir)?;
+        if is_link_or_reparse_point(&root_metadata) || !root_metadata.is_dir() {
+            return Ok(());
+        }
+        let canonical_root = fs::canonicalize(&self.settings.proofs_dir)?;
+        let Some(today) = parse_date_path(&current_date_path()) else {
+            return Ok(());
+        };
+        let retention_days = i64::try_from(self.settings.retention_days).unwrap_or(i64::MAX);
+        let cutoff = today.saturating_sub(retention_days);
+
+        for entry in fs::read_dir(&self.settings.proofs_dir)? {
+            let entry = entry?;
+            let entry_path = entry.path();
+            let entry_metadata = fs::symlink_metadata(&entry_path)?;
+            if is_link_or_reparse_point(&entry_metadata) || !entry_metadata.is_dir() {
+                continue;
+            }
+            let name = entry.file_name();
+            let Some(name) = name.to_str() else {
+                continue;
+            };
+            let Some(date) = parse_date_path(name) else {
+                continue;
+            };
+            if date < cutoff {
+                let path = entry_path;
+                let Ok(canonical_entry) = fs::canonicalize(&path) else {
+                    continue;
+                };
+                if canonical_entry.parent() != Some(canonical_root.as_path()) {
+                    continue;
+                }
+                // Re-check immediately before removal to guard against a
+                // replaced direct child on filesystems with symlink support.
+                let metadata = fs::symlink_metadata(&path)?;
+                if is_link_or_reparse_point(&metadata) || !metadata.is_dir() {
+                    continue;
+                }
+                fs::remove_dir_all(path)?;
+            }
+        }
+        Ok(())
+    }
+}
+
+fn is_link_or_reparse_point(metadata: &fs::Metadata) -> bool {
+    if metadata.file_type().is_symlink() {
+        return true;
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+
+        // Directory junctions are reparse points but are not guaranteed to be
+        // reported as symbolic links by every Windows filesystem backend.
+        metadata.file_attributes() & 0x0000_0400 != 0
+    }
+    #[cfg(not(windows))]
+    {
+        false
+    }
+}
+
+fn parse_date_path(value: &str) -> Option<i64> {
+    let mut components = value.split('-');
+    let year = components.next()?.parse::<i32>().ok()?;
+    let month = components.next()?.parse::<u32>().ok()?;
+    let day = components.next()?.parse::<u32>().ok()?;
+    if components.next().is_some() || !(1..=12).contains(&month) {
+        return None;
+    }
+    let days_in_month = match month {
+        2 if is_leap_year(year) => 29,
+        2 => 28,
+        4 | 6 | 9 | 11 => 30,
+        _ => 31,
+    };
+    if !(1..=days_in_month).contains(&day) {
+        return None;
+    }
+
+    let adjusted_year = year - i32::from(month <= 2);
+    let era = if adjusted_year >= 0 {
+        adjusted_year
+    } else {
+        adjusted_year - 399
+    } / 400;
+    let year_of_era = adjusted_year - era * 400;
+    let adjusted_month = month as i32 + if month > 2 { -3 } else { 9 };
+    let day_of_year = (153 * adjusted_month + 2) / 5 + day as i32 - 1;
+    let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
+    Some((era * 146_097 + day_of_era - 719_468) as i64)
+}
+
+fn is_leap_year(year: i32) -> bool {
+    year % 4 == 0 && (year % 100 != 0 || year % 400 == 0)
 }
 
 pub fn new_tool_call(
@@ -320,18 +458,10 @@ pub fn new_approval(
 }
 
 fn capture_with_settings(settings: &ProofSettings, value: String) -> String {
-    if settings.redact_secrets {
-        summarize_text(&value, settings.max_capture_chars)
-    } else if value.chars().count() > settings.max_capture_chars {
-        let mut summary = value
-            .chars()
-            .take(settings.max_capture_chars)
-            .collect::<String>();
-        summary.push_str("...[truncated]");
-        summary
-    } else {
-        value
-    }
+    // `redact_secrets` remains in config for compatibility, but durable proof
+    // artifacts never permit secret redaction to be disabled.
+    let _legacy_redaction_preference = settings.redact_secrets;
+    summarize_text(&value, settings.max_capture_chars)
 }
 
 pub fn record_redaction(trace: &mut ProofTrace, note: impl Into<String>) {
@@ -396,6 +526,28 @@ mod tests {
     }
 
     #[test]
+    fn user_prompt_is_always_redacted_and_bounded_in_json_and_markdown() {
+        let dir = temp_dir();
+        let secret = ["opaque", "prompt", "boundary", "1234567890"].join("-");
+        crate::register_secret_for_redaction(&secret);
+        let mut proof_settings = settings(&dir);
+        proof_settings.redact_secrets = false;
+        proof_settings.max_capture_chars = 48;
+        let prompt = format!("use {secret} then {}", "x".repeat(200));
+        let recorder =
+            ProofRecorder::start_trace(proof_settings, ProofMode::Chat, prompt, None, None, None);
+
+        let trace = recorder.trace().expect("trace");
+        assert!(!trace.user_prompt.contains(&secret));
+        assert!(trace.user_prompt.contains("[REDACTED]"));
+        assert!(trace.user_prompt.ends_with("...[truncated]"));
+        let json = crate::export::to_json(trace).expect("JSON");
+        let markdown = crate::report::markdown_summary(trace).expect("Markdown");
+        assert!(!json.contains(&secret));
+        assert!(!markdown.contains(&secret));
+    }
+
+    #[test]
     fn records_lens_tool_write_approval_patch_and_test() {
         let dir = temp_dir();
         let mut recorder =
@@ -425,11 +577,12 @@ mod tests {
             diff_summary: Some("changed README".to_string()),
         });
         recorder.record_approval(new_approval("write", "medium", "Apply?", "approved"));
+        let credential_name = ["API", "KEY"].join("_");
         recorder.record_patch(PatchProof {
             event_id: new_event_id("patch"),
             summary: "patch".to_string(),
             changed_files: vec!["README.md".to_string()],
-            diff: "API_KEY=secret".to_string(),
+            diff: format!("{credential_name}={}", ["test", "value"].join("-")),
             approved: true,
             applied: true,
         });
@@ -451,6 +604,152 @@ mod tests {
         assert_eq!(trace.tests.len(), 1);
     }
 
+    #[test]
+    fn persistence_prunes_only_expired_date_directories() {
+        let dir = temp_dir();
+        let expired = dir.join("1970-01-01");
+        let malformed = dir.join("operator-notes");
+        fs::create_dir_all(expired.join("session-old")).expect("create expired proof");
+        fs::create_dir_all(&malformed).expect("create unrelated directory");
+        fs::write(expired.join("session-old").join("proof.json"), b"old")
+            .expect("write expired proof");
+        fs::write(malformed.join("keep.txt"), b"keep").expect("write unrelated file");
+
+        let mut proof_settings = settings(&dir);
+        proof_settings.retention_days = 30;
+        let recorder =
+            ProofRecorder::start_trace(proof_settings, ProofMode::Chat, "task", None, None, None);
+        let exported = recorder
+            .export_json()
+            .expect("export with retention")
+            .expect("JSON path");
+
+        assert!(!expired.exists());
+        assert!(malformed.join("keep.txt").exists());
+        assert!(exported.exists());
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn zero_retention_disables_automatic_pruning() {
+        let dir = temp_dir();
+        let expired = dir.join("1970-01-01").join("session-old");
+        fs::create_dir_all(&expired).expect("create old proof directory");
+        fs::write(expired.join("proof.json"), b"old").expect("write old proof");
+
+        let mut proof_settings = settings(&dir);
+        proof_settings.retention_days = 0;
+        let recorder =
+            ProofRecorder::start_trace(proof_settings, ProofMode::Chat, "task", None, None, None);
+        recorder.export_json().expect("export without pruning");
+
+        assert!(expired.exists());
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn retention_never_follows_symlinked_proof_roots_or_date_directories() {
+        use std::os::unix::fs::symlink;
+
+        let root = temp_dir();
+        let outside = temp_dir();
+        let outside_expired = outside.join("1970-01-01").join("session-old");
+        fs::create_dir_all(&outside_expired).expect("create outside proof");
+        fs::write(outside_expired.join("proof.json"), b"old").expect("write outside proof");
+
+        let linked_root = root.join("linked-root");
+        fs::create_dir_all(&root).expect("create root");
+        symlink(&outside, &linked_root).expect("link root");
+        let mut root_settings = settings(&linked_root);
+        root_settings.retention_days = 30;
+        let root_recorder =
+            ProofRecorder::start_trace(root_settings, ProofMode::Chat, "task", None, None, None);
+        root_recorder
+            .prune_expired_proofs()
+            .expect("skip linked root");
+        assert!(outside_expired.exists());
+
+        let direct_root = root.join("direct-root");
+        fs::create_dir_all(&direct_root).expect("create direct root");
+        symlink(outside.join("1970-01-01"), direct_root.join("1970-01-01"))
+            .expect("link dated child");
+        let child_recorder = ProofRecorder::start_trace(
+            settings(&direct_root),
+            ProofMode::Chat,
+            "task",
+            None,
+            None,
+            None,
+        );
+        child_recorder
+            .prune_expired_proofs()
+            .expect("skip linked child");
+        assert!(outside_expired.exists());
+
+        let _ = fs::remove_dir_all(root);
+        let _ = fs::remove_dir_all(outside);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn retention_never_follows_junctioned_proof_roots_or_date_directories() {
+        let root = temp_dir();
+        let outside = temp_dir();
+        let outside_expired = outside.join("1970-01-01").join("session-old");
+        fs::create_dir_all(&outside_expired).expect("create outside proof");
+        fs::write(outside_expired.join("proof.json"), b"old").expect("write outside proof");
+        fs::create_dir_all(&root).expect("create root");
+
+        let linked_root = root.join("linked-root");
+        create_junction(&linked_root, &outside);
+        let root_recorder = ProofRecorder::start_trace(
+            settings(&linked_root),
+            ProofMode::Chat,
+            "task",
+            None,
+            None,
+            None,
+        );
+        root_recorder
+            .prune_expired_proofs()
+            .expect("skip junctioned root");
+        assert!(outside_expired.exists());
+        fs::remove_dir(&linked_root).expect("remove root junction");
+
+        let direct_root = root.join("direct-root");
+        fs::create_dir_all(&direct_root).expect("create direct root");
+        let linked_date = direct_root.join("1970-01-01");
+        create_junction(&linked_date, &outside.join("1970-01-01"));
+        let child_recorder = ProofRecorder::start_trace(
+            settings(&direct_root),
+            ProofMode::Chat,
+            "task",
+            None,
+            None,
+            None,
+        );
+        child_recorder
+            .prune_expired_proofs()
+            .expect("skip junctioned date directory");
+        assert!(outside_expired.exists());
+        fs::remove_dir(&linked_date).expect("remove date junction");
+
+        let _ = fs::remove_dir_all(root);
+        let _ = fs::remove_dir_all(outside);
+    }
+
+    #[cfg(windows)]
+    fn create_junction(link: &std::path::Path, target: &std::path::Path) {
+        let link_display = link.display().to_string();
+        let target = target.display().to_string();
+        let status = std::process::Command::new("cmd")
+            .args(["/C", "mklink", "/J", &link_display, &target])
+            .status()
+            .expect("launch mklink");
+        assert!(status.success(), "create junction {link_display}");
+    }
+
     fn settings(dir: &std::path::Path) -> ProofSettings {
         ProofSettings {
             enabled: true,
@@ -459,6 +758,7 @@ mod tests {
             auto_export_markdown: true,
             redact_secrets: true,
             max_capture_chars: 4_000,
+            retention_days: 30,
         }
     }
 

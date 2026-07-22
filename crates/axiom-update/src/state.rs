@@ -4,6 +4,7 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
+use axiom_core::atomic_write;
 use serde::{Deserialize, Serialize};
 
 use crate::UpdateError;
@@ -112,10 +113,11 @@ impl UpdateState {
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)?;
         }
-        fs::write(
+        atomic_write(
             path,
             serde_json::to_string_pretty(self)
-                .map_err(|error| UpdateError::StateJson(error.to_string()))?,
+                .map_err(|error| UpdateError::StateJson(error.to_string()))?
+                .as_bytes(),
         )?;
         Ok(())
     }

@@ -3,7 +3,12 @@
 const fs = require("fs");
 const path = require("path");
 const packageJson = require("../package.json");
-const { downloadAndVerifyBinary, makeExecutable, releaseRepoFromPackage } = require("./download-binary");
+const {
+  downloadAndVerifyBinary,
+  makeExecutable,
+  releaseRepoFromPackage,
+  replaceInstalledFile
+} = require("./download-binary");
 const { resolvePlatform } = require("./resolve-platform");
 
 function packageRoot() {
@@ -34,9 +39,15 @@ function resolveDevelopmentBinaryPath(binaryPath, fsImpl = fs) {
 
 function installFromDevelopmentOverride(sourcePath, destination, platform = process.platform) {
   fs.mkdirSync(path.dirname(destination), { recursive: true });
-  fs.copyFileSync(sourcePath, destination);
-  makeExecutable(destination, platform);
-  return destination;
+  const stagedPath = `${destination}.development-${process.pid}-${Date.now()}`;
+  try {
+    fs.copyFileSync(sourcePath, stagedPath, fs.constants.COPYFILE_EXCL);
+    return replaceInstalledFile(stagedPath, destination, (installedPath) =>
+      makeExecutable(installedPath, platform)
+    );
+  } finally {
+    fs.rmSync(stagedPath, { force: true });
+  }
 }
 
 async function main(env = process.env) {

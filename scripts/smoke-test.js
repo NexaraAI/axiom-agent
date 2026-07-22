@@ -5,7 +5,13 @@ const fs = require("fs");
 const os = require("os");
 const path = require("path");
 const { defaultInstalledBinaryPath, resolveAxiomBinary } = require("../bin/axiom");
+const { runSelfTest: runDistTagPolicySelfTest } = require("./check-dist-tag");
+const { runSelfTest: runPublishReadinessSelfTest } = require("./check-publish-readiness");
 const { checkVersionSync } = require("./check-version-sync");
+const {
+  replaceInstalledFile,
+  runSelfTest: runDownloadSecuritySelfTest
+} = require("./download-binary");
 const { resolveDevelopmentBinaryPath } = require("./postinstall");
 const { resolvePlatform, UnsupportedPlatformError } = require("./resolve-platform");
 const { sha256Buffer, verifyChecksum } = require("./verify-checksum");
@@ -41,6 +47,39 @@ function testChecksumVerification() {
   assert.throws(
     () => verifyChecksum(file, `${"0".repeat(64)}  axiom-test\n`, "axiom-test"),
     /Checksum mismatch/
+  );
+  assert.throws(
+    () => verifyChecksum(file, `${checksum}  axiom-test\n${checksum}  axiom-test\n`, "axiom-test"),
+    /Duplicate/
+  );
+  assert.throws(
+    () => verifyChecksum(file, "not a checksum line\n", "axiom-test"),
+    /Malformed/
+  );
+  fs.rmSync(dir, { recursive: true, force: true });
+}
+
+function testInstallerReplacementRollback() {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "axiom-replace-"));
+  const destination = path.join(dir, "axiom");
+  const staged = path.join(dir, "axiom.staged");
+  fs.writeFileSync(destination, "old");
+  fs.writeFileSync(staged, "new");
+
+  assert.throws(
+    () => replaceInstalledFile(staged, destination, () => {
+      throw new Error("final verification failed");
+    }),
+    /final verification failed/
+  );
+  assert.strictEqual(fs.readFileSync(destination, "utf8"), "old");
+
+  fs.writeFileSync(staged, "new");
+  replaceInstalledFile(staged, destination);
+  assert.strictEqual(fs.readFileSync(destination, "utf8"), "new");
+  assert.strictEqual(
+    fs.readdirSync(dir).some((entry) => entry.includes(".previous-")),
+    false
   );
   fs.rmSync(dir, { recursive: true, force: true });
 }
@@ -93,8 +132,12 @@ function testDevelopmentOverrideValidation() {
 function main() {
   testPlatformResolver();
   testChecksumVerification();
+  testInstallerReplacementRollback();
   testWrapperPathResolution();
   testDevelopmentOverrideValidation();
+  runDownloadSecuritySelfTest();
+  runDistTagPolicySelfTest();
+  runPublishReadinessSelfTest();
   checkVersionSync();
   console.log("Node smoke tests passed.");
 }

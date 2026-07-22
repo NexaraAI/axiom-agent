@@ -7,11 +7,13 @@ use std::{
 use anyhow::{bail, Result};
 use axiom_core::AxiomConfig;
 use axiom_proof::{
-    export_trace_to_format, find_proof, latest_proof, list_proofs, ProofFormat, ProofSettings,
-    ProofTrace,
+    export_trace_to_format, find_proof, latest_proof, list_proofs, load_proof_trace, ProofFormat,
+    ProofSettings,
 };
 
 use crate::ProofCommands;
+
+const PROOF_EXPORT_PRIVACY_WARNING: &str = "Privacy warning: Proof exports can contain project paths, prompts, code, and metadata even after automatic redaction. Review the output before sharing it.";
 
 pub(crate) fn run(command: ProofCommands) -> Result<()> {
     match command {
@@ -32,6 +34,7 @@ pub(crate) fn settings_from_config(config_path: &Path, config: &AxiomConfig) -> 
         auto_export_markdown: config.proof.auto_export_markdown,
         redact_secrets: config.proof.redact_secrets,
         max_capture_chars: config.proof.max_capture_chars,
+        retention_days: config.proof.retention_days,
     }
 }
 
@@ -92,9 +95,10 @@ fn show(proof_id: &str) -> Result<()> {
 fn export(proof_id: &str, format: &str) -> Result<()> {
     let (config_path, _config) = load_config()?;
     let entry = find_proof(proofs_dir(&config_path), proof_id)?;
-    let trace = load_trace(&entry.json_path)?;
+    let trace = load_proof_trace(&entry.json_path)?;
     let format = parse_format(format)?;
     let output = export_trace_to_format(&trace, format)?;
+    eprintln!("{PROOF_EXPORT_PRIVACY_WARNING}");
     println!("{output}");
     Ok(())
 }
@@ -136,10 +140,6 @@ fn parse_format(format: &str) -> Result<ProofFormat> {
         "json" => Ok(ProofFormat::Json),
         _ => bail!("unsupported proof export format: {format}"),
     }
-}
-
-fn load_trace(path: &Path) -> Result<ProofTrace> {
-    Ok(serde_json::from_str(&fs::read_to_string(path)?)?)
 }
 
 fn walk_files(root: &Path) -> Result<Vec<PathBuf>> {

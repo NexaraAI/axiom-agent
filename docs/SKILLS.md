@@ -4,6 +4,7 @@ Skills use TOML manifests and compact LLM-facing skill cards.
 
 Required manifest fields:
 
+- `schema_version` (`1.0`; legacy `0.1` remains readable)
 - `id`
 - `name`
 - `version`
@@ -27,9 +28,11 @@ Supported skill types:
 
 The LLM receives selected `SkillCard` data, not full manifests.
 
+Optional v1 metadata includes `keywords`, `examples`, `depends_on`, `provides`, `hooks`, `side_effects`, `idempotent`, `cache_key`, `input_schema`, and `output_schema`. Install and registry refresh reject unsupported future schemas, malformed IDs, duplicate dependencies/capabilities, invalid hooks, and invalid schema shapes. Lens places available dependencies before the skill that needs them; missing and cyclic dependencies block selection and execution.
+
 ## Execution
 
-Only `tool` skills execute in the current stage. `prompt`, `workflow`, and `guard` skills parse and can guide the model, but Axiom does not run them yet.
+Only these built-in tool IDs execute in the current stage: `file.read`, `file.write`, `project.scan`, `web.fetch`, `git.status`, and `git.diff`. They are registered as compiled-in typed executors. All other installed skills are prompt context only until a sandboxed external executor model lands. In particular, `python.write` and `python.run` can guide the model but cannot execute Python themselves; `workflow` and `guard` skills also do not run yet.
 
 The provider-independent tool request format:
 
@@ -95,16 +98,20 @@ For local development and tests:
 axiom skill install python.write --from-local-registry fixtures/skill-registry
 ```
 
-The registry flow supports remote manifests and prompt cards, plus built-in entrypoints that Axiom already implements. Unknown external executable entrypoints install as disabled or quarantined so they cannot run.
+The registry flow supports remote manifests and prompt cards, plus the six built-in entrypoints listed above. An external skill install currently stores its metadata but cannot be dispatched: unknown executable entrypoints are installed disabled or quarantined and never executed.
 
 Lifecycle details: [SKILL_LIFECYCLE.md](SKILL_LIFECYCLE.md).
 
 ## Local Registry Fixture
 
-The Axiom Agent repository includes `fixtures/skill-registry/` for tests and offline fallback. It contains:
+The single source of truth for published skill manifests is the separate `axiom-skills` registry. The Axiom Agent repository includes `fixtures/skill-registry/` as the compile-time source and test oracle for the immutable starter registry embedded in the CLI. Packaged binaries materialize that starter registry under `AXIOM_HOME/bundled-registry/<generation>` for offline setup; they do not depend on the checkout at runtime. It contains:
 
 - `registry.json`
 - OS essential bundles
 - skill manifests and README files
 
-Published registry skills live in the separate `axiom-skills` GitHub repository. The npm installer installs the Axiom binary; it does not embed the remote skill catalog.
+The npm installer installs the Axiom binary; it does not embed the remote skill catalog. The binary does include the small starter bundle used for offline onboarding.
+
+## Token budgets
+
+`llm_card.token_budget` contributes to the deterministic Lens selection budget. Cards are ranked, dependencies are placed first, and selection stops before the configured combined card budget is exceeded. Agent context compaction independently bounds older conversation history while preserving identity, todo state, selected skill context, and recent observations.

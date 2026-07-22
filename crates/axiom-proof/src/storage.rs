@@ -6,7 +6,7 @@ use std::{
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use crate::{export, report, ProofTrace};
+use crate::{export, report, ProofTrace, ProofTraceLoadError};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProofFormat {
@@ -32,6 +32,8 @@ pub enum ProofStorageError {
     Io(#[from] std::io::Error),
     #[error("JSON error: {0}")]
     Json(#[from] serde_json::Error),
+    #[error(transparent)]
+    Trace(#[from] ProofTraceLoadError),
     #[error("proof not found: {0}")]
     NotFound(String),
     #[error("proof id is ambiguous: {0}")]
@@ -65,7 +67,7 @@ pub fn list_proofs(proofs_dir: impl AsRef<Path>) -> Result<Vec<ProofIndexEntry>>
                 if path.extension().and_then(|ext| ext.to_str()) != Some("json") {
                     continue;
                 }
-                let trace: ProofTrace = serde_json::from_str(&fs::read_to_string(&path)?)?;
+                let trace = load_proof_trace(&path)?;
                 entries.push(ProofIndexEntry {
                     date: date.clone(),
                     session_id: session_id.clone(),
@@ -95,6 +97,11 @@ pub fn list_proofs(proofs_dir: impl AsRef<Path>) -> Result<Vec<ProofIndexEntry>>
     Ok(entries)
 }
 
+pub fn load_proof_trace(path: impl AsRef<Path>) -> Result<ProofTrace> {
+    let input = fs::read_to_string(path)?;
+    Ok(ProofTrace::from_json_str(&input)?)
+}
+
 pub fn latest_proof(proofs_dir: impl AsRef<Path>) -> Result<Option<ProofIndexEntry>> {
     Ok(list_proofs(proofs_dir)?.into_iter().next())
 }
@@ -109,9 +116,9 @@ pub fn find_proof(proofs_dir: impl AsRef<Path>, id: &str) -> Result<ProofIndexEn
         .into_iter()
         .filter(|entry| entry.task_id == id || entry.task_id.starts_with(id))
         .collect::<Vec<_>>();
-    match matches.len() {
-        0 => Err(ProofStorageError::NotFound(id.to_string())),
-        1 => Ok(matches.into_iter().next().expect("one match")),
+    match matches.as_slice() {
+        [] => Err(ProofStorageError::NotFound(id.to_string())),
+        [entry] => Ok(entry.clone()),
         _ => Err(ProofStorageError::Ambiguous(id.to_string())),
     }
 }
@@ -122,7 +129,7 @@ pub fn export_trace_to_format(
 ) -> serde_json::Result<String> {
     match format {
         ProofFormat::Json => export::to_json(trace),
-        ProofFormat::Markdown => Ok(report::markdown_summary(trace)),
+        ProofFormat::Markdown => report::markdown_summary(trace),
     }
 }
 
@@ -144,6 +151,7 @@ mod tests {
             auto_export_markdown: true,
             redact_secrets: true,
             max_capture_chars: 4_000,
+            retention_days: 30,
         };
         let mut first = ProofRecorder::start_trace(
             settings.clone(),
@@ -168,6 +176,28 @@ mod tests {
         let unique_prefix = unique_prefix_for(&latest.task_id, &list);
         let found = find_proof(&dir, unique_prefix).expect("partial");
         assert_eq!(found.task_id, latest.task_id);
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn proof_indexing_rejects_unsupported_trace_versions() {
+        let dir = temp_dir();
+        let session_dir = dir.join("2026-01-01").join("session-test");
+        fs::create_dir_all(&session_dir).expect("create proof directory");
+        let trace = ProofTrace::new(ProofMode::Chat, "session-test", "task-test", "hello");
+        let mut value = serde_json::to_value(trace).expect("serialize trace");
+        value["trace_version"] = serde_json::Value::String("9.0".to_string());
+        fs::write(
+            session_dir.join("task-test.json"),
+            serde_json::to_vec(&value).expect("serialize unsupported trace"),
+        )
+        .expect("write unsupported trace");
+
+        let error = list_proofs(&dir).expect_err("unsupported trace must stop indexing");
+        assert!(matches!(
+            error,
+            ProofStorageError::Trace(ProofTraceLoadError::UnsupportedVersion(_))
+        ));
         let _ = fs::remove_dir_all(dir);
     }
 

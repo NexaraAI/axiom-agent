@@ -68,4 +68,31 @@ mod tests {
         assert!(prompt.contains("Risk: low"));
         assert!(prompt.contains("```axiom-tool"));
     }
+
+    #[test]
+    fn prompt_builder_renders_cards_already_selected_within_the_lens_budget() {
+        let cards = vec![
+            card_with_budget("file.read", 1),
+            card_with_budget("file.write", 1),
+        ];
+
+        let prompt = build_skill_context_message(&cards).expect("context prompt");
+
+        assert!(prompt.contains("file.read"));
+        assert!(prompt.contains("file.write"));
+    }
+
+    fn card_with_budget(id: &str, token_budget: u32) -> SkillCard {
+        SkillCard {
+            id: id.to_string(),
+            name: id.to_string(),
+            summary: "Test card".to_string(),
+            when_to_use: Vec::new(),
+            input_contract: "input".to_string(),
+            output_contract: "output".to_string(),
+            risk_level: RiskLevel::Low,
+            permissions: vec![Permission::FileSystemRead],
+            token_budget,
+        }
+    }
 }

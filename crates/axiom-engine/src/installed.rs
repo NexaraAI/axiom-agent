@@ -5,6 +5,7 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
+use axiom_core::atomic_write;
 use semver::Version;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -110,7 +111,7 @@ impl InstalledSkills {
         fs::create_dir_all(skills_dir)?;
         let path = installed_skills_path(skills_dir);
         let content = serde_json::to_string_pretty(self)?;
-        fs::write(path, content)?;
+        atomic_write(path, content.as_bytes())?;
         Ok(())
     }
 
@@ -188,7 +189,7 @@ pub fn install_bundle_from_local_registry(
     bundle_id: &str,
     skills_dir: impl AsRef<Path>,
 ) -> Result<Vec<InstalledSkillRecord>> {
-    let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
+    let runtime = tokio::runtime::Runtime::new()?;
     runtime.block_on(async {
         let client = RegistryClient::from_local_path(registry_root)?;
         install_bundle_from_registry_client(&client, bundle_id, skills_dir, "local").await
@@ -200,7 +201,7 @@ pub fn install_skill_from_local_registry(
     skill_id: &str,
     skills_dir: impl AsRef<Path>,
 ) -> Result<InstalledSkillRecord> {
-    let runtime = tokio::runtime::Runtime::new().expect("tokio runtime");
+    let runtime = tokio::runtime::Runtime::new()?;
     runtime.block_on(async {
         let client = RegistryClient::from_local_path(registry_root)?;
         install_skill_from_registry_client(&client, skill_id, skills_dir, "local").await
@@ -275,7 +276,7 @@ pub async fn install_skill_from_registry_client(
 
     let target_dir = skills_dir.join(&manifest.id);
     fs::create_dir_all(&target_dir)?;
-    fs::write(target_dir.join("skill.toml"), &resource.content)?;
+    atomic_write(target_dir.join("skill.toml"), resource.content.as_bytes())?;
 
     let mut installed = InstalledSkills::load_from_dir(skills_dir)?;
     let now = now_timestamp();

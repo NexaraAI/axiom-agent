@@ -1,6 +1,6 @@
 {
   "name": "axiom-agent",
-  "version": "0.5.1-beta",
+  "version": "1.0.0-rc.1",
   "description": "Terminal-first Rust CLI for Axiom Agent.",
   "license": "MIT",
   "repository": {
@@ -13,9 +13,18 @@
   "bin": {
     "axiom": "bin/axiom.js"
   },
+  "engines": {
+    "node": ">=20"
+  },
+  "publishConfig": {
+    "access": "public",
+    "tag": "rc"
+  },
   "scripts": {
     "postinstall": "node scripts/postinstall.js",
+    "prepublishOnly": "node scripts/check-dist-tag.js --from-npm",
     "smoke": "node scripts/smoke-test.js",
+    "packed-smoke": "node scripts/packed-install-smoke.js",
     "e2e": "node scripts/e2e-test.js",
     "release-check": "node scripts/release-check.js",
     "security-check": "node scripts/security-check.js",

@@ -1,6 +1,10 @@
+use std::collections::{BTreeMap, BTreeSet};
+
 use axiom_engine::{current_axiom_version, InstalledSkill, Platform, SkillCard, SkillType};
 
 use crate::analyze_intent;
+
+pub const DEFAULT_CARD_TOKEN_BUDGET: u32 = 1_200;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RankedSkill {
@@ -22,31 +26,120 @@ pub fn select_relevant_skills(
     installed_skills: &[InstalledSkill],
     max_cards: usize,
 ) -> Vec<SkillCard> {
+    select_relevant_skills_with_budget(
+        prompt,
+        installed_skills,
+        max_cards,
+        DEFAULT_CARD_TOKEN_BUDGET,
+    )
+}
+
+pub fn select_relevant_skills_with_budget(
+    prompt: &str,
+    installed_skills: &[InstalledSkill],
+    max_cards: usize,
+    max_card_token_budget: u32,
+) -> Vec<SkillCard> {
     let intent = analyze_intent(prompt);
     let platform = Platform::current();
     let prompt_lower = prompt.to_ascii_lowercase();
-    let mut scored = installed_skills
+    let available = installed_skills
         .iter()
         .filter(|skill| skill.record.is_selectable())
         .filter(|skill| skill.manifest.is_platform_compatible(&platform))
         .filter(|skill| skill.manifest.min_axiom_version <= current_axiom_version())
+        .collect::<Vec<_>>();
+    let available_by_id = available
+        .iter()
+        .map(|skill| (skill.manifest.id.as_str(), *skill))
+        .collect::<BTreeMap<_, _>>();
+    let mut scored = available
+        .iter()
         .filter_map(|skill| {
             let score = score_skill(skill, &intent.candidate_skill_ids, &prompt_lower);
-            (score > 0).then_some((score, skill.manifest.to_skill_card()))
+            (score > 0).then_some((score, *skill))
         })
         .collect::<Vec<_>>();
 
-    scored.sort_by(|(left_score, left_card), (right_score, right_card)| {
+    scored.sort_by(|(left_score, left_skill), (right_score, right_skill)| {
         right_score
             .cmp(left_score)
-            .then_with(|| left_card.id.cmp(&right_card.id))
+            .then_with(|| left_skill.manifest.id.cmp(&right_skill.manifest.id))
     });
 
-    scored
-        .into_iter()
-        .take(max_cards)
-        .map(|(_, card)| card)
-        .collect()
+    let mut total_budget: u32 = 0;
+    let mut selected = Vec::new();
+    let mut selected_ids = BTreeSet::new();
+    for (_, skill) in scored {
+        if selected.len() >= max_cards {
+            break;
+        }
+        let mut dependency_order = Vec::new();
+        if !resolve_dependencies(
+            skill,
+            &available_by_id,
+            &mut BTreeSet::new(),
+            &mut BTreeSet::new(),
+            &mut dependency_order,
+        ) {
+            continue;
+        }
+        let cards = dependency_order
+            .into_iter()
+            .filter(|candidate| !selected_ids.contains(candidate.manifest.id.as_str()))
+            .map(|candidate| candidate.manifest.to_skill_card())
+            .collect::<Vec<_>>();
+        let added_budget = cards
+            .iter()
+            .fold(0_u32, |sum, card| sum.saturating_add(card.token_budget));
+        if selected.len().saturating_add(cards.len()) > max_cards
+            || total_budget.saturating_add(added_budget) > max_card_token_budget
+        {
+            continue;
+        }
+        for card in cards {
+            total_budget = total_budget.saturating_add(card.token_budget);
+            selected_ids.insert(card.id.clone());
+            selected.push(card);
+        }
+    }
+    selected
+}
+
+fn resolve_dependencies<'a>(
+    skill: &'a InstalledSkill,
+    available_by_id: &BTreeMap<&str, &'a InstalledSkill>,
+    visiting: &mut BTreeSet<String>,
+    visited: &mut BTreeSet<String>,
+    ordered: &mut Vec<&'a InstalledSkill>,
+) -> bool {
+    if visited.contains(&skill.manifest.id) {
+        return true;
+    }
+    if !visiting.insert(skill.manifest.id.clone()) {
+        return false;
+    }
+    for requirement in &skill.manifest.depends_on {
+        let dependency = available_by_id
+            .get(requirement.as_str())
+            .copied()
+            .or_else(|| {
+                available_by_id
+                    .values()
+                    .copied()
+                    .find(|candidate| candidate.manifest.provides.contains(requirement))
+            });
+        let Some(dependency) = dependency else {
+            return false;
+        };
+        if !resolve_dependencies(dependency, available_by_id, visiting, visited, ordered) {
+            return false;
+        }
+    }
+    visiting.remove(&skill.manifest.id);
+    visited.insert(skill.manifest.id.clone());
+    ordered.push(skill);
+    true
 }
 
 fn score_skill(skill: &InstalledSkill, candidate_skill_ids: &[String], prompt_lower: &str) -> u32 {
@@ -66,6 +159,21 @@ fn score_skill(skill: &InstalledSkill, candidate_skill_ids: &[String], prompt_lo
 
     if prompt_lower.contains(&skill.manifest.category.to_ascii_lowercase()) {
         score += 6;
+    }
+
+    for keyword in &skill.manifest.keywords {
+        if prompt_contains_phrase(prompt_lower, keyword) {
+            score += 30;
+        }
+    }
+
+    for example in &skill.manifest.examples {
+        let matching_words = example
+            .split(|character: char| !character.is_alphanumeric())
+            .filter(|word| word.len() >= 4)
+            .filter(|word| prompt_contains_phrase(prompt_lower, word))
+            .count();
+        score += (matching_words as u32).saturating_mul(4);
     }
 
     let card = skill.manifest.to_skill_card();
@@ -89,6 +197,14 @@ fn score_skill(skill: &InstalledSkill, candidate_skill_ids: &[String], prompt_lo
     }
 
     score
+}
+
+fn prompt_contains_phrase(prompt_lower: &str, phrase: &str) -> bool {
+    let phrase = phrase.trim().to_ascii_lowercase();
+    !phrase.is_empty()
+        && prompt_lower
+            .split(|character: char| !character.is_alphanumeric())
+            .any(|word| word == phrase)
 }
 
 #[cfg(test)]
@@ -199,6 +315,87 @@ mod tests {
         let cards = select_relevant_skills("read and write files", &skills, 1);
 
         assert_eq!(cards.len(), 1);
+    }
+
+    #[test]
+    fn manifest_keywords_select_skills_without_hardcoded_intent_candidates() {
+        let mut skill = installed_skill(include_str!(
+            "../../../fixtures/skill-registry/skills/file.read/skill.toml"
+        ));
+        skill.manifest.keywords = vec!["blueprint".to_string()];
+
+        let cards = select_relevant_skills("explain this blueprint", &[skill], 5);
+
+        assert_eq!(
+            cards.first().map(|card| card.id.as_str()),
+            Some("file.read")
+        );
+    }
+
+    #[test]
+    fn card_budget_truncates_selected_context() {
+        let mut first = installed_skill(include_str!(
+            "../../../fixtures/skill-registry/skills/file.read/skill.toml"
+        ));
+        first.manifest.keywords = vec!["blueprint".to_string()];
+        first
+            .manifest
+            .llm_card
+            .as_mut()
+            .expect("fixture card")
+            .token_budget = 700;
+        let mut second = installed_skill(include_str!(
+            "../../../fixtures/skill-registry/skills/file.write/skill.toml"
+        ));
+        second.manifest.keywords = vec!["blueprint".to_string()];
+        second
+            .manifest
+            .llm_card
+            .as_mut()
+            .expect("fixture card")
+            .token_budget = 700;
+
+        let cards = select_relevant_skills_with_budget("blueprint", &[first, second], 5, 1_000);
+
+        assert_eq!(cards.len(), 1);
+    }
+
+    #[test]
+    fn co_selects_dependencies_before_the_matching_skill() {
+        let dependency = installed_skill(include_str!(
+            "../../../fixtures/skill-registry/skills/file.read/skill.toml"
+        ));
+        let mut primary = installed_skill(include_str!(
+            "../../../fixtures/skill-registry/skills/file.write/skill.toml"
+        ));
+        primary.manifest.keywords = vec!["blueprint".to_string()];
+        primary.manifest.depends_on = vec!["file.read".to_string()];
+
+        let cards = select_relevant_skills("blueprint", &[primary, dependency], 5);
+
+        assert_eq!(
+            cards
+                .iter()
+                .map(|card| card.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["file.read", "file.write"]
+        );
+    }
+
+    #[test]
+    fn skips_a_skill_with_missing_or_cyclic_dependencies() {
+        let mut primary = installed_skill(include_str!(
+            "../../../fixtures/skill-registry/skills/file.write/skill.toml"
+        ));
+        primary.manifest.keywords = vec!["blueprint".to_string()];
+        primary.manifest.depends_on = vec!["file.read".to_string()];
+        assert!(select_relevant_skills("blueprint", &[primary.clone()], 5).is_empty());
+
+        let mut dependency = installed_skill(include_str!(
+            "../../../fixtures/skill-registry/skills/file.read/skill.toml"
+        ));
+        dependency.manifest.depends_on = vec!["file.write".to_string()];
+        assert!(select_relevant_skills("blueprint", &[primary, dependency], 5).is_empty());
     }
 
     fn installed_skill(manifest: &str) -> InstalledSkill {

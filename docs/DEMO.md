@@ -53,4 +53,4 @@ AXIOM_HOME=/tmp/axiom-demo/home cargo run -p axiom-cli -- proof list
 AXIOM_HOME=/tmp/axiom-demo/home cargo run -p axiom-cli -- update status
 ```
 
-You can also install via `npm install -g axiom-agent@beta` and run these commands with `axiom` instead of `cargo run`.
+You can also install via `npm install -g axiom-agent@rc` and run these commands with `axiom` instead of `cargo run`.

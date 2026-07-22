@@ -1,3 +1,4 @@
+schema_version = "1.0"
 id = "web.fetch"
 name = "Fetch Web Text"
 version = "0.1.0"

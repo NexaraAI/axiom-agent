@@ -6,5 +6,5 @@ license.workspace = true
 authors.workspace = true
 
 [dependencies]
-axiom-engine = { path = "../axiom-engine" }
+axiom-engine = { path = "../axiom-engine", version = "=1.0.0-rc.1" }
 serde.workspace = true

@@ -22,10 +22,14 @@ function parseChecksumFile(text) {
 
     const match = line.match(/^([a-fA-F0-9]{64})\s+\*?(.+)$/);
     if (!match) {
-      continue;
+      throw new Error(`Malformed SHA256SUMS line: ${line}`);
     }
 
-    checksums.set(match[2].trim(), match[1].toLowerCase());
+    const assetName = match[2].trim();
+    if (!assetName || checksums.has(assetName)) {
+      throw new Error(`Duplicate or empty SHA256SUMS entry: ${assetName}`);
+    }
+    checksums.set(assetName, match[1].toLowerCase());
   }
 
   return checksums;

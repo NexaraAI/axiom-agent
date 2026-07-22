@@ -10,6 +10,7 @@ name = "axiom_upd"
 path = "src/lib.rs"
 
 [dependencies]
+axiom-core = { path = "../axiom-core", version = "=1.0.0-rc.1" }
 reqwest.workspace = true
 semver.workspace = true
 serde.workspace = true
