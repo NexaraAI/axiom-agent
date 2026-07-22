@@ -3,45 +3,142 @@ name: npm Publish
 on:
   workflow_dispatch:
     inputs:
+      release-tag:
+        description: "Existing GitHub Release tag to package (for example v1.0.0-rc.1)"
+        required: true
+        type: string
       publish:
-        description: "Publish to npm instead of doing a dry run"
+        description: "Publish to npm after validation instead of stopping at the dry run"
         required: true
         default: "false"
         type: choice
         options:
           - "false"
           - "true"
+      dist-tag:
+        description: "npm dist-tag to publish"
+        required: true
+        default: "beta"
+        type: choice
+        options:
+          - "beta"
+          - "rc"
+          - "latest"
   release:
     types: [published]
 
+permissions:
+  contents: read
+
+concurrency:
+  group: npm-publish-${{ github.event.release.tag_name || inputs['release-tag'] || github.run_id }}
+  cancel-in-progress: false
+
 jobs:
   smoke:
-    name: npm smoke test
-    runs-on: ubuntu-latest
+    name: Validate released npm package
+    runs-on: ubuntu-22.04
+    outputs:
+      dist_tag: ${{ steps.identity.outputs.dist_tag }}
+      package_version: ${{ steps.identity.outputs.package_version }}
+      release_tag: ${{ steps.identity.outputs.release_tag }}
+    env:
+      RELEASE_TAG: ${{ github.event.release.tag_name || inputs['release-tag'] }}
+      REQUESTED_DIST_TAG: ${{ inputs['dist-tag'] }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
-          node-version: "20"
-      - name: Run smoke tests
+          fetch-depth: 0
+          ref: ${{ github.event.release.tag_name || inputs['release-tag'] }}
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "24"
+      - name: Bind checkout to package version and release tag
+        id: identity
+        shell: bash
+        run: |
+          package_version="$(node -p "require('./package.json').version")"
+          expected_tag="v${package_version}"
+          test "$RELEASE_TAG" = "$expected_tag"
+          test "$(git rev-list -n 1 "$RELEASE_TAG")" = "$(git rev-parse HEAD)"
+          dist_tag="$REQUESTED_DIST_TAG"
+          if [ -z "$dist_tag" ]; then
+            dist_tag="$(node -p "require('./package.json').publishConfig.tag")"
+          fi
+          echo "package_version=$package_version" >> "$GITHUB_OUTPUT"
+          echo "release_tag=$RELEASE_TAG" >> "$GITHUB_OUTPUT"
+          echo "dist_tag=$dist_tag" >> "$GITHUB_OUTPUT"
+      - name: Read matching GitHub Release metadata
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          gh release view "$RELEASE_TAG" --repo NexaraAI/axiom-agent
+          --json tagName,isDraft,isPrerelease,assets
+          > "$RUNNER_TEMP/axiom-release.json"
+      - name: Validate dist-tag, changelog, and release assets
+        env:
+          NPM_DIST_TAG: ${{ steps.identity.outputs.dist_tag }}
+        run: >-
+          node scripts/check-publish-readiness.js
+          --tag "$RELEASE_TAG"
+          --dist-tag "$NPM_DIST_TAG"
+          --release-json "$RUNNER_TEMP/axiom-release.json"
+      - name: Run source smoke tests
         run: npm run smoke
+      - name: Install and execute the packed tarball
+        run: npm run packed-smoke
       - name: Check package contents
         run: npm pack --dry-run
 
   publish:
-    name: Publish to npm
-    runs-on: ubuntu-latest
+    name: Publish immutable npm version
+    runs-on: ubuntu-22.04
     needs: smoke
     if: github.event_name == 'workflow_dispatch' && inputs.publish == 'true'
+    environment:
+      name: npm-publish
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      NPM_DIST_TAG: ${{ needs.smoke.outputs.dist_tag }}
+      RELEASE_TAG: ${{ needs.smoke.outputs.release_tag }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
-          node-version: "20"
+          fetch-depth: 0
+          ref: ${{ needs.smoke.outputs.release_tag }}
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "24"
           registry-url: "https://registry.npmjs.org"
-      - name: Run smoke tests
-        run: npm run smoke
-      - name: Publish
-        run: npm publish --access public
+          package-manager-cache: false
+      - name: Pin trusted-publishing npm CLI
+        run: npm install --global npm@11.5.1
+      - name: Reconfirm exact release checkout
+        shell: bash
+        run: |
+          package_version="$(node -p "require('./package.json').version")"
+          test "$package_version" = "${{ needs.smoke.outputs.package_version }}"
+          test "$RELEASE_TAG" = "v${package_version}"
+          test "$(git rev-list -n 1 "$RELEASE_TAG")" = "$(git rev-parse HEAD)"
+      - name: Re-read matching GitHub Release metadata
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          gh release view "$RELEASE_TAG" --repo NexaraAI/axiom-agent
+          --json tagName,isDraft,isPrerelease,assets
+          > "$RUNNER_TEMP/axiom-release.json"
+      - name: Re-run source and packed-package smoke tests
+        run: |
+          npm run smoke
+          npm run packed-smoke
+      - name: Reject reused versions and revalidate release assets
+        run: >-
+          node scripts/check-publish-readiness.js
+          --tag "$RELEASE_TAG"
+          --dist-tag "$NPM_DIST_TAG"
+          --release-json "$RUNNER_TEMP/axiom-release.json"
+          --assert-unpublished
+      - name: Publish with npm trusted publishing
+        run: npm publish --tag "$NPM_DIST_TAG"

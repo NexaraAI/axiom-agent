@@ -3,13 +3,15 @@ pub mod installed;
 pub mod lifecycle;
 pub mod manifest;
 pub mod permissions;
+pub mod policy;
 pub mod registry;
 pub mod updater;
 
 pub use executor::{
-    execute_installed_tool, extract_tool_request, AllowAllApprover, ApprovalRequest,
-    DenyAllApprover, SkillApproval, SkillExecutionContext, SkillExecutionError,
-    SkillExecutionResult, ToolRequest,
+    authorize_side_effect, execute_installed_tool, execute_installed_tool_with_policy,
+    extract_tool_request, AllowAllApprover, ApprovalRequest, DenyAllApprover, ExecutorDescriptor,
+    ExecutorRegistry, SkillApproval, SkillExecutionContext, SkillExecutionError,
+    SkillExecutionResult, SkillExecutor, ToolRequest,
 };
 pub use installed::{
     disable_skill, enable_skill, install_bundle_from_local_registry,
@@ -24,8 +26,16 @@ pub use lifecycle::{
     is_trusted_registry_location, CompatibilityResult, SkillLifecycleAssessment,
     SkillLifecycleState, TrustLevel, OFFICIAL_REGISTRY_URL,
 };
-pub use manifest::{LlmCardManifest, Platform, RiskLevel, SkillCard, SkillManifest, SkillType};
+pub use manifest::{
+    LlmCardManifest, Platform, RiskLevel, SideEffect, SkillCard, SkillHooks, SkillManifest,
+    SkillType,
+};
 pub use permissions::Permission;
+pub use policy::{
+    MatchedPolicyRule, NoopSideEffectAuditSink, PolicyAction, PolicyOutcome,
+    RecordingSideEffectAuditSink, SideEffectAuditSink, SideEffectClass, SideEffectDecision,
+    SideEffectEvaluation, SideEffectPolicy, SideEffectRequest,
+};
 pub use registry::{
     check_skill_updates, current_essential_bundle_id, essential_bundle_id_for_os,
     load_registry_from_path, load_registry_from_url, resolve_registry_relative_url,

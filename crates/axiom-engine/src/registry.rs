@@ -33,6 +33,10 @@ pub enum RegistryError {
     HttpStatus { url: String, status: u16 },
     #[error("checksum mismatch for {id}")]
     ChecksumMismatch { id: String },
+    #[error("unsupported registry schema version: {0}")]
+    UnsupportedSchemaVersion(String),
+    #[error("invalid registry index: {0}")]
+    InvalidIndex(String),
 }
 
 pub type Result<T> = std::result::Result<T, RegistryError>;
@@ -130,6 +134,56 @@ pub struct SkillUpdate {
 }
 
 impl RegistryIndex {
+    pub fn validate(&self) -> Result<()> {
+        if self.schema_version != "0.1" {
+            return Err(RegistryError::UnsupportedSchemaVersion(
+                self.schema_version.clone(),
+            ));
+        }
+        if self.name.trim().is_empty() || self.updated_at.trim().is_empty() {
+            return Err(RegistryError::InvalidIndex(
+                "name and updated_at are required".to_string(),
+            ));
+        }
+        let mut skill_ids = std::collections::BTreeSet::new();
+        for skill in &self.skills {
+            if skill.id.trim().is_empty()
+                || skill.manifest_url.trim().is_empty()
+                || !skill_ids.insert(skill.id.as_str())
+            {
+                return Err(RegistryError::InvalidIndex(format!(
+                    "invalid or duplicate skill entry `{}`",
+                    skill.id
+                )));
+            }
+            validate_optional_checksum(&skill.id, skill.sha256.as_deref())?;
+            if skill
+                .max_axiom_version
+                .as_ref()
+                .is_some_and(|maximum| maximum < &skill.min_axiom_version)
+            {
+                return Err(RegistryError::InvalidIndex(format!(
+                    "skill `{}` has max_axiom_version below min_axiom_version",
+                    skill.id
+                )));
+            }
+        }
+        let mut bundle_ids = std::collections::BTreeSet::new();
+        for bundle in &self.bundles {
+            if bundle.id.trim().is_empty()
+                || bundle.bundle_url.trim().is_empty()
+                || !bundle_ids.insert(bundle.id.as_str())
+            {
+                return Err(RegistryError::InvalidIndex(format!(
+                    "invalid or duplicate bundle entry `{}`",
+                    bundle.id
+                )));
+            }
+            validate_optional_checksum(&bundle.id, bundle.sha256.as_deref())?;
+        }
+        Ok(())
+    }
+
     pub fn skill_entry(&self, skill_id: &str) -> Option<&RegistrySkillEntry> {
         self.skills.iter().find(|entry| entry.id == skill_id)
     }
@@ -327,7 +381,9 @@ impl RegistryClient {
 pub fn load_registry_from_path(path: impl AsRef<Path>) -> Result<RegistryIndex> {
     let path = normalize_registry_path(path.as_ref());
     let content = fs::read_to_string(path)?;
-    Ok(serde_json::from_str(&content)?)
+    let index: RegistryIndex = serde_json::from_str(&content)?;
+    index.validate()?;
+    Ok(index)
 }
 
 pub async fn load_registry_from_url(url: &str) -> Result<RegistryIndex> {
@@ -340,7 +396,9 @@ async fn load_registry_from_url_with_timeout(
 ) -> Result<RegistryIndex> {
     validate_remote_registry_url(url)?;
     let content = fetch_url_text(url, timeout_secs).await?;
-    Ok(serde_json::from_str(&content)?)
+    let index: RegistryIndex = serde_json::from_str(&content)?;
+    index.validate()?;
+    Ok(index)
 }
 
 pub fn resolve_registry_relative_url(base: &str, relative_or_url: &str) -> Result<String> {
@@ -379,6 +437,17 @@ pub fn verify_sha256(id: &str, bytes: &[u8], expected: &str) -> Result<()> {
     } else {
         Err(RegistryError::ChecksumMismatch { id: id.to_string() })
     }
+}
+
+fn validate_optional_checksum(id: &str, checksum: Option<&str>) -> Result<()> {
+    if checksum.is_some_and(|value| {
+        value.len() != 64 || !value.bytes().all(|byte| byte.is_ascii_hexdigit())
+    }) {
+        return Err(RegistryError::InvalidIndex(format!(
+            "entry `{id}` has an invalid SHA-256 checksum"
+        )));
+    }
+    Ok(())
 }
 
 pub fn check_skill_updates(
@@ -491,6 +560,27 @@ mod tests {
         assert_eq!(registry.schema_version, "0.1");
         assert!(registry.skill_entry("file.read").is_some());
         assert!(registry.bundle_entry("essential.windows").is_some());
+    }
+
+    #[test]
+    fn registry_validation_rejects_future_schema_and_duplicate_ids() {
+        let mut registry = load_registry_from_path(
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../fixtures/skill-registry/registry.json"),
+        )
+        .expect("fixture registry");
+        registry.schema_version = "99.0".to_string();
+        assert!(matches!(
+            registry.validate(),
+            Err(RegistryError::UnsupportedSchemaVersion(_))
+        ));
+
+        registry.schema_version = "0.1".to_string();
+        registry.skills.push(registry.skills[0].clone());
+        assert!(matches!(
+            registry.validate(),
+            Err(RegistryError::InvalidIndex(_))
+        ));
     }
 
     #[test]

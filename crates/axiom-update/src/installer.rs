@@ -1,3 +1,4 @@
+use axiom_core::atomic_write;
 use std::{
     fs,
     path::{Path, PathBuf},
@@ -112,15 +113,16 @@ pub fn stage_verified_update(request: StageUpdateRequest<'_>) -> Result<StagedUp
         asset_url,
         checksum_url,
     } = request;
+    validate_asset_name(asset_name)?;
     dirs.create_all()?;
     let checksum = crate::verify_asset_from_sums(asset_name, asset_bytes, checksums)?;
     let downloaded_asset_path = dirs.downloads.join(asset_name);
     let staged_binary_path = dirs.staged.join(asset_name);
     let checksum_path = dirs.downloads.join(CHECKSUM_FILE_NAME);
 
-    fs::write(&downloaded_asset_path, asset_bytes)?;
-    fs::write(&staged_binary_path, asset_bytes)?;
-    fs::write(&checksum_path, checksums)?;
+    atomic_write(&downloaded_asset_path, asset_bytes)?;
+    atomic_write(&staged_binary_path, asset_bytes)?;
+    atomic_write(&checksum_path, checksums.as_bytes())?;
     set_executable_permissions(&staged_binary_path)?;
 
     let state = UpdateState {
@@ -216,7 +218,7 @@ pub fn rollback_update(dirs: &UpdateDirs) -> Result<RollbackOutcome, UpdateError
         return Err(UpdateError::NoRollbackAvailable);
     }
 
-    fs::copy(&backup_path, &previous_binary_path)?;
+    atomic_copy(&backup_path, &previous_binary_path)?;
     set_executable_permissions(&previous_binary_path)?;
     state.status = UpdateStatus::RolledBack;
     state.last_error = None;
@@ -241,9 +243,17 @@ pub fn backup_path_for(
     backups_dir.as_ref().join(format!("{file_name}-{version}"))
 }
 
-pub fn run_binary_version_check(binary_path: impl AsRef<Path>) -> Result<String, UpdateError> {
-    let output = Command::new(binary_path.as_ref())
-        .arg("--version")
+pub fn run_binary_version_check(
+    binary_path: impl AsRef<Path>,
+    expected_version: &str,
+    credential_env_names: &[String],
+) -> Result<String, UpdateError> {
+    let mut command = Command::new(binary_path.as_ref());
+    command.arg("--version");
+    for environment_variable in credential_env_names {
+        command.env_remove(environment_variable);
+    }
+    let output = command
         .output()
         .map_err(|error| UpdateError::PostInstallVerification(error.to_string()))?;
     if !output.status.success() {
@@ -251,7 +261,29 @@ pub fn run_binary_version_check(binary_path: impl AsRef<Path>) -> Result<String,
             String::from_utf8_lossy(&output.stderr).to_string(),
         ));
     }
-    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+    let output = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    verify_binary_version_output(&output, expected_version)?;
+    Ok(output)
+}
+
+fn verify_binary_version_output(output: &str, expected_version: &str) -> Result<(), UpdateError> {
+    let reported = output.split_whitespace().last().ok_or_else(|| {
+        UpdateError::PostInstallVerification("--version returned empty output".to_string())
+    })?;
+    let expected = crate::parse_version(expected_version).map_err(|error| {
+        UpdateError::PostInstallVerification(format!("expected version is invalid: {error}"))
+    })?;
+    let reported = crate::parse_version(reported).map_err(|_| {
+        UpdateError::PostInstallVerification(format!(
+            "--version did not end with a semantic version: {output}"
+        ))
+    })?;
+    if reported != expected {
+        return Err(UpdateError::PostInstallVerification(format!(
+            "expected {expected}, but installed binary reported {reported}"
+        )));
+    }
+    Ok(())
 }
 
 fn create_backup(
@@ -261,14 +293,31 @@ fn create_backup(
 ) -> Result<PathBuf, UpdateError> {
     fs::create_dir_all(backups_dir)?;
     let backup_path = backup_path_for(binary_path, backups_dir, current_version);
-    fs::copy(binary_path, &backup_path)?;
+    atomic_copy(binary_path, &backup_path)?;
     set_executable_permissions(&backup_path)?;
     Ok(backup_path)
 }
 
 fn replace_binary(staged_binary_path: &Path, current_binary_path: &Path) -> std::io::Result<()> {
-    fs::copy(staged_binary_path, current_binary_path)?;
+    atomic_write(current_binary_path, &fs::read(staged_binary_path)?)?;
     set_executable_permissions(current_binary_path).map_err(std::io::Error::other)
+}
+
+fn atomic_copy(source: &Path, destination: &Path) -> Result<(), UpdateError> {
+    atomic_write(destination, &fs::read(source)?)?;
+    Ok(())
+}
+
+fn validate_asset_name(asset_name: &str) -> Result<(), UpdateError> {
+    let path = Path::new(asset_name);
+    let is_single_file = !asset_name.is_empty()
+        && path.file_name().is_some_and(|name| name == asset_name)
+        && path.components().count() == 1;
+    if is_single_file {
+        Ok(())
+    } else {
+        Err(UpdateError::UnsafeAssetName(asset_name.to_string()))
+    }
 }
 
 fn set_executable_permissions(path: &Path) -> Result<(), UpdateError> {
@@ -352,6 +401,42 @@ mod tests {
         let path = backup_path_for("C:/bin/axiom.exe", "C:/config/updates/backups", "0.1.0");
 
         assert!(path.ends_with("axiom.exe-0.1.0"));
+    }
+
+    #[test]
+    fn staging_rejects_path_like_asset_names_before_writing() {
+        let dir = temp_dir();
+        let dirs = UpdateDirs::new(&dir);
+        let digest = sha256_hex(b"new");
+        let sums = format!("{digest}  ../axiom\n");
+
+        let error = stage_verified_update(StageUpdateRequest {
+            dirs: &dirs,
+            asset_name: "../axiom",
+            asset_bytes: b"new",
+            checksums: &sums,
+            current_version: "0.1.0",
+            available_version: "0.1.1",
+            asset_url: None,
+            checksum_url: None,
+        })
+        .expect_err("path traversal asset name must fail");
+
+        assert!(matches!(error, UpdateError::UnsafeAssetName(_)));
+        assert!(!dir.exists());
+    }
+
+    #[test]
+    fn post_install_version_output_must_match_expected_release() {
+        assert!(verify_binary_version_output("axiom 1.0.0-rc.1", "1.0.0-rc.1").is_ok());
+
+        let mismatch = verify_binary_version_output("axiom 0.5.1-beta", "1.0.0-rc.1")
+            .expect_err("mismatched binary must fail verification");
+        assert!(mismatch.to_string().contains("expected 1.0.0-rc.1"));
+
+        let malformed = verify_binary_version_output("axiom unknown", "1.0.0-rc.1")
+            .expect_err("malformed output must fail verification");
+        assert!(malformed.to_string().contains("semantic version"));
     }
 
     #[test]

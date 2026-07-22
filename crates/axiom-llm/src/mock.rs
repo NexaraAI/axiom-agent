@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 
 use crate::{
-    ChatMessage, ChatRequest, ChatResponse, ChatStream, LlmError, LlmProvider, ModelInfo, Result,
+    ChatMessage, ChatRequest, ChatResponse, ChatStream, LlmProvider, ModelInfo, Result, TokenUsage,
 };
 
 #[derive(Debug, Clone)]
@@ -19,32 +19,45 @@ impl MockProvider {
 impl LlmProvider for MockProvider {
     async fn chat(&self, request: ChatRequest) -> Result<ChatResponse> {
         let content = mock_response(&request.messages);
+        let prompt_tokens = request.messages.iter().fold(0_u32, |total, message| {
+            total.saturating_add(approximate_tokens(&message.content))
+        });
+        let completion_tokens = approximate_tokens(&content);
         Ok(ChatResponse {
             content,
-            usage: None,
+            usage: Some(TokenUsage {
+                prompt_tokens,
+                completion_tokens,
+                total_tokens: prompt_tokens.saturating_add(completion_tokens),
+            }),
             model: request.model,
             provider: self.name.clone(),
             raw: None,
+            tool_calls: Vec::new(),
         })
     }
 
-    async fn stream_chat(&self, _request: ChatRequest) -> Result<ChatStream> {
-        Err(LlmError::NotImplemented(
-            "Mock provider streaming is not implemented.",
-        ))
+    async fn stream_chat(&self, mut request: ChatRequest) -> Result<ChatStream> {
+        request.stream = false;
+        Ok(ChatStream::from_response(self.chat(request).await?))
     }
 
     async fn models(&self) -> Result<Vec<ModelInfo>> {
         Ok(vec![ModelInfo {
             id: "mock-model".to_string(),
             provider: self.name.clone(),
-            description: Some("Mock provider for tests and demos only.".to_string()),
+            description: Some("Offline deterministic model; no API key or network.".to_string()),
         }])
     }
 
     fn provider_name(&self) -> &str {
         &self.name
     }
+}
+
+fn approximate_tokens(text: &str) -> u32 {
+    let chars = text.chars().count();
+    u32::try_from(chars.div_ceil(4).max(1)).unwrap_or(u32::MAX)
 }
 
 fn mock_response(messages: &[ChatMessage]) -> String {
@@ -56,8 +69,7 @@ fn mock_response(messages: &[ChatMessage]) -> String {
     let lower = transcript.to_ascii_lowercase();
 
     if lower.contains("axiom tool result") {
-        return "Mock provider is for tests and demos only. Tool result received and summarized."
-            .to_string();
+        return "Result verified and summarized.".to_string();
     }
 
     if lower.contains("propose file changes")
@@ -72,7 +84,7 @@ fn mock_response(messages: &[ChatMessage]) -> String {
     {
       "path": "AXIOM_DEMO.md",
       "action": "create_or_update",
-      "content": "# Axiom Demo\n\nCreated by the mock provider for tests and demos only.\n"
+      "content": "# Axiom Demo\n\nCreated by Axiom offline mode.\n"
     }
   ]
 }
@@ -103,7 +115,7 @@ fn mock_response(messages: &[ChatMessage]) -> String {
             .to_string();
     }
 
-    format!("Mock response: {last_user}")
+    format!("Axiom (offline): {last_user}")
 }
 
 fn asks_to_read_readme(input: &str) -> bool {
@@ -130,11 +142,14 @@ mod tests {
                 stream: false,
                 metadata: None,
                 provider_options: None,
+                tools: Vec::new(),
+                tool_choice: None,
             })
             .await
             .expect("mock response");
 
-        assert_eq!(response.content, "Mock response: hello");
+        assert_eq!(response.content, "Axiom (offline): hello");
+        assert!(response.usage.expect("synthetic usage").total_tokens > 0);
     }
 
     #[test]

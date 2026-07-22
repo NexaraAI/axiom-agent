@@ -306,6 +306,7 @@ mod tests {
 
     fn test_manifest(entrypoint: &str) -> SkillManifest {
         SkillManifest {
+            schema_version: "1.0".to_string(),
             id: "test.skill".to_string(),
             name: "Test Skill".to_string(),
             version: Version::new(0, 1, 0),
@@ -320,6 +321,14 @@ mod tests {
             license: "MIT".to_string(),
             min_axiom_version: Version::new(0, 1, 0),
             max_axiom_version: None,
+            depends_on: Vec::new(),
+            provides: Vec::new(),
+            hooks: Default::default(),
+            side_effects: Vec::new(),
+            idempotent: false,
+            cache_key: None,
+            examples: Vec::new(),
+            keywords: Vec::new(),
             llm_card: None,
             updates: Default::default(),
             input_schema: toml::Value::Table(toml::map::Map::new()),

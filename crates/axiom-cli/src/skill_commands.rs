@@ -7,13 +7,14 @@ use anyhow::{anyhow, bail, Result};
 use axiom_core::AxiomConfig;
 use axiom_engine::{
     apply_skill_update, assess_skill_lifecycle, check_skill_update_statuses, current_axiom_version,
-    disable_skill, enable_skill, execute_installed_tool, install_bundle_from_registry_client,
-    install_skill_from_registry_client, load_registry_with_cache, mark_update_check_results,
-    policy_plan, record_skill_execution_failure, record_skill_execution_success,
-    registry_cache_dir, remove_skill, reset_skill_stats, ApprovalRequest, InstalledSkills,
-    Platform, RegistryClient, RegistrySource, SkillApproval, SkillAutoUpdatePolicy,
-    SkillExecutionContext, SkillExecutionResult, SkillManifest, SkillUpdateStatus, ToolRequest,
-    TrustLevel,
+    disable_skill, enable_skill, execute_installed_tool_with_policy,
+    install_bundle_from_registry_client, install_skill_from_registry_client,
+    load_registry_with_cache, mark_update_check_results, policy_plan,
+    record_skill_execution_failure, record_skill_execution_success, registry_cache_dir,
+    remove_skill, reset_skill_stats, ApprovalRequest, InstalledSkills, Platform,
+    RecordingSideEffectAuditSink, RegistryClient, RegistrySource, SkillApproval,
+    SkillAutoUpdatePolicy, SkillExecutionContext, SkillExecutionResult, SkillManifest,
+    SkillUpdateStatus, ToolRequest, TrustLevel,
 };
 use axiom_proof::{
     new_approval, new_tool_call, FileReadProof, FileWriteProof, ProofMode, ProofRecorder,
@@ -228,7 +229,12 @@ async fn run_skill(skill_id: &str, args: Option<&str>) -> Result<()> {
         max_file_read_bytes: config.coder.max_file_read_bytes,
         web_timeout_secs: 20,
         max_web_response_bytes: 1_000_000,
+        web_fetch_https_only: config.network.web_fetch_https_only,
+        web_fetch_allowed_hosts: config.network.web_fetch_allowed_hosts.clone(),
+        web_fetch_denied_hosts: config.network.web_fetch_denied_hosts.clone(),
+        web_fetch_use_system_proxy: config.network.web_fetch_use_system_proxy,
         auto_approve_medium_risk: config.coder.approval_mode == "trusted",
+        credential_env_names: crate::credentials::credential_environment_names(&config)?,
     };
     let mut tool_call = new_tool_call(&request.skill_id, request.arguments.to_string());
     if let Some(skill) = installed.iter().find(|skill| skill.manifest.id == skill_id) {
@@ -236,10 +242,21 @@ async fn run_skill(skill_id: &str, args: Option<&str>) -> Result<()> {
     }
 
     let started_at = Instant::now();
+    let policy = crate::side_effects::configured_policy(&config)?;
+    let mut audit = RecordingSideEffectAuditSink::default();
     let result = {
         let mut approval = ProofSkillApprover { proof: &mut proof };
-        execute_installed_tool(&request, &installed, &context, &mut approval).await
+        execute_installed_tool_with_policy(
+            &request,
+            &installed,
+            &context,
+            &mut approval,
+            &policy,
+            &mut audit,
+        )
+        .await
     };
+    crate::side_effects::record_audit(&mut proof, audit);
 
     match result {
         Ok(result) => {
@@ -842,7 +859,7 @@ async fn load_registry_selection(
             let cached = load_registry_with_cache(
                 &config.skills.registry_url,
                 registry_cache_dir(config_dir),
-                onboarding::bundled_registry_path(),
+                onboarding::materialize_embedded_registry(&config_path)?,
                 config.skills.registry_cache_ttl_hours,
                 config.skills.fallback_to_bundled_registry,
             )

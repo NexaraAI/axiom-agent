@@ -53,7 +53,27 @@ Normal chat startup makes no network calls. It reads cached update info and may 
 
 ## Safety
 
-Axiom downloads a release asset and `SHA256SUMS`, finds the matching checksum line, and verifies the binary before staging or installing.
+Axiom accepts only an exact `https://github.com/<owner>/<repo>` release
+repository. HTTP, credentials, ports, query strings, fragments, extra path
+segments, and invalid GitHub owner/repository names are rejected. Local release
+metadata is accepted only on the `dev` channel.
+
+Release metadata requests ignore system proxies, do not follow redirects, and
+stream at most 4 MiB. Asset downloads ignore system proxies and permit only the
+exact reviewed hosts `github.com`, `objects.githubusercontent.com`, and
+`release-assets.githubusercontent.com`. Every redirect is revalidated, DNS
+resolved, checked for private/reserved addresses, and pinned before the next
+request. The entire download has a 60-second deadline and at most five
+redirects. Binaries are capped at 256 MiB; `SHA256SUMS` is capped separately at
+1 MiB.
+
+The complete checksum manifest is parsed before trust is granted. Malformed
+hashes or lines, duplicate entries, unsafe names, and inexact asset matches fail
+closed. For network updates, both initial asset URLs must exactly match the
+configured owner/repository, selected release tag, and expected asset name;
+redirect targets are then constrained by the transport rules above. Local dev
+fixtures support metadata checks only and cannot install a binary. The selected
+binary is verified before staging or installing.
 
 A missing checksum blocks installation. A mismatched checksum fails the install, and Axiom does not attempt binary replacement.
 
@@ -88,15 +108,19 @@ If `AXIOM_HOME` is set, this tree goes under `$AXIOM_HOME/updates`. Integration 
 
 Install flow:
 
-1. Download binary to `downloads/`.
-2. Download `SHA256SUMS`.
+1. Download the binary and `SHA256SUMS` with the transport limits above.
+2. Reject a missing, oversized, or mismatched checksum record.
 3. Verify checksum.
-4. Copy the verified binary to `staged/`.
-5. Back up the current binary under `backups/`.
-6. Replace the current binary if possible.
-7. Run a post-install version check where possible.
+4. Write the verified binary atomically to `staged/`.
+5. Back up the current binary atomically under `backups/`.
+6. Replace the current binary atomically if possible.
+7. Require `--version` to report the exact selected release version.
 
-`axiom update rollback` restores the previous binary backup if one exists.
+Any execution failure or version mismatch fails verification. Axiom attempts to
+restore the previous binary backup and reports both errors if rollback also
+fails. Configured provider credential names are removed from the candidate
+binary's verification environment. `axiom update rollback` can also restore
+that backup explicitly.
 
 On Windows, a running executable may be locked. If replacement fails, Axiom keeps the verified staged binary and reports a pending update instead of leaving a partial install.
 

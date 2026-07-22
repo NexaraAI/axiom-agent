@@ -14,6 +14,10 @@ pub struct ChatRequest {
     pub metadata: Option<BTreeMap<String, Value>>,
     #[serde(default)]
     pub provider_options: Option<BTreeMap<String, Value>>,
+    #[serde(default)]
+    pub tools: Vec<ChatToolDefinition>,
+    #[serde(default)]
+    pub tool_choice: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -29,6 +33,22 @@ pub struct ChatResponse {
     pub model: String,
     pub provider: String,
     pub raw: Option<Value>,
+    #[serde(default)]
+    pub tool_calls: Vec<ChatToolCall>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ChatToolDefinition {
+    pub name: String,
+    pub description: String,
+    pub parameters: Value,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ChatToolCall {
+    pub id: Option<String>,
+    pub name: String,
+    pub arguments: Value,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

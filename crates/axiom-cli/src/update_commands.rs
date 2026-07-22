@@ -7,11 +7,12 @@ use anyhow::{anyhow, bail, Result};
 use axiom_core::AxiomConfig;
 use axiom_proof::{ProofMode, ProofRecorder};
 use axiom_upd::{
-    build_update_check, current_platform_asset, detect_installation_mode, download_url_bytes,
-    find_asset, find_checksum_asset, install_staged_update, parse_releases_json, rollback_update,
-    run_binary_version_check, stage_verified_update, GitHubReleaseClient, InstallOutcome,
-    InstallationMode, ReleaseChannel, ReleaseMetadata, StageUpdateRequest, UpdateDirs, UpdateKind,
-    UpdatePolicy, UpdateState, UpdateStatus,
+    build_update_check, current_platform_asset, detect_installation_mode,
+    download_release_asset_bytes, download_release_checksum_bytes, find_asset, find_checksum_asset,
+    github_releases_api_url, install_staged_update, parse_releases_json, rollback_update,
+    run_binary_version_check, stage_verified_update, validate_release_asset_url,
+    GitHubReleaseClient, InstallOutcome, InstallationMode, ReleaseChannel, ReleaseMetadata,
+    StageUpdateRequest, UpdateDirs, UpdateKind, UpdatePolicy, UpdateState, UpdateStatus,
 };
 
 use crate::{chat, UpdateCommands};
@@ -148,6 +149,12 @@ async fn install() -> Result<()> {
         );
     }
 
+    let release_repo = context.release_repo.as_deref().ok_or_else(|| {
+        anyhow!(
+            "local dev release metadata is check-only; update installation requires an exact https://github.com/<owner>/<repo> release repository"
+        )
+    })?;
+
     if !context.check.install_allowed_without_confirmation
         && !chat::confirm("Install this Axiom update?", false)?
     {
@@ -155,8 +162,19 @@ async fn install() -> Result<()> {
     }
 
     println!("Downloading {}", context.check.asset_name);
-    let asset_bytes = download_url_bytes(&context.asset_url).await?;
-    let checksum_bytes = download_url_bytes(&context.checksum_url).await?;
+    let asset_bytes = download_release_asset_bytes(
+        release_repo,
+        &context.check.release.tag_name,
+        &context.check.asset_name,
+        &context.asset_url,
+    )
+    .await?;
+    let checksum_bytes = download_release_checksum_bytes(
+        release_repo,
+        &context.check.release.tag_name,
+        &context.checksum_url,
+    )
+    .await?;
     let checksums = String::from_utf8(checksum_bytes)
         .map_err(|error| anyhow!("checksum file is not valid UTF-8: {error}"))?;
 
@@ -187,21 +205,32 @@ async fn install() -> Result<()> {
 
     match &outcome {
         InstallOutcome::Installed { backup_path } => {
-            match run_binary_version_check(&binary_path) {
+            let credential_env_names = crate::credentials::credential_environment_names(&config)?;
+            match run_binary_version_check(&binary_path, &latest_version, &credential_env_names) {
                 Ok(output) => println!("Post-install version check: {output}"),
                 Err(error) => {
-                    let _ = rollback_update(&dirs);
-                    config.update.last_update_error = Some(error.to_string());
+                    let rollback = rollback_update(&dirs);
+                    let failure = match rollback {
+                        Ok(outcome) => format!(
+                            "{error}; rollback restored {} to {}",
+                            outcome.restored_from.display(),
+                            outcome.restored_to.display()
+                        ),
+                        Err(rollback_error) => {
+                            format!("{error}; rollback also failed: {rollback_error}")
+                        }
+                    };
+                    config.update.last_update_error = Some(failure.clone());
                     config.save_to_path(&config_path)?;
                     record_update_proof(
                         &config_path,
                         &config,
                         "axiom update install",
-                        "update failed verification and rollback was attempted".to_string(),
-                        Some(error.to_string()),
+                        "update failed exact version verification".to_string(),
+                        Some(failure.clone()),
                         false,
                     );
-                    return Err(error.into());
+                    return Err(anyhow!(failure));
                 }
             }
             println!("Axiom updated to {}.", context.check.latest_version);
@@ -313,40 +342,102 @@ struct CheckContext {
     check: axiom_upd::CoreUpdateCheck,
     asset_url: String,
     checksum_url: String,
+    release_repo: Option<String>,
     policy: UpdatePolicy,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ReleaseSource {
+    GitHub,
+    Local(PathBuf),
+}
+
+#[derive(Debug, Clone)]
+struct LoadedReleases {
+    releases: Vec<ReleaseMetadata>,
+    release_repo: Option<String>,
 }
 
 async fn check_context(config: &AxiomConfig) -> Result<CheckContext> {
     let channel = ReleaseChannel::parse(&config.update.channel)?;
     let policy = UpdatePolicy::parse(&config.update.policy)?;
-    let releases = load_releases(&config.update.release_repo).await?;
+    let loaded = load_releases(&config.update.release_repo, channel).await?;
     let platform = current_platform_asset()?;
-    let check = build_update_check(current_version(), &releases, channel, policy, &platform)?;
+    let check = build_update_check(
+        current_version(),
+        &loaded.releases,
+        channel,
+        policy,
+        &platform,
+    )?;
     let asset = find_asset(&check.release, &check.asset_name)?;
     let checksum = find_checksum_asset(&check.release)?;
+    if let Some(repo) = loaded.release_repo.as_deref() {
+        validate_release_asset_url(
+            repo,
+            &check.release.tag_name,
+            &check.asset_name,
+            &asset.browser_download_url,
+        )?;
+        validate_release_asset_url(
+            repo,
+            &check.release.tag_name,
+            &check.checksum_asset_name,
+            &checksum.browser_download_url,
+        )?;
+    }
     Ok(CheckContext {
         asset_url: asset.browser_download_url.clone(),
         checksum_url: checksum.browser_download_url.clone(),
+        release_repo: loaded.release_repo,
         check,
         policy,
     })
 }
 
-async fn load_releases(release_repo: &str) -> Result<Vec<ReleaseMetadata>> {
-    let path = PathBuf::from(release_repo);
-    if path.exists() {
-        let manifest = if path.is_dir() {
-            path.join("releases.json")
-        } else {
-            path
-        };
-        let content = fs::read_to_string(&manifest)?;
-        Ok(parse_releases_json(&content)?)
-    } else {
-        Ok(GitHubReleaseClient::new(release_repo)
-            .fetch_releases()
-            .await?)
+async fn load_releases(release_repo: &str, channel: ReleaseChannel) -> Result<LoadedReleases> {
+    match resolve_release_source(release_repo, channel)? {
+        ReleaseSource::GitHub => Ok(LoadedReleases {
+            releases: GitHubReleaseClient::new(release_repo)
+                .fetch_releases()
+                .await?,
+            release_repo: Some(release_repo.to_string()),
+        }),
+        ReleaseSource::Local(manifest) => {
+            let content = fs::read_to_string(&manifest)?;
+            Ok(LoadedReleases {
+                releases: parse_releases_json(&content)?,
+                release_repo: None,
+            })
+        }
     }
+}
+
+fn resolve_release_source(release_repo: &str, channel: ReleaseChannel) -> Result<ReleaseSource> {
+    match github_releases_api_url(release_repo) {
+        Ok(_) => return Ok(ReleaseSource::GitHub),
+        Err(error) if channel != ReleaseChannel::Dev => return Err(error.into()),
+        Err(_) => {}
+    }
+
+    let path = PathBuf::from(release_repo);
+    if !path.is_absolute() {
+        bail!(
+            "dev release metadata must be an explicit absolute file or directory path, or an exact https://github.com/<owner>/<repo> URL"
+        );
+    }
+    let manifest = if path.is_dir() {
+        path.join("releases.json")
+    } else {
+        path
+    };
+    if !manifest.is_file() {
+        bail!(
+            "dev release metadata file does not exist or is not a regular file: {}",
+            manifest.display()
+        );
+    }
+    Ok(ReleaseSource::Local(fs::canonicalize(manifest)?))
 }
 
 fn print_check_result(context: &CheckContext) {
@@ -428,4 +519,58 @@ fn load_config() -> Result<(PathBuf, AxiomConfig)> {
     let config_path = AxiomConfig::default_config_path()?;
     let config = AxiomConfig::load_or_create(&config_path)?;
     Ok((config_path, config))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn github_release_source_is_validated_before_any_path_interpretation() {
+        assert_eq!(
+            resolve_release_source(
+                "https://github.com/NexaraAI/axiom-agent",
+                ReleaseChannel::Stable
+            )
+            .expect("exact GitHub URL"),
+            ReleaseSource::GitHub
+        );
+        assert!(resolve_release_source(
+            "https:/github.com/NexaraAI/axiom-agent",
+            ReleaseChannel::Stable
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn local_release_metadata_is_absolute_dev_only() {
+        let root = std::env::temp_dir().join(format!(
+            "axiom-update-source-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system clock")
+                .as_nanos()
+        ));
+        fs::create_dir_all(&root).expect("temp directory");
+        let manifest = root.join("releases.json");
+        fs::write(&manifest, "[]").expect("fixture");
+
+        assert!(resolve_release_source(
+            manifest.to_str().expect("UTF-8 path"),
+            ReleaseChannel::Stable
+        )
+        .is_err());
+        assert!(resolve_release_source("releases.json", ReleaseChannel::Dev).is_err());
+        assert!(matches!(
+            resolve_release_source(
+                manifest.to_str().expect("UTF-8 path"),
+                ReleaseChannel::Dev
+            )
+            .expect("absolute dev fixture"),
+            ReleaseSource::Local(path) if path == fs::canonicalize(&manifest).expect("canonical")
+        ));
+
+        fs::remove_dir_all(root).expect("clean fixture");
+    }
 }

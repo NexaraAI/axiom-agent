@@ -70,10 +70,16 @@ Simple code generation, regex help, language examples, and conceptual questions 
 Coder mode scans the active workspace and detects:
 
 - Rust: `Cargo.toml`
-- Node: `package.json`
-- Python: `pyproject.toml`, `requirements.txt`, `setup.py`
-- Java: `pom.xml`, `build.gradle`
+- Node: `package.json`, plus pnpm and Yarn lockfiles
+- Python: `pyproject.toml`, `requirements.txt`, `setup.py`, `pytest.ini`
+- Go: `go.mod`
+- Java/JVM: `pom.xml`, `build.gradle`, `build.gradle.kts`
+- Deno and Bun: `deno.json`, `deno.jsonc`, `bun.lockb`
 - Generic: fallback
+
+Detection searches bounded workspace depth and recognizes nested packages, so a
+monorepo can receive scoped test commands without treating every package as the
+repository root.
 
 It ignores `.git`, `node_modules`, `target`, `dist`, `build`, `.venv`, `venv`, `__pycache__`, `.next`, and `.cache`.
 
@@ -90,14 +96,32 @@ Provider output for edits must use:
     {
       "path": "relative/path.txt",
       "action": "create_or_update",
-      "content": "full new file content"
+      "base_sha256": "64-character SHA-256 of the file that was inspected",
+      "hunks": [
+        {
+          "old_start": 3,
+          "old_lines": ["old line"],
+          "new_lines": ["replacement line"]
+        }
+      ]
     }
   ]
 }
 ```
 ````
 
-v0.1 supports full-file `create_or_update` only. Complex partial patches are deferred.
+New files may use `content` instead of `hunks` and omit `base_sha256`. Existing
+files require the observed base hash and exactly one edit form (`content` or
+`hunks`). Hunks are one-based, ordered, non-overlapping, and bounded. Axiom
+checks the hash and hunk context during preview and checks the file again before
+writing; concurrent edits become visible conflicts instead of being overwritten.
+
+The patch is reviewed as constrained file units. Large scopes require an extra
+confirmation, every accepted write is preceded by a recovery checkpoint, and a
+rejected unit does not silently approve the rest. After tests fail, the model
+receives bounded failure context and may propose a limited number of corrective
+patches; each correction goes through the same preview, policy, approval,
+checkpoint, and conflict checks.
 
 ## Safety Model
 
@@ -105,10 +129,10 @@ Axiom Coder must:
 
 - stay inside the active workspace;
 - block `.env`, `.env.*`, `*.pem`, `*.key`, `id_rsa`, `id_dsa`, `credentials.json`, and `token.json`;
-- show a plan before changes;
+- show a plan that can be applied, revised, or cancelled before changes;
 - show a diff before writes;
-- ask before file writes;
-- ask before test commands.
+- apply the configured centralized policy before file writes and test commands;
+- preserve a checkpoint before an approved write.
 
 Axiom Coder must not:
 
@@ -119,7 +143,8 @@ Axiom Coder must not:
 - deploy;
 - hide changes.
 
-Even `trusted` approval mode asks before writes in v0.1.
+Approval modes tune prompts but never bypass workspace, secret-path, patch,
+policy, conflict, checkpoint, or runtime limits.
 
 Coder plan-only, apply, and test flows create Proof Mode reports when proof is enabled.
 
@@ -130,8 +155,13 @@ Safe test detection supports:
 - Rust: `cargo test`
 - Node: `npm test`, `pnpm test`, `yarn test`
 - Python: `python -m pytest`, `pytest`
+- Go: `go test ./...`
+- Maven/Gradle: `mvn test`, `gradle test`
+- Deno/Bun: `deno test`, `bun test`
 
-Commands never run without your approval.
+Commands use a fixed safe-command allowlist, run in the detected package
+directory, inherit no configured provider credential variables, and follow the
+central process policy. A model-supplied arbitrary shell command is not run.
 
 ## Proof Reports
 

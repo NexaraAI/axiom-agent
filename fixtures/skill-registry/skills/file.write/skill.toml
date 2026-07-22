@@ -1,3 +1,4 @@
+schema_version = "1.0"
 id = "file.write"
 name = "Write Workspace File"
 version = "0.1.0"

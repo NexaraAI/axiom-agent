@@ -14,6 +14,15 @@ pub enum AxiomError {
     TomlSerialize(#[from] toml::ser::Error),
     #[error("could not determine the platform config directory")]
     MissingConfigDirectory,
+    #[error(
+        "config schema version {found} is newer than this Axiom build supports ({supported}). Update Axiom before using this config."
+    )]
+    UnsupportedConfigVersion { found: u32, supported: u32 },
+    #[error("invalid config value for `{field}`: {message}")]
+    InvalidConfig {
+        field: &'static str,
+        message: String,
+    },
     #[error("path is outside the workspace: {path}")]
     UnsafeWorkspacePath { path: PathBuf },
     #[error("path cannot be normalized safely: {path}")]

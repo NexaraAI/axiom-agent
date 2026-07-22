@@ -4,6 +4,7 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
+use axiom_core::atomic_write;
 use semver::Version;
 use serde::{Deserialize, Serialize};
 
@@ -470,9 +471,9 @@ fn write_cache(
     index: &RegistryIndex,
     metadata: &RegistryCacheMetadata,
 ) -> Result<(), crate::registry::RegistryError> {
-    fs::write(
+    atomic_write(
         registry_cache_registry_path(cache_dir),
-        serde_json::to_string_pretty(index)?,
+        serde_json::to_string_pretty(index)?.as_bytes(),
     )?;
     write_cache_metadata(cache_dir, metadata)?;
     Ok(())
@@ -482,9 +483,9 @@ fn write_cache_metadata(
     cache_dir: &Path,
     metadata: &RegistryCacheMetadata,
 ) -> Result<(), crate::registry::RegistryError> {
-    fs::write(
+    atomic_write(
         registry_cache_metadata_path(cache_dir),
-        serde_json::to_string_pretty(metadata)?,
+        serde_json::to_string_pretty(metadata)?.as_bytes(),
     )?;
     Ok(())
 }

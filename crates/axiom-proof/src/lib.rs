@@ -9,11 +9,15 @@ pub use recorder::{
     new_approval, new_tool_call, LensSelectionRecord, ProofExportPaths, ProofRecorder,
     ProofSettings,
 };
-pub use redaction::{redact_text, summarize_text};
+pub use redaction::{redact_text, register_secret_for_redaction, summarize_text};
 pub use storage::{
-    export_trace_to_format, find_proof, latest_proof, list_proofs, ProofFormat, ProofIndexEntry,
+    export_trace_to_format, find_proof, latest_proof, list_proofs, load_proof_trace, ProofFormat,
+    ProofIndexEntry,
 };
 pub use trace::{
-    ApprovalProof, CommandProof, ErrorProof, FileReadProof, FileWriteProof, LensProof, PatchProof,
-    ProofMode, ProofStatus, ProofTrace, SkillCardProof, SkillsProof, TestProof, ToolCallProof,
+    validate_trace_version, AgentRuntimeProof, ApprovalProof, CheckpointProof, CommandProof,
+    ErrorProof, FileReadProof, FileWriteProof, LensProof, PatchProof, PolicyDecisionProof,
+    ProofMode, ProofStatus, ProofTrace, ProofTraceLoadError, ProofTraceVersionError,
+    SkillCardProof, SkillsProof, TestProof, ToolCallProof, CURRENT_TRACE_VERSION,
+    SUPPORTED_TRACE_VERSIONS,
 };

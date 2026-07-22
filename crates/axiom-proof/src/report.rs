@@ -1,6 +1,7 @@
-use crate::{ProofStatus, ProofTrace};
+use crate::{export, ProofStatus, ProofTrace};
 
-pub fn markdown_summary(trace: &ProofTrace) -> String {
+pub fn markdown_summary(trace: &ProofTrace) -> serde_json::Result<String> {
+    let trace = export::redacted_trace(trace)?;
     let mut report = String::new();
     report.push_str("# Axiom Proof Report\n\n");
     report.push_str("## Task\n\n");
@@ -53,6 +54,44 @@ pub fn markdown_summary(trace: &ProofTrace) -> String {
         report.push_str("## Plan\n\n");
         report.push_str(summary);
         report.push_str("\n\n");
+    }
+
+    report.push_str("## Agent Runtime\n\n");
+    if let Some(runtime) = &trace.agent_runtime {
+        report.push_str(&format!("- Model iterations: `{}`\n", runtime.iterations));
+        report.push_str(&format!(
+            "- Tool iterations: `{}`\n",
+            runtime.tool_iterations
+        ));
+        report.push_str(&format!(
+            "- Provider tokens: `{}` input, `{}` output, `{}` total\n",
+            runtime.prompt_tokens, runtime.completion_tokens, runtime.total_tokens
+        ));
+        report.push_str(&format!(
+            "- Context estimate: `{}` tokens\n",
+            runtime.context_tokens_estimate
+        ));
+        report.push_str(&format!(
+            "- Compacted messages: `{}`\n",
+            runtime.compacted_messages
+        ));
+        report.push_str(&format!(
+            "- Todo state: `{}` updates, `{}` completed, `{}` remaining, `{}` blocked (`{}` total)\n",
+            runtime.todo_updates,
+            runtime.todo_completed,
+            runtime.todo_remaining,
+            runtime.todo_blocked,
+            runtime.todo_total
+        ));
+        match runtime.estimated_cost_microusd {
+            Some(cost) => report.push_str(&format!(
+                "- Estimated cost: `${:.6}`\n\n",
+                cost as f64 / 1_000_000.0
+            )),
+            None => report.push_str("- Estimated cost: `unknown (pricing not configured)`\n\n"),
+        }
+    } else {
+        report.push_str("No agent runtime metrics recorded.\n\n");
     }
 
     report.push_str("## Actions Taken\n\n");
@@ -110,6 +149,24 @@ pub fn markdown_summary(trace: &ProofTrace) -> String {
         report.push('\n');
     }
 
+    report.push_str("## Side-Effect Policy Decisions\n\n");
+    if trace.policy_decisions.is_empty() {
+        report.push_str("No side-effect policy decisions recorded.\n\n");
+    } else {
+        for decision in &trace.policy_decisions {
+            report.push_str(&format!(
+                "- `{}` operation={} action={} outcome={} target={} reason={}\n",
+                decision.skill_id,
+                decision.operation,
+                decision.action,
+                decision.outcome,
+                decision.target.as_deref().unwrap_or("none"),
+                decision.reason
+            ));
+        }
+        report.push('\n');
+    }
+
     report.push_str("## Patch Summary\n\n");
     if trace.patches.is_empty() {
         report.push_str("No patches recorded.\n\n");
@@ -134,6 +191,22 @@ pub fn markdown_summary(trace: &ProofTrace) -> String {
             report.push_str(&format!(
                 "- `{}` ran={} passed={:?} exit={:?}\n",
                 test.detected_command, test.ran, test.passed, test.exit_code
+            ));
+        }
+        report.push('\n');
+    }
+
+    report.push_str("## Recovery Checkpoints\n\n");
+    if trace.checkpoints.is_empty() {
+        report.push_str("No checkpoints recorded.\n\n");
+    } else {
+        for checkpoint in &trace.checkpoints {
+            report.push_str(&format!(
+                "- `{}` restored={} files={} reason={}\n",
+                checkpoint.checkpoint_id,
+                checkpoint.restored,
+                checkpoint.files.join(", "),
+                checkpoint.reason
             ));
         }
         report.push('\n');
@@ -175,5 +248,39 @@ pub fn markdown_summary(trace: &ProofTrace) -> String {
         report.push_str("\nThis task did not complete successfully.\n");
     }
 
-    report
+    Ok(report)
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::{AgentRuntimeProof, ProofMode};
+
+    use super::*;
+
+    #[test]
+    fn report_includes_agent_usage_and_cost() {
+        let mut trace = ProofTrace::new(ProofMode::Chat, "session", "task", "hello");
+        trace.agent_runtime = Some(AgentRuntimeProof {
+            iterations: 2,
+            tool_iterations: 1,
+            prompt_tokens: 100,
+            completion_tokens: 25,
+            total_tokens: 125,
+            estimated_cost_microusd: Some(350),
+            context_tokens_estimate: 90,
+            compacted_messages: 3,
+            todo_updates: 2,
+            todo_total: 3,
+            todo_completed: 2,
+            todo_remaining: 1,
+            todo_blocked: 0,
+        });
+
+        let report = markdown_summary(&trace).expect("render report");
+
+        assert!(report.contains("## Agent Runtime"));
+        assert!(report.contains("`100` input, `25` output, `125` total"));
+        assert!(report.contains("`$0.000350`"));
+        assert!(report.contains("Compacted messages: `3`"));
+    }
 }

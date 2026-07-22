@@ -6,7 +6,8 @@ license.workspace = true
 authors.workspace = true
 
 [dependencies]
-axiom-core = { path = "../axiom-core" }
+async-trait.workspace = true
+axiom-core = { path = "../axiom-core", version = "=1.0.0-rc.1" }
 reqwest.workspace = true
 semver.workspace = true
 serde.workspace = true
