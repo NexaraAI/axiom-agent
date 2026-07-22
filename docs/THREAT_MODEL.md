@@ -281,4 +281,4 @@ workspace, provider response, registry, or update check and crosses one of the
 boundaries above without an additional trusted decision.
 
 Model: axiom-threat-model/v1
-Source snapshot: axiom-source/v1:sha256:764d8f3b5892b57c4de752ec40905d77e92701b1c8b8beefb0e211fa4c16d3f9
+Source snapshot: axiom-source/v1:sha256:f212dc166318a576eb9e791ef005e4bcdee143ffa468c2f555640e8fda0d6eec
