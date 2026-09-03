@@ -349,6 +349,7 @@ pub(crate) async fn run_terminal_onboarding() -> Result<OnboardingResult> {
     println!("{}", ui.plain("  axiom doctor           — check everything is healthy"));
     println!("{}", ui.plain("  axiom code --help      — see coding assistant options"));
     println!();
+    print_credential_check(&config_path, &ui);
 
     Ok(result)
 }
@@ -427,6 +428,7 @@ async fn run_non_interactive_onboarding(command: OnboardingCommand) -> Result<On
         result.registry_source,
         result.installed_skills.join(", ")
     );
+    print_credential_check(&result.config_path, &Renderer::for_onboarding());
 
     Ok(result)
 }
@@ -984,6 +986,52 @@ fn prompt_required(label: &str) -> Result<String> {
         }
         println!("{label} is required.");
     }
+}
+
+fn print_credential_check(config_path: &Path, ui: &Renderer) {
+    let config = match AxiomConfig::load_from_path(config_path) {
+        Ok(config) => config,
+        Err(_) => return,
+    };
+    let names = match crate::credentials::credential_environment_names(&config) {
+        Ok(names) => names,
+        Err(_) => return,
+    };
+    if names.is_empty() {
+        return;
+    }
+    println!();
+    println!("{}", ui.plain("── Step 3/3: key check ──"));
+    for var in &names {
+        if std::env::var(var).is_ok_and(|value| !value.trim().is_empty()) {
+            println!(
+                "{}",
+                ui.plain(&format!("  {var}: found in environment — good."))
+            );
+            continue;
+        }
+        match crate::credentials::resolve_credential(var) {
+            Ok(Some(_)) => println!(
+                "{}",
+                ui.plain(&format!("  {var}: found in OS keychain — good."))
+            ),
+            _ => {
+                println!(
+                    "{}",
+                    ui.warning(&format!("  {var}: MISSING — chat will error until you set it."))
+                );
+                println!(
+                    "{}",
+                    ui.plain(&format!("  Fix: export {var}='paste-your-key-here'"))
+                );
+                println!(
+                    "{}",
+                    ui.plain("  Use your real key, then start chatting. No relogin needed.")
+                );
+            }
+        }
+    }
+    println!();
 }
 
 fn prompt_with_default(label: &str, default: &str) -> Result<String> {

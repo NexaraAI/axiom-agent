@@ -77,6 +77,25 @@ pub(crate) fn scrub_credential_names(command: &mut Command, names: &[String]) {
     }
 }
 
+/// If an error message names a credential variable (e.g. `NVIDIA_API_KEY`),
+/// return a copy-paste fix for it. Used to turn keychain failures on headless
+/// machines into actionable chat/onboarding output instead of a dead end.
+pub(crate) fn credential_hint_for_error(error_text: &str) -> Option<String> {
+    let var = error_text
+        .split(|character: char| !(character.is_ascii_uppercase() || character == '_' || character.is_ascii_digit()))
+        .filter(|token| {
+            token.len() >= 8
+                && (token.ends_with("_KEY")
+                    || token.ends_with("_TOKEN")
+                    || token.ends_with("_SECRET"))
+        })
+        .next()?;
+    Some(format(
+        "Fix: export {var}='paste-your-key-here' in this terminal, then retry. \
+         (No OS keychain here, so env vars are the way.) \
+         Get a key from your provider dashboard, or run `axiom onboarding` to switch provider."
+     ))
+}
 pub(crate) fn prompt_for_credential(environment_variable: &str) -> Result<bool> {
     axiom_llm::validate_credential_env_name(environment_variable)?;
     if std::env::var(environment_variable).is_ok_and(|value| !value.trim().is_empty()) {
@@ -96,7 +115,9 @@ pub(crate) fn prompt_for_credential(environment_variable: &str) -> Result<bool> 
         "Paste the API key/token for {environment_variable} (hidden, blank to configure later): "
     ))?;
     if secret.trim().is_empty() {
-        println!("No credential saved. Set {environment_variable} before using this provider.");
+        println!("No credential saved. Before chatting, run this in your terminal:");
+        println!("  export {environment_variable}='paste-your-key-here'");
+        println!("Then retry. (Or re-run `axiom onboarding` to pick another provider.)");
         return Ok(false);
     }
 
@@ -106,9 +127,9 @@ pub(crate) fn prompt_for_credential(environment_variable: &str) -> Result<bool> 
             Ok(true)
         }
         Err(error) => {
-            println!(
-                "Could not persist the credential ({error}). Set {environment_variable} in the environment and rerun setup."
-            );
+            println!("Could not use the OS keychain ({error}). No problem — use an env var instead:");
+            println!("  export {environment_variable}='paste-your-key-here'");
+            println!("Paste your actual key in place of the placeholder, then continue setup.");
             Ok(false)
         }
     }

@@ -1595,7 +1595,12 @@ async fn run_terminal_session(mut session: ChatSession) -> Result<()> {
                     println!("{}", ui.status_line(&runtime.status_text()));
                 }
             }
-            Err(error) => println!("{}", ui.error(error)),
+            Err(error) => {
+                println!("{}", ui.error(&error));
+                if let Some(hint) = crate::credentials::credential_hint_for_error(&error.to_string()) {
+                    println!("{}", ui.plain(&hint));
+                }
+            }
         }
     }
 
