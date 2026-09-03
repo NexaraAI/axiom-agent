@@ -26,6 +26,10 @@ function testPlatformResolver() {
     "axiom-x86_64-unknown-linux-gnu"
   );
   assert.strictEqual(
+    resolvePlatform("linux", "arm64").assetName,
+    "axiom-aarch64-unknown-linux-gnu"
+  );
+  assert.strictEqual(
     resolvePlatform("darwin", "x64").assetName,
     "axiom-x86_64-apple-darwin"
   );

@@ -72,6 +72,10 @@ jobs:
             target: x86_64-unknown-linux-gnu
             asset: axiom-x86_64-unknown-linux-gnu
             binary: axiom
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            asset: axiom-aarch64-unknown-linux-gnu
+            binary: axiom
           - os: macos-15-intel
             target: x86_64-apple-darwin
             asset: axiom-x86_64-apple-darwin

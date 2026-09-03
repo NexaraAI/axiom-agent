@@ -247,6 +247,7 @@ AXIOM_AGENT_RELEASE_REPO=https://github.com/example/axiom-agent npm install -g a
 
 - `axiom-x86_64-pc-windows-msvc.exe`
 - `axiom-x86_64-unknown-linux-gnu`
+- `axiom-aarch64-unknown-linux-gnu`
 - `axiom-x86_64-apple-darwin`
 - `axiom-aarch64-apple-darwin`
 

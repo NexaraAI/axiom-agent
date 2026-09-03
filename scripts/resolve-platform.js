@@ -50,6 +50,16 @@ function resolvePlatform(platform = process.platform, arch = process.arch) {
     };
   }
 
+  if (platform === "linux" && arch === "arm64") {
+    return {
+      platform,
+      arch,
+      target: "aarch64-unknown-linux-gnu",
+      assetName: "axiom-aarch64-unknown-linux-gnu",
+      binaryName: "axiom"
+    };
+  }
+
   throw new UnsupportedPlatformError(platform, arch);
 }
 

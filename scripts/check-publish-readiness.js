@@ -11,6 +11,7 @@ const REPO_ROOT = path.resolve(__dirname, "..");
 const REQUIRED_RELEASE_ASSETS = Object.freeze([
   "axiom-x86_64-pc-windows-msvc.exe",
   "axiom-x86_64-unknown-linux-gnu",
+  "axiom-aarch64-unknown-linux-gnu",
   "axiom-x86_64-apple-darwin",
   "axiom-aarch64-apple-darwin",
   "SHA256SUMS"

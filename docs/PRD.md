@@ -15,6 +15,7 @@ The release workflow builds and tests these binary targets:
 
 - Windows x86-64 (`x86_64-pc-windows-msvc`)
 - Linux x86-64 glibc (`x86_64-unknown-linux-gnu`)
+- Linux ARM64 glibc (`aarch64-unknown-linux-gnu`)
 - macOS x86-64 (`x86_64-apple-darwin`)
 - macOS Apple silicon (`aarch64-apple-darwin`)
 

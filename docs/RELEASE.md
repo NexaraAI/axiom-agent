@@ -62,6 +62,7 @@ The workflow builds these targets:
 
 - `x86_64-pc-windows-msvc`
 - `x86_64-unknown-linux-gnu`
+- `aarch64-unknown-linux-gnu`
 - `x86_64-apple-darwin`
 - `aarch64-apple-darwin`
 
@@ -72,8 +73,8 @@ workspace/all-feature Clippy and tests, cargo-deny, Node smoke and isolated E2E,
 release/security policy checks, and an npm package dry-run. The build matrix
 cannot start unless every validation gate passes.
 
-Each target is built on a native runner: Windows x86-64, Linux x86-64, macOS
-Intel, and macOS Apple silicon. Before upload, the runner executes the full
+Each target is built on a native runner: Windows x86-64, Linux x86-64,
+Linux ARM64, macOS Intel, and macOS Apple silicon. Before upload, the runner executes the full
 offline E2E suite against that exact release binary through
 `AXIOM_E2E_BINARY`. All target builds use `Cargo.lock` with `--locked`.
 
