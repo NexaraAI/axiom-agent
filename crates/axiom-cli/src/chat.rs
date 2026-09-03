@@ -1378,8 +1378,7 @@ impl TerminalInput {
                 .build();
             let mut editor = DefaultEditor::with_config(config)?;
             if history_path.exists() && sanitize_terminal_history_file(&history_path) {
-                // A corrupt or unsanitizable history file must never prevent
-                // Axiom from starting and must not be loaded.
+
                 let _ = editor.load_history(&history_path);
             }
             Some(editor)
@@ -2448,17 +2447,29 @@ pub(crate) fn confirm(label: &str, default: bool) -> Result<bool> {
         io::stdout().flush()?;
 
         let mut input = String::new();
-        io::stdin().read_line(&mut input)?;
+        let bytes = io::stdin().read_line(&mut input)?;
+        if bytes == 0 {
+
+            println!();
+            println!("No answer received (end of input). Treating this as 'no' to stay safe.");
+            println!("Re-run in a terminal to answer interactively, or pass --yes explicitly.");
+            return Ok(false);
+        }
 
         let trimmed = input.trim().to_ascii_lowercase();
         if trimmed.is_empty() {
+
+            if !io::stdin().is_terminal() {
+                println!("Non-interactive input: please answer y or n explicitly.");
+                return Ok(false);
+            }
             return Ok(default);
         }
 
         match trimmed.as_str() {
             "y" | "yes" => return Ok(true),
             "n" | "no" => return Ok(false),
-            _ => println!("Enter y or n."),
+            _ => println!("Please type y or n (yes/no)."),
         }
     }
 }

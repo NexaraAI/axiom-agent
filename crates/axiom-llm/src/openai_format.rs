@@ -193,8 +193,7 @@ pub fn summarize_body(body: &str) -> String {
 }
 
 pub fn summarize_bytes(body: &[u8]) -> String {
-    // Error reporting must remain bounded even when the provider sends invalid UTF-8. 4 KiB is
-    // enough to produce the 500-character public summary without decoding the whole response.
+
     const MAX_SUMMARY_INPUT_BYTES: usize = 4 * 1024;
     let prefix = &body[..body.len().min(MAX_SUMMARY_INPUT_BYTES)];
     let mut summary = summarize_body(&String::from_utf8_lossy(prefix));

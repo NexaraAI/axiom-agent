@@ -1203,7 +1203,7 @@ impl CoderSession {
 
         match result {
             Ok(()) => {
-                // Persist the authorization barrier before the side effect.
+
                 let _ = proof.export();
                 Ok(())
             }

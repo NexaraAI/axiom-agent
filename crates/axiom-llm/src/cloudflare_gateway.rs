@@ -51,8 +51,6 @@ impl CloudflareAiGatewayProvider {
         "https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/v1"
     }
 
-    /// Supply a token value directly so a credential loaded from the native
-    /// credential manager never has to be exported into the process environment.
     pub fn with_api_token(mut self, api_token: impl Into<String>) -> Self {
         self.api_token = Some(SecretValue::new(api_token));
         self

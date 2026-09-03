@@ -38,7 +38,6 @@ pub struct ToolExecutionEvent {
     pub status: ToolExecutionStatus,
 }
 
-/// Identifies the configured runtime guard that stopped a turn.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AgentCapKind {
@@ -50,12 +49,6 @@ pub enum AgentCapKind {
     ConsecutiveToolErrors,
 }
 
-/// A completed state transition in the canonical Plan/Tool/Observe/Reflect loop.
-///
-/// Transitions are emitted synchronously. In particular, `ToolCompleted` is
-/// observed before cancellation is handled and before another tool or provider
-/// call can begin. This makes the observer a durable-checkpoint barrier for
-/// tools that may have produced non-idempotent side effects.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AgentTransition {
     pub sequence: u64,
@@ -125,11 +118,6 @@ pub enum AgentTransitionKind {
     },
 }
 
-/// A resumable view of turn state at one completed transition.
-///
-/// The ordered `transition` is also retained in `TurnCompletion::transitions`.
-/// The remaining fields are supplied to observers so session persistence does
-/// not have to reconstruct state from lossy UI events.
 #[derive(Debug, Clone, PartialEq)]
 pub struct TransitionCheckpoint {
     pub transition: AgentTransition,
@@ -144,9 +132,6 @@ pub struct TransitionCheckpoint {
     pub todo_updates: u32,
 }
 
-/// Receives an ordered persistence checkpoint before the loop advances.
-/// Returning an error aborts the turn, preventing further side effects when a
-/// required checkpoint cannot be recorded.
 pub trait TransitionObserver {
     fn on_transition(&mut self, checkpoint: &TransitionCheckpoint) -> Result<()>;
 }
@@ -229,9 +214,6 @@ impl TurnProgress {
     }
 }
 
-/// Drives one user turn through repeated planning, tool execution, observation,
-/// and reflection. The caller owns the session history and proof persistence;
-/// this controller returns the exact history delta and tool events to record.
 pub struct AgentLoop<'a> {
     provider: &'a dyn LlmProvider,
     model: String,

@@ -7,8 +7,46 @@ function sha256Buffer(buffer) {
   return crypto.createHash("sha256").update(buffer).digest("hex");
 }
 
-function sha256File(filePath) {
-  return sha256Buffer(fs.readFileSync(filePath));
+function sha256File(filePath, maxBytes = 512 * 1024 * 1024) {
+
+  const fd = fs.openSync(filePath, "r");
+  try {
+    const hash = crypto.createHash("sha256");
+    const buf = Buffer.allocUnsafe(64 * 1024);
+    let seen = 0;
+    for (;;) {
+      const n = fs.readSync(fd, buf, 0, buf.length, null);
+      if (n === 0) break;
+      seen += n;
+      if (seen > maxBytes) {
+        throw new Error(`File exceeds ${maxBytes} byte verification limit: ${filePath}`);
+      }
+      hash.update(n === buf.length ? buf : buf.subarray(0, n));
+    }
+    return hash.digest("hex");
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
+function sha256FileAsync(filePath, maxBytes = 512 * 1024 * 1024) {
+
+  return new Promise((resolve, reject) => {
+    const hash = crypto.createHash("sha256");
+    let seen = 0;
+    const stream = fs.createReadStream(filePath, { highWaterMark: 64 * 1024 });
+    stream.on("data", (chunk) => {
+      seen += chunk.length;
+      if (seen > maxBytes) {
+        stream.destroy();
+        reject(new Error(`File exceeds ${maxBytes} byte verification limit: ${filePath}`));
+        return;
+      }
+      hash.update(chunk);
+    });
+    stream.on("end", () => resolve(hash.digest("hex")));
+    stream.on("error", reject);
+  });
 }
 
 function parseChecksumFile(text) {
@@ -59,5 +97,6 @@ module.exports = {
   parseChecksumFile,
   sha256Buffer,
   sha256File,
+  sha256FileAsync,
   verifyChecksum
 };

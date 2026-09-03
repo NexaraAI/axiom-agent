@@ -52,9 +52,6 @@ impl OpenAiCompatibleProvider {
         self
     }
 
-    /// Supply a credential value directly. This takes precedence over reading
-    /// `api_key_env` and keeps keyring-resolved values out of the process
-    /// environment inherited by child tools.
     pub fn with_api_key(mut self, api_key: impl Into<String>) -> Self {
         self.api_key = Some(SecretValue::new(api_key));
         self

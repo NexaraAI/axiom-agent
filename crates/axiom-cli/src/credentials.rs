@@ -34,9 +34,6 @@ impl CredentialStore for OsCredentialStore {
     }
 }
 
-/// Resolve one configured provider credential without copying a keyring value
-/// into the process environment. Environment variables remain the explicit
-/// headless override; otherwise the native credential manager is consulted.
 pub(crate) fn resolve_credential(environment_variable: &str) -> Result<Option<String>> {
     let credential = resolve_with_store(environment_variable, &OsCredentialStore)?;
     if let Some(secret) = credential.as_deref() {
@@ -45,9 +42,6 @@ pub(crate) fn resolve_credential(environment_variable: &str) -> Result<Option<St
     Ok(credential)
 }
 
-/// Return every credential environment name referenced by the configuration.
-/// The complete set is scrubbed from child processes, not only the active
-/// provider, because a model-controlled command must not learn dormant keys.
 pub(crate) fn credential_environment_names(config: &AxiomConfig) -> Result<Vec<String>> {
     let mut names = BTreeSet::new();
     for provider in config.providers.values() {

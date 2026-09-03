@@ -41,13 +41,56 @@ pub fn analyze_intent(prompt: &str) -> IntentAnalysis {
     let mut task_type = "general".to_string();
     let mut risk_level = "low".to_string();
 
-    if contains_any(&lower, &["python", ".py", "script"]) {
+    if contains_any(
+        &lower,
+        &[
+            "python", ".py", "rust", ".rs", "cargo", "javascript", "typescript",
+            ".js", ".ts", ".tsx", ".jsx", "golang", "java", "c++", "c#",
+            "ruby", "php", "swift", "kotlin", "script", "code", "function",
+            "refactor", "debug", "fix bug", "write test", "unit test",
+        ],
+    ) {
         task_type = "coding".to_string();
-        language = Some("python".to_string());
+        if contains_any(&lower, &["python", ".py"]) {
+            language = Some("python".to_string());
+        } else if contains_any(&lower, &["rust", ".rs", "cargo"]) {
+            language = Some("rust".to_string());
+        } else if contains_any(&lower, &["typescript", ".ts", ".tsx"]) {
+            language = Some("typescript".to_string());
+        } else if contains_any(&lower, &["javascript", ".js", ".jsx"]) {
+            language = Some("javascript".to_string());
+        } else if contains_any(&lower, &["golang"]) {
+            language = Some("go".to_string());
+        }
         needs_code = true;
-        push_keyword(&mut keywords, "python");
-        push_candidate(&mut candidates, "python.write");
-        push_candidate(&mut candidates, "python.run");
+        push_keyword(&mut keywords, "code");
+
+        push_candidate(&mut candidates, "file.read");
+        if contains_any(&lower, &["write", "create", "refactor", "fix", "implement"]) {
+            push_candidate(&mut candidates, "file.write");
+        }
+        if contains_any(&lower, &["python"]) {
+            push_candidate(&mut candidates, "python.write");
+            push_candidate(&mut candidates, "python.run");
+        }
+    }
+
+    if contains_any(
+        &lower,
+        &[
+            "project", "workspace", "folder", "directory", "structure",
+            "summarize", "summarise", "explain", "overview", "list files",
+            "what is in", "scan",
+        ],
+    ) {
+        push_keyword(&mut keywords, "project");
+        push_candidate(&mut candidates, "project.scan");
+
+        if contains_any(&lower, &["summarize", "summarise", "explain", "show", "read", "open", "list"]) {
+            needs_files = true;
+            push_keyword(&mut keywords, "file");
+            push_candidate(&mut candidates, "file.read");
+        }
     }
 
     if contains_any(
@@ -61,14 +104,23 @@ pub fn analyze_intent(prompt: &str) -> IntentAnalysis {
         push_candidate(&mut candidates, "web.fetch");
     }
 
-    if contains_any(&lower, &["file", "read", "write", "save", "open"]) {
+    if contains_any(
+        &lower,
+        &[
+            "file", "read", "write", "save", "open", "edit", "create", "show",
+            "display",
+        ],
+    ) {
         needs_files = true;
         push_keyword(&mut keywords, "file");
-        if contains_any(&lower, &["write", "save", "create"]) {
+        if contains_any(&lower, &["write", "save", "create", "edit"]) {
             risk_level = "medium".to_string();
             push_candidate(&mut candidates, "file.write");
         }
-        if contains_any(&lower, &["file", "read", "open"]) {
+        if contains_any(
+            &lower,
+            &["file", "read", "open", "show", "display", "explain", "summarize", "summarise"],
+        ) {
             push_candidate(&mut candidates, "file.read");
         }
     }

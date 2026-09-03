@@ -20,8 +20,7 @@ pub struct ProofSettings {
     pub auto_export_markdown: bool,
     pub redact_secrets: bool,
     pub max_capture_chars: usize,
-    /// Number of calendar-day proof directories to retain. Zero disables
-    /// automatic pruning.
+
     pub retention_days: u64,
 }
 
@@ -89,9 +88,6 @@ impl ProofRecorder {
             };
         }
 
-        // Proofs are durable artifacts. The original request must pass through
-        // the same bounded redaction path as every other captured value before
-        // it can reach JSON or Markdown exports.
         let user_prompt = capture_with_settings(&settings, user_prompt.into());
         let mut trace = ProofTrace::new(mode, new_session_id(), new_task_id(), user_prompt);
         trace.provider = provider.map(|value| capture_with_settings(&settings, value));
@@ -320,10 +316,7 @@ impl ProofRecorder {
         if self.settings.retention_days == 0 || !self.settings.proofs_dir.exists() {
             return Ok(());
         }
-        // Never let routine retention turn a configured symlink/junction into
-        // a deletion capability outside the proof directory. A user may still
-        // explicitly choose a custom export destination, but automatic pruning
-        // fails closed when the root or a dated child resolves elsewhere.
+
         let root_metadata = fs::symlink_metadata(&self.settings.proofs_dir)?;
         if is_link_or_reparse_point(&root_metadata) || !root_metadata.is_dir() {
             return Ok(());
@@ -357,8 +350,7 @@ impl ProofRecorder {
                 if canonical_entry.parent() != Some(canonical_root.as_path()) {
                     continue;
                 }
-                // Re-check immediately before removal to guard against a
-                // replaced direct child on filesystems with symlink support.
+
                 let metadata = fs::symlink_metadata(&path)?;
                 if is_link_or_reparse_point(&metadata) || !metadata.is_dir() {
                     continue;
@@ -378,8 +370,6 @@ fn is_link_or_reparse_point(metadata: &fs::Metadata) -> bool {
     {
         use std::os::windows::fs::MetadataExt;
 
-        // Directory junctions are reparse points but are not guaranteed to be
-        // reported as symbolic links by every Windows filesystem backend.
         metadata.file_attributes() & 0x0000_0400 != 0
     }
     #[cfg(not(windows))]
@@ -458,8 +448,7 @@ pub fn new_approval(
 }
 
 fn capture_with_settings(settings: &ProofSettings, value: String) -> String {
-    // `redact_secrets` remains in config for compatibility, but durable proof
-    // artifacts never permit secret redaction to be disabled.
+
     let _legacy_redaction_preference = settings.redact_secrets;
     summarize_text(&value, settings.max_capture_chars)
 }

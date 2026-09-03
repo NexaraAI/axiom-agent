@@ -8,22 +8,13 @@ pub fn to_json(trace: &ProofTrace) -> serde_json::Result<String> {
     serde_json::to_string_pretty(&redacted_value(trace)?)
 }
 
-/// Returns a clone suitable for any durable or user-visible proof export.
-///
-/// The conversion deliberately happens through `serde_json::Value`: every
-/// string in the complete serialized shape is visited, including strings in
-/// structs added after this code was written. Recorder-level redaction remains
-/// useful for limiting in-memory exposure, but this boundary is the fail-safe.
 pub(crate) fn redacted_trace(trace: &ProofTrace) -> serde_json::Result<ProofTrace> {
     serde_json::from_value(redacted_value(trace)?)
 }
 
 fn redacted_value(trace: &ProofTrace) -> serde_json::Result<Value> {
     let mut value = serde_json::to_value(trace)?;
-    // These root-level fields are serde enum/version discriminators. Redacting
-    // a value such as `completed` would make a valid trace impossible to load
-    // again, so preserve the known structural strings while continuing to
-    // redact every user-controlled field below them.
+
     if let Value::Object(object) = &mut value {
         redact_root_json_object(object);
     } else {

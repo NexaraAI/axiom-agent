@@ -3,9 +3,6 @@ use std::io::IsTerminal;
 
 use axiom_core::AxiomConfig;
 
-/// Inline terminal renderer for Axiom's default blood-red theme. It never
-/// emits ANSI sequences when `NO_COLOR` is present or color is disabled in
-/// configuration.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct Renderer {
     color_enabled: bool,
@@ -46,19 +43,22 @@ impl Renderer {
 
     pub(crate) fn banner(&self) -> String {
         format!(
-            "{}\n{}\n{}\n{}",
+            "{}\n{}\n{}\n{}\n{}",
             self.red("NEXARA AI / AXIOM"),
             self.bone("The coding agent built to prove every action."),
-            self.smoke("Type !help for commands."),
+            self.bone("Welcome! I'll explain as I go — try \"summarize this folder\"."),
+            self.smoke("Type !help for commands, !exit to leave."),
             self.smoke("© 2026 DemonZDevelopment")
         )
     }
 
     pub(crate) fn onboarding_banner(&self) -> String {
         format!(
-            "{}\n{}\n{}",
+            "{}\n{}\n{}\n{}\n{}",
             self.red("NEXARA AI / AXIOM"),
             self.bone("The coding agent built to prove every action."),
+            self.bone("Welcome! Quick friendly setup: 1) workspace → 2) provider → 3) skills."),
+            self.bone("Takes ~1 minute. You can Skip anytime and re-run with `axiom onboarding`."),
             self.smoke("© 2026 DemonZDevelopment")
         )
     }

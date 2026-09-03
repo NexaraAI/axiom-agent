@@ -49,9 +49,7 @@ function ensureAxiomBinary() {
 }
 
 function runAxiom(binary, args, env, cwd, input) {
-  // A copied executable must be able to run without its build checkout as the
-  // working directory. The optional override is only for an explicit test
-  // case; normal E2E commands execute from the isolated temporary root.
+
   return run(binary, args, { env, cwd: cwd || env.AXIOM_E2E_CWD || REPO_ROOT, input });
 }
 

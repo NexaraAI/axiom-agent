@@ -17,6 +17,8 @@ pub const CURRENT_COST_LEDGER_VERSION: u32 = 1;
 const DEFAULT_COST_LEDGER_LOCK_TIMEOUT: Duration = Duration::from_secs(5);
 const COST_LEDGER_LOCK_RETRY_INTERVAL: Duration = Duration::from_millis(20);
 
+const MAX_COST_LEDGER_BYTES: u64 = 8 * 1024 * 1024;
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CostLedgerEvent {
     pub event_id: String,
@@ -148,8 +150,6 @@ impl CostLedgerStore {
         }
     }
 
-    /// Overrides how long a write waits for another Axiom process to finish
-    /// updating this ledger.
     pub fn with_lock_timeout(mut self, timeout: Duration) -> Self {
         self.lock_timeout = timeout;
         self
@@ -162,6 +162,13 @@ impl CostLedgerStore {
     pub fn load(&self) -> Result<CostLedger, CostLedgerError> {
         if !self.path.exists() {
             return Ok(CostLedger::default());
+        }
+        let metadata = fs::metadata(&self.path)?;
+        if metadata.len() > MAX_COST_LEDGER_BYTES {
+            return Err(CostLedgerError::InvalidEvent(format!(
+                "cost ledger exceeds {} byte limit; refusing to load into memory",
+                MAX_COST_LEDGER_BYTES
+            )));
         }
         let ledger: CostLedger = serde_json::from_str(&fs::read_to_string(&self.path)?)?;
         if ledger.ledger_version != CURRENT_COST_LEDGER_VERSION {
@@ -199,9 +206,7 @@ impl CostLedgerStore {
     }
 
     pub fn record(&self, event: CostLedgerEvent) -> Result<bool, CostLedgerError> {
-        // Keep the lock across the complete read-modify-write transaction. The
-        // final persistence still uses atomic replacement, so readers either
-        // observe the old complete ledger or the new complete ledger.
+
         let _lock = self.acquire_write_lock()?;
         let mut ledger = self.load()?;
         let inserted = ledger.record(event)?;
@@ -273,13 +278,6 @@ impl CostLedgerStore {
     }
 }
 
-/// Owns the kernel lock for a ledger transaction.
-///
-/// The sibling lock file intentionally remains on disk. Removing a locked file
-/// can let another process create and lock a different inode while the original
-/// owner is still live. The kernel releases this advisory lock when either this
-/// guard or its process exits, so a crashed owner is recovered without guessing
-/// from timestamps or deleting a potentially live owner's lock.
 struct CostLedgerWriteLock {
     file: File,
 }

@@ -1,10 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
-/// A category of externally observable work performed by a skill executor.
-///
-/// Git operations carry both [`Process`](Self::Process) and [`Git`](Self::Git)
-/// classifications so a policy may constrain all child processes or Git alone.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SideEffectClass {
@@ -33,11 +29,6 @@ impl PolicyAction {
     }
 }
 
-/// One side effect about to be performed by an executor.
-///
-/// Targets must describe the resource without carrying request bodies or
-/// credentials. Built-in executors redact URL query strings and never include
-/// file contents here.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SideEffectRequest {
     pub skill_id: String,
@@ -71,7 +62,6 @@ pub struct MatchedPolicyRule {
     pub action: PolicyAction,
 }
 
-/// The deterministic policy evaluation before any interactive approval.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SideEffectEvaluation {
     pub request: SideEffectRequest,
@@ -87,7 +77,6 @@ pub enum PolicyOutcome {
     Denied,
 }
 
-/// The final, serializable authorization decision, including ask resolution.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SideEffectDecision {
     pub evaluation: SideEffectEvaluation,
@@ -109,7 +98,6 @@ impl fmt::Display for SideEffectDecision {
     }
 }
 
-/// Central policy applied to every built-in skill executor.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct SideEffectPolicy {
@@ -133,7 +121,7 @@ impl Default for SideEffectPolicy {
 }
 
 impl SideEffectPolicy {
-    /// Reproduces the approvals used before centralized policy enforcement.
+
     pub fn backward_compatible(auto_approve_medium_risk: bool) -> Self {
         Self {
             filesystem_read: PolicyAction::Allow,
@@ -182,7 +170,7 @@ impl SideEffectPolicy {
             .iter()
             .map(|rule| rule.action)
             .max_by_key(|action| action.priority())
-            // Unknown/unclassified effects fail closed.
+
             .unwrap_or(PolicyAction::Deny);
         let reason = if matched_rules.is_empty() {
             "side effect has no classification; denied by default".to_string()
@@ -213,7 +201,6 @@ impl SideEffectPolicy {
     }
 }
 
-/// Receives final policy decisions. Implementations should avoid blocking.
 pub trait SideEffectAuditSink {
     fn record(&mut self, decision: &SideEffectDecision);
 }

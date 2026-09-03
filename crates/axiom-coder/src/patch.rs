@@ -28,8 +28,7 @@ pub struct FileChange {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PatchHunk {
-    /// One-based line in the base file. Use 1 for an insertion into an empty
-    /// file.
+
     pub old_start: usize,
     #[serde(default)]
     pub old_lines: Vec<String>,

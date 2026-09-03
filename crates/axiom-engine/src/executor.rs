@@ -39,8 +39,7 @@ pub struct SkillExecutionContext {
     pub web_fetch_denied_hosts: Vec<String>,
     pub web_fetch_use_system_proxy: bool,
     pub auto_approve_medium_risk: bool,
-    /// Provider credential environment variables that must never be inherited
-    /// by a tool child process.
+
     pub credential_env_names: Vec<String>,
 }
 
@@ -77,11 +76,6 @@ pub trait SkillExecutor: Send + Sync {
         approval: &mut dyn SkillApproval,
     ) -> Result<Value, SkillExecutionError>;
 
-    /// Execute with an explicit side-effect policy and audit destination.
-    ///
-    /// The default keeps third-party executor implementations source
-    /// compatible. All built-in executors override this method and authorize
-    /// their side effects before touching external state.
     async fn execute_with_policy(
         &self,
         request: &ToolRequest,
@@ -604,11 +598,6 @@ pub async fn execute_installed_tool(
     .await
 }
 
-/// Execute an installed tool through a caller-supplied side-effect policy.
-///
-/// Every built-in executor records exactly one final policy decision before it
-/// performs its external side effect. The original [`execute_installed_tool`]
-/// API delegates here with its historical approval behavior.
 pub async fn execute_installed_tool_with_policy(
     request: &ToolRequest,
     installed_skills: &[InstalledSkill],
@@ -903,8 +892,6 @@ fn validated_web_target(
     let url = string_arg(request, "url")?;
     let mut parsed = validate_web_url(&url, context)?;
 
-    // Queries and fragments commonly carry tokens. They are never required to
-    // identify the policy target and therefore never reach the audit stream.
     parsed.set_query(None);
     parsed.set_fragment(None);
     Ok(parsed.to_string())
@@ -1266,12 +1253,6 @@ fn validate_schema_value(value: &Value, schema: &Value) -> std::result::Result<(
     Ok(())
 }
 
-/// Evaluate, resolve, and audit one side-effect request before external work.
-///
-/// `Allow` and `Deny` never invoke the approver. `Ask` invokes it exactly once,
-/// then records the final outcome before returning. Callers that perform side
-/// effects outside a [`SkillExecutor`] should use this boundary rather than
-/// evaluating [`SideEffectPolicy`] themselves.
 pub fn authorize_side_effect(
     policy: &SideEffectPolicy,
     audit: &mut dyn SideEffectAuditSink,

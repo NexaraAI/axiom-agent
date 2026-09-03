@@ -8,9 +8,6 @@ use crate::{ChatRequest, ChatResponse, ChatStream, ModelInfo};
 
 pub type Result<T> = std::result::Result<T, LlmError>;
 
-/// Provider credentials are intentionally omitted from `Debug` output. The
-/// value is kept inside the HTTP provider instead of being exported through
-/// the process environment, where unrelated child processes could inherit it.
 #[derive(Clone)]
 pub(crate) struct SecretValue(String);
 
@@ -91,8 +88,7 @@ fn configure_provider_http_client(builder: reqwest::ClientBuilder) -> reqwest::C
         .connect_timeout(Duration::from_secs(10))
         .timeout(Duration::from_secs(60))
         .redirect(reqwest::redirect::Policy::none())
-        // Provider credentials must never be forwarded to a proxy selected through ambient
-        // HTTP(S)_PROXY/ALL_PROXY process state. Provider endpoints are explicit Axiom config.
+
         .no_proxy()
 }
 

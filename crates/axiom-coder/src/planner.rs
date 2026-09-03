@@ -16,9 +16,6 @@ pub struct PatchContextFile {
     pub truncated: bool,
 }
 
-/// Deterministic review of whether a generated patch stays within the file
-/// surface named by the user task or approved plan. Uncovered paths require a
-/// separate confirmation in the CLI instead of being silently accepted.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PlanPatchVerification {
     pub covered_paths: Vec<String>,

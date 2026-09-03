@@ -13,10 +13,6 @@ pub struct BoundedCommandOutput {
     pub stderr_truncated: bool,
 }
 
-/// Runs a child while draining both output pipes concurrently and retaining at
-/// most the configured bytes from each stream. Draining beyond the retained
-/// limit prevents a verbose child from deadlocking on a full pipe without
-/// allowing its output to grow Axiom's memory without bound.
 pub fn run_command_bounded(
     command: &mut Command,
     max_stdout_bytes: usize,

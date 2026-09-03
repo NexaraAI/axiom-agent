@@ -54,8 +54,6 @@ impl UsageLedger {
         self.total_tokens = self.total_tokens.saturating_add(other.total_tokens);
     }
 
-    /// Returns an estimated cost in micro-US-dollars. Both rates must be
-    /// configured so a partial price is never presented as a complete cost.
     pub fn estimated_cost_microusd(&self, pricing: UsagePricing) -> Option<u64> {
         let input_rate = pricing.input_usd_per_million_tokens?;
         let output_rate = pricing.output_usd_per_million_tokens?;

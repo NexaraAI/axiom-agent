@@ -185,7 +185,8 @@ impl SessionStore {
         if !path.exists() {
             return Err(SessionError::NotFound(id.as_str().to_string()));
         }
-        let session: PersistedSession = serde_json::from_slice(&fs::read(path)?)?;
+        let bytes = bounded_read(&path, MAX_SESSION_FILE_BYTES)?;
+        let session: PersistedSession = serde_json::from_slice(&bytes)?;
         if session.session_version > CURRENT_SESSION_VERSION {
             return Err(SessionError::UnsupportedVersion {
                 found: session.session_version,
@@ -201,18 +202,30 @@ impl SessionStore {
         }
         let mut sessions = Vec::new();
         for entry in fs::read_dir(&self.root)? {
-            let entry = entry?;
-            if !entry.file_type()?.is_file()
+            let entry = match entry {
+                Ok(entry) => entry,
+                Err(_) => continue,
+            };
+            let file_type = match entry.file_type() {
+                Ok(kind) => kind,
+                Err(_) => continue,
+            };
+            if !file_type.is_file()
                 || entry.path().extension().and_then(|value| value.to_str()) != Some("json")
             {
                 continue;
             }
-            let session: PersistedSession = serde_json::from_slice(&fs::read(entry.path())?)?;
+
+            let bytes = match bounded_read(&entry.path(), MAX_SESSION_FILE_BYTES) {
+                Ok(bytes) => bytes,
+                Err(_) => continue,
+            };
+            let session: PersistedSession = match serde_json::from_slice(&bytes) {
+                Ok(session) => session,
+                Err(_) => continue,
+            };
             if session.session_version > CURRENT_SESSION_VERSION {
-                return Err(SessionError::UnsupportedVersion {
-                    found: session.session_version,
-                    supported: CURRENT_SESSION_VERSION,
-                });
+                continue;
             }
             sessions.push(SessionSummary {
                 id: session.id,
@@ -246,6 +259,23 @@ fn now_unix_ms() -> u128 {
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_millis())
         .unwrap_or_default()
+}
+
+const MAX_SESSION_FILE_BYTES: u64 = 8 * 1024 * 1024;
+
+fn bounded_read(path: &Path, limit: u64) -> Result<Vec<u8>, SessionError> {
+    let metadata = fs::metadata(path)?;
+    if metadata.len() > limit {
+        return Err(SessionError::Io(std::io::Error::new(
+            std::io::ErrorKind::FileTooLarge,
+            format!(
+                "session file {} exceeds {} byte limit",
+                path.display(),
+                limit
+            ),
+        )));
+    }
+    Ok(fs::read(path)?)
 }
 
 #[cfg(test)]

@@ -5,9 +5,6 @@ const MAX_REGISTERED_SECRET_CHARS: usize = 16 * 1024;
 
 static REGISTERED_SECRETS: OnceLock<RwLock<Vec<String>>> = OnceLock::new();
 
-/// Registers an in-memory credential value so durable proof captures can
-/// remove exact matches without exposing the credential through process-global
-/// environment variables. Values are never serialized by this registry.
 pub fn register_secret_for_redaction(secret: &str) {
     let length = secret.chars().count();
     if !(8..=MAX_REGISTERED_SECRET_CHARS).contains(&length) {
@@ -121,10 +118,6 @@ fn redact_token_prefix(input: &str, prefix: &str) -> String {
     output
 }
 
-// `sk-` is both a common provider-key prefix and a reasonable namespace for
-// human-readable resource IDs. Treat a multi-word all-letter slug with short
-// components as semantic text, while retaining redaction for long opaque
-// payloads such as `sk-abcdefghijklmnopqrstuvwxyz` and `sk-proj-...`.
 fn looks_like_semantic_sk_slug(token: &str) -> bool {
     let Some(rest) = token.strip_prefix("sk-") else {
         return false;

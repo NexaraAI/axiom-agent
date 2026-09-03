@@ -5,8 +5,6 @@ use std::{
 
 use crate::{AxiomError, Result};
 
-/// Git exclusion pathspecs mirroring [`is_secret_path`] for commands that
-/// would otherwise place file contents into child-process output.
 pub const SECRET_GIT_PATHSPEC_EXCLUSIONS: &[&str] = &[
     ":(exclude,icase,glob)**/.env*",
     ":(exclude,icase,glob)**/.env*/**",
@@ -72,13 +70,6 @@ pub const SECRET_GIT_PATHSPEC_EXCLUSIONS: &[&str] = &[
     ":(exclude,icase,glob)**/.docker/config.json/**",
 ];
 
-/// Returns whether a path names a file that commonly contains credentials or
-/// private key material.
-///
-/// Both slash styles are recognized so callers can validate untrusted model
-/// output before the host platform interprets it. Callers that resolve paths
-/// through [`Workspace`] must check both the supplied path and the resolved
-/// path, because a benign-looking symlink can resolve to a secret file.
 pub fn is_secret_path(path: impl AsRef<Path>) -> bool {
     let normalized = path
         .as_ref()
@@ -108,9 +99,7 @@ pub fn is_secret_path(path: impl AsRef<Path>) -> bool {
 }
 
 fn normalize_secret_component(component: &str) -> String {
-    // Treat NTFS alternate-data-stream and Win32 trailing-dot/space spellings
-    // as the underlying name. On other platforms this is intentionally
-    // conservative for credential-like names containing those characters.
+
     component
         .split(':')
         .next()
@@ -177,6 +166,17 @@ impl Workspace {
     pub fn new(root: impl AsRef<Path>) -> Result<Self> {
         fs::create_dir_all(root.as_ref())?;
         let root = fs::canonicalize(root)?;
+        Ok(Self { root })
+    }
+
+    pub fn check_existing(root: impl AsRef<Path>) -> Result<Self> {
+        let root_ref = root.as_ref();
+        if !root_ref.exists() {
+            return Err(AxiomError::InvalidPath {
+                path: root_ref.to_path_buf(),
+            });
+        }
+        let root = fs::canonicalize(root_ref)?;
         Ok(Self { root })
     }
 

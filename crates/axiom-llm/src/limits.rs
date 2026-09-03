@@ -1,8 +1,5 @@
 use crate::{LlmError, Result};
 
-// Provider responses are untrusted input. These limits bound both the bytes retained from HTTP
-// and the decoded state accumulated across a stream. They are deliberately independent of model
-// token settings because custom OpenAI-compatible endpoints need not honor those settings.
 pub(crate) const MAX_CHAT_HTTP_BODY_BYTES: usize = 8 * 1024 * 1024;
 pub(crate) const MAX_MODEL_CATALOG_HTTP_BODY_BYTES: usize = 4 * 1024 * 1024;
 pub(crate) const MAX_ERROR_HTTP_BODY_BYTES: usize = 64 * 1024;

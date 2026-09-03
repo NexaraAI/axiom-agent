@@ -18,9 +18,6 @@ pub struct ContextWindow {
     pub compacted_messages: usize,
 }
 
-/// Estimates the serialized chat context using the modern OpenAI `o200k`
-/// tokenizer plus per-message framing overhead. This is deliberately treated
-/// as a context-safety estimate; provider-reported usage remains authoritative.
 pub fn estimate_messages_tokens(messages: &[ChatMessage]) -> u64 {
     messages.iter().fold(REPLY_PRIMER_TOKENS, |total, message| {
         total
@@ -30,10 +27,6 @@ pub fn estimate_messages_tokens(messages: &[ChatMessage]) -> u64 {
     })
 }
 
-/// Compacts older conversation messages while retaining the protected system
-/// prefix and the most recent conversational turns verbatim. The target is 80%
-/// of the configured ceiling so the provider has room for its reply and any
-/// provider-specific message framing.
 pub fn compact_messages(
     messages: &[ChatMessage],
     protected_prefix_len: usize,
@@ -83,9 +76,7 @@ pub fn compact_messages(
         compacted.insert(
             protected.len(),
             ChatMessage {
-                // Compacted conversation can contain project files and tool
-                // output. Keep that data at user privilege instead of
-                // promoting it into a system instruction.
+
                 role: "user".to_string(),
                 content: summary,
             },

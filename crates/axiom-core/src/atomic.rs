@@ -7,8 +7,6 @@ use std::{
 
 static TEMP_FILE_COUNTER: AtomicU64 = AtomicU64::new(0);
 
-/// Persists a complete replacement through a fully synced sibling temporary
-/// file and an atomic replace operation on every supported platform.
 pub fn atomic_write(path: impl AsRef<Path>, contents: &[u8]) -> io::Result<()> {
     let path = path.as_ref();
     let parent = path.parent().unwrap_or_else(|| Path::new("."));

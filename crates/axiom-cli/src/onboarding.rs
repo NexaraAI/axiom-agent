@@ -15,9 +15,7 @@ use axiom_llm::{LlmProvider, ModelInfo, OpenAiCompatibleProvider};
 use crate::{ui::Renderer, OnboardingCommand};
 
 const DEFAULT_WORKSPACE: &str = "~/Axiom";
-// The registry schema version and the executable version form an immutable
-// generation. A later binary therefore never mistakes an incomplete or stale
-// starter registry for the assets it was built with.
+
 const EMBEDDED_REGISTRY_DIR: &str = concat!("bundled-registry/v0.1-", env!("CARGO_PKG_VERSION"));
 const EMBEDDED_REGISTRY_COMPLETE_MARKER: &str = ".complete";
 const EMBEDDED_REGISTRY_MARKER_CONTENTS: &str = concat!(
@@ -31,10 +29,6 @@ struct EmbeddedRegistryFile {
     contents: &'static [u8],
 }
 
-// Keep the complete offline starter registry inside the executable. On first
-// use these immutable assets are materialized under AXIOM_HOME, so a binary
-// installed through npm or copied to another machine never depends on the
-// repository checkout it was built from.
 static EMBEDDED_REGISTRY_FILES: &[EmbeddedRegistryFile] = &[
     EmbeddedRegistryFile {
         relative_path: "registry.json",
@@ -271,33 +265,46 @@ pub(crate) struct OnboardingResult {
 }
 
 pub(crate) async fn run_terminal_onboarding() -> Result<OnboardingResult> {
+    use std::io::IsTerminal;
+    if !io::stdin().is_terminal() {
+        bail!(
+            "Onboarding needs an interactive terminal, but stdin is not a terminal.\n\
+             Run one of these instead:\n  \
+               axiom onboarding --non-interactive --provider groq --model <model> --workspace ~/Axiom --yes\n  \
+               axiom onboarding --non-interactive --provider mock --workspace ./demo-workspace --yes"
+        );
+    }
     let config_path = AxiomConfig::default_config_path()?;
     let existing_config = if config_path.exists() {
         Some(AxiomConfig::load_from_path(&config_path)?)
     } else {
         None
     };
-    // A returning user should see the terminal preferences they already chose,
-    // including an opt-out of ANSI color, while a first run keeps the friendly
-    // onboarding defaults.
+
     let ui = existing_config
         .as_ref()
         .map(Renderer::from_config)
         .unwrap_or_else(Renderer::for_onboarding);
 
     println!("{}", ui.onboarding_banner());
+    println!();
+    println!("{}", ui.plain("Welcome! I'll get you set up in 3 quick steps:"));
+    println!("{}", ui.plain("  Step 1/3 — Pick a workspace folder (where your files live)"));
+    println!("{}", ui.plain("  Step 2/3 — Connect an AI provider (or try offline demo mode)"));
+    println!("{}", ui.plain("  Step 3/3 — I install starter skills automatically"));
+    println!();
     println!("{}", ui.header("config", config_path.display()));
 
     if let Some(existing) = existing_config {
-        println!("{}", ui.warning("Existing config found."));
+        println!("{}", ui.warning("You already have a setup — welcome back!"));
         println!(
             "{}",
-            ui.plain("This will update your existing Axiom setup if you continue.")
+            ui.plain("Continuing will update your provider/workspace but keep everything else.")
         );
-        if !confirm("Update existing setup?", false)? {
+        if !confirm("Update your existing setup?", false)? {
             println!(
                 "{}",
-                ui.plain("Onboarding skipped. Existing config was left unchanged.")
+                ui.plain("No changes made. Run `axiom` to chat, or `axiom doctor` to check health.")
             );
             let workspace_path = existing.default_workspace_path();
             return Ok(OnboardingResult {
@@ -318,9 +325,10 @@ pub(crate) async fn run_terminal_onboarding() -> Result<OnboardingResult> {
     let plan = prompt_for_plan().await?;
     let result = apply_onboarding_plan(&config_path, &plan).await?;
 
+    println!();
     println!(
         "{}",
-        ui.success(&format!("Saved config: {}", result.config_path.display()))
+        ui.success(&format!("All done! Config saved: {}", result.config_path.display()))
     );
     println!(
         "{}",
@@ -329,11 +337,18 @@ pub(crate) async fn run_terminal_onboarding() -> Result<OnboardingResult> {
     println!(
         "{}",
         ui.success(&format!(
-            "Installed starter skills from {} registry: {}",
+            "Starter skills ready ({}): {}",
             result.registry_source,
             result.installed_skills.join(", ")
         ))
     );
+    println!();
+    println!("{}", ui.plain("What next? Try one of these:"));
+    println!("{}", ui.plain("  axiom                  — start chatting"));
+    println!("{}", ui.plain("  axiom run \"hello\"      — quick one-shot test (no typing loop)"));
+    println!("{}", ui.plain("  axiom doctor           — check everything is healthy"));
+    println!("{}", ui.plain("  axiom code --help      — see coding assistant options"));
+    println!();
 
     Ok(result)
 }
@@ -446,9 +461,7 @@ pub(crate) async fn apply_onboarding_plan_with_registry_url(
     fs::create_dir_all(config_dir)?;
 
     let mut config = if config_path.exists() {
-        // Onboarding is also a supported migration path. Migrate first so a
-        // successful setup can never leave a legacy schema behind, then mutate
-        // only the fields the setup flow owns.
+
         AxiomConfig::migrate_file(config_path)?;
         configure_onboarding(AxiomConfig::load_from_path(config_path)?, plan, true)
     } else {
@@ -468,20 +481,13 @@ pub(crate) async fn apply_onboarding_plan_with_registry_url(
     let skills_dir = config_dir.join(&config.skills.local_dir);
     println!("Installing essential skills for {os}...");
     if let Some(registry_url) = registry_url_override.as_ref() {
-        // An explicit command-line registry always wins, even if it happens to
-        // resemble the old development fixture path.
+
         config.skills.registry_url = registry_url.clone();
     } else if is_legacy_fixture_registry_location(&config.skills.registry_url) {
-        // Older development builds accidentally persisted their source-tree
-        // fixture path. It cannot exist for a packaged or relocated binary, so
-        // restore the official default and use the embedded registry only as a
-        // temporary installation source below.
+
         config.skills.registry_url = AxiomConfig::default().skills.registry_url;
     }
-    // Mock/skip setup must be immediately usable offline, but the internal
-    // fallback location is an installation detail rather than the user's
-    // configured registry. Keep an explicit/custom registry untouched and
-    // persist only an explicit `--registry` override.
+
     let use_bundled_directly = registry_url_override.is_none()
         && matches!(
             &plan.provider,
@@ -587,9 +593,6 @@ fn configure_onboarding(
 ) -> AxiomConfig {
     config.agent.default_workspace = plan.workspace.clone();
 
-    // A skip means "leave my provider alone" when onboarding an existing
-    // installation. For a fresh config we still clear the illustrative
-    // defaults so setup remains visibly incomplete until a provider is chosen.
     if preserve_existing_provider_on_skip && matches!(&plan.provider, ProviderSetup::Skip) {
         return config;
     }
@@ -683,7 +686,11 @@ fn apply_provider_setup(config: &mut AxiomConfig, provider: &ProviderSetup) {
 }
 
 async fn prompt_for_plan() -> Result<OnboardingPlan> {
-    let workspace = prompt_with_default("Workspace path", DEFAULT_WORKSPACE)?;
+    println!();
+    println!("── Step 1/3: Workspace ──");
+    println!("Your workspace is just a folder where Axiom reads/writes files.");
+    println!("Nothing is deleted or uploaded — it's your local sandbox.");
+    let workspace = prompt_with_default("Workspace folder", DEFAULT_WORKSPACE)?;
     let provider = prompt_provider_setup().await?;
 
     Ok(OnboardingPlan {
@@ -694,36 +701,44 @@ async fn prompt_for_plan() -> Result<OnboardingPlan> {
 
 async fn prompt_provider_setup() -> Result<ProviderSetup> {
     println!();
-    println!("Provider setup:");
-    println!("1) Groq (free developer tier, rate limited)");
-    println!("2) OpenRouter (free-model router, rate limited)");
-    println!("3) Gemini (free tier where available)");
-    println!("4) GitHub Models (included free quota, rate limited)");
-    println!("5) NVIDIA NIM (hosted microservices API)");
-    println!("6) Ollama (local, no API key)");
-    println!("7) LM Studio (local, no API key by default)");
-    println!("8) OpenAI");
-    println!("9) Cloudflare AI Gateway");
-    println!("10) Custom OpenAI-compatible endpoint");
-    println!("11) Skip for now");
+    println!("── Step 2/3: AI provider ──");
+    println!("Axiom needs a model to think with. Pick what fits you best:");
+    println!("  Hosted (needs free API key, low RAM — good for this machine):");
+    println!("    1) Groq — fast, free developer tier (recommended to start)");
+    println!("    2) OpenRouter — free-model router ★ default, easy start");
+    println!("    3) Gemini — free tier where available");
+    println!("    4) GitHub Models — included quota if you have GitHub");
+    println!("  Hosted (paid / advanced):");
+    println!("    5) NVIDIA NIM (hosted API)");
+    println!("    8) OpenAI (paid)");
+    println!("    9) Cloudflare AI Gateway");
+    println!("  Local (no key, but needs lots of RAM/disk — can be slow on small machines):");
+    println!("    6) Ollama (runs on your machine)");
+    println!("    7) LM Studio (runs on your machine)");
+    println!("  Other:");
+    println!("    10) Custom OpenAI-compatible endpoint");
+    println!("    11) Skip for now (you can set up later; chat will remind you)");
+    println!();
+    println!("Tip: on a low-memory machine, start with 1 or 2. Local models (6/7) can use gigabytes of RAM.");
+    println!("You can pick one provider, or two comma-separated (first one is active).");
 
     loop {
         let selection = prompt_with_default(
-            "Choose one or two providers (comma-separated; first is active)",
+            "Choose provider(s), e.g. 2  — or 1,6 for two",
             "2",
         )?;
         let mut choices = selection
-            .split(',')
+            .split([',', ' '])
             .map(str::trim)
             .filter(|choice| !choice.is_empty())
             .collect::<Vec<_>>();
         choices.dedup();
         if choices.is_empty() || choices.len() > 2 {
-            println!("Choose one provider or two comma-separated providers.");
+            println!("Pick just one number, or two separated by comma/space (e.g. \"1,6\").");
             continue;
         }
         if choices.contains(&"11") && choices.len() > 1 {
-            println!("Skip cannot be combined with another provider.");
+            println!("\"Skip for now\" can't be combined — pick either 11 alone or real provider(s).");
             continue;
         }
 
@@ -785,7 +800,7 @@ async fn prompt_provider_setup() -> Result<ProviderSetup> {
                 }
                 "11" => ProviderSetup::Skip,
                 _ => {
-                    println!("Enter one or two numbers from 1 through 11.");
+                    println!("Hmm, \"{choice}\" isn't 1–11. Try again (e.g. 2, or 1,6).");
                     invalid = true;
                     break;
                 }
@@ -807,22 +822,18 @@ async fn prompt_preset_setup(provider: &str) -> Result<ProviderSetup> {
     let preset = provider_preset(provider)
         .ok_or_else(|| anyhow!("provider preset is unavailable: {provider}"))?;
     println!();
-    println!("Setting up {}", preset.id);
+    println!("── Setting up {} ──", preset.id);
     println!("{}", preset.setup_note);
-    println!("Chat endpoint: {}/chat/completions", preset.base_url);
-    println!(
-        "Credential: {}",
-        preset.api_key_env.unwrap_or("not required")
-    );
-    println!(
-        "Model catalog: {}",
-        preset
-            .models_url
-            .map(str::to_string)
-            .unwrap_or_else(|| format!("{}/models", preset.base_url))
-    );
+    println!("I'll fetch the model list next (no chat cost — just the catalog).");
+    if preset.id == "ollama" || preset.id == "lm-studio" {
+        println!("Heads-up: local models download gigabytes and use lots of RAM.");
+        println!("On a small machine, prefer Groq/OpenRouter first; you can add local later.");
+    }
     if let Some(environment_variable) = preset.api_key_env {
+        println!("Your key stays hidden while you paste, and is stored in the OS keychain (never in config).");
         crate::credentials::prompt_for_credential(environment_variable)?;
+    } else {
+        println!("No API key needed for this one — nice and simple.");
     }
     let default_model = discover_and_choose_model(
         preset.id,
@@ -985,17 +996,28 @@ fn prompt_with_default(label: &str, default: &str) -> Result<String> {
 }
 
 fn confirm(label: &str, default: bool) -> Result<bool> {
+    use std::io::IsTerminal;
     let hint = if default { "Y/n" } else { "y/N" };
     loop {
-        let value = prompt(&format!("{label} [{hint}]"))?;
+        let value = match prompt(&format!("{label} [{hint}]")) {
+            Ok(value) => value,
+            Err(_) => {
+                println!("No answer received. Treating this as 'no' to stay safe.");
+                return Ok(false);
+            }
+        };
         let trimmed = value.trim().to_ascii_lowercase();
         if trimmed.is_empty() {
+            if !io::stdin().is_terminal() {
+                println!("Non-interactive input: treating empty answer as 'no'.");
+                return Ok(false);
+            }
             return Ok(default);
         }
         match trimmed.as_str() {
             "y" | "yes" => return Ok(true),
             "n" | "no" => return Ok(false),
-            _ => println!("Enter y or n."),
+            _ => println!("Please type y or n."),
         }
     }
 }
@@ -1005,7 +1027,10 @@ fn prompt(label: &str) -> Result<String> {
     io::stdout().flush()?;
 
     let mut input = String::new();
-    io::stdin().read_line(&mut input)?;
+    let bytes = io::stdin().read_line(&mut input)?;
+    if bytes == 0 {
+        bail!("end of input while waiting for an answer (are you piping stdin? run onboarding in a terminal)");
+    }
     Ok(input.trim().to_string())
 }
 
@@ -1031,9 +1056,6 @@ pub(crate) fn materialize_embedded_registry(config_path: &Path) -> Result<PathBu
         return Ok(registry_root);
     }
 
-    // A marker is only meaningful if all of this generation's files matched.
-    // Remove a stale marker before repair so concurrent callers can never
-    // accept an old completion signal while this process fixes assets.
     if let Err(error) = fs::remove_file(&completion_marker) {
         if error.kind() != io::ErrorKind::NotFound {
             return Err(error).with_context(|| {
@@ -1060,9 +1082,6 @@ pub(crate) fn materialize_embedded_registry(config_path: &Path) -> Result<PathBu
         }
     }
 
-    // `atomic_write` commits the marker only after every registry resource is
-    // present, so readers never treat a partially materialized generation as
-    // usable.
     atomic_write(
         &completion_marker,
         EMBEDDED_REGISTRY_MARKER_CONTENTS.as_bytes(),

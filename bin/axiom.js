@@ -19,10 +19,33 @@ function resolveAxiomBinary(options = {}) {
   const arch = options.arch || process.arch;
 
   if (env.AXIOM_AGENT_BINARY_PATH) {
-    const overridePath = path.resolve(env.AXIOM_AGENT_BINARY_PATH);
-    if (!fsImpl.existsSync(overridePath)) {
+    const raw = String(env.AXIOM_AGENT_BINARY_PATH).trim();
+    if (!raw) {
       throw new Error(
-        "Axiom binary is missing. Try reinstalling with npm or set AXIOM_AGENT_BINARY_PATH during development."
+        "AXIOM_AGENT_BINARY_PATH is set but empty. Unset it to use the installed binary."
+      );
+    }
+    const overridePath = path.resolve(raw);
+
+    if (process.env.AXIOM_ALLOW_UNSAFE_BINARY_PATH !== "1") {
+      console.error(
+        "[axiom] WARNING: AXIOM_AGENT_BINARY_PATH override in use: " + overridePath + "\n" +
+        "[axiom] Only use this for local development. Unset it for normal runs."
+      );
+    }
+    let stat = null;
+    try {
+      if (typeof fsImpl.statSync === "function") {
+        stat = fsImpl.statSync(overridePath);
+      } else if (fsImpl.existsSync(overridePath)) {
+        return overridePath;
+      }
+    } catch {
+      stat = null;
+    }
+    if (!stat || !stat.isFile()) {
+      throw new Error(
+        "Axiom binary override is missing or not a file: " + overridePath + ". Try reinstalling with npm or unset AXIOM_AGENT_BINARY_PATH."
       );
     }
     return overridePath;

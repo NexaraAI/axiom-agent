@@ -158,8 +158,6 @@ pub struct SideEffectPolicyConfig {
     pub git: String,
 }
 
-/// Network controls for the model-invoked `web.fetch` tool. Provider endpoints
-/// are configured separately so local Ollama/LM Studio use remains possible.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NetworkConfig {
     #[serde(default = "default_network_https_only")]
@@ -261,8 +259,7 @@ pub struct ProofConfig {
     pub auto_export_markdown: bool,
     #[serde(default = "default_proof_max_capture_chars")]
     pub max_capture_chars: usize,
-    /// Number of days of dated proof directories to retain automatically.
-    /// Zero disables automatic pruning.
+
     #[serde(default)]
     pub retention_days: u64,
 }
@@ -859,8 +856,7 @@ format = "json"
         assert_eq!(config.coder.max_correction_attempts, 2);
         assert!(config.proof.trace_json);
         assert!(config.proof.auto_export_markdown);
-        // A config created before this setting existed must not suddenly start
-        // deleting historic proof exports after an upgrade.
+
         assert_eq!(config.proof.retention_days, 0);
         assert_eq!(config.update.channel, "stable");
         assert_eq!(config.update.policy, "notify");

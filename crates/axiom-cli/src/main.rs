@@ -29,50 +29,50 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Commands {
-    /// Run local environment checks.
+
     Doctor(DoctorCommand),
-    /// Read and write Axiom configuration.
+
     Config {
         #[command(subcommand)]
         command: ConfigCommands,
     },
-    /// Run or update terminal onboarding.
+
     Onboarding(OnboardingCommand),
-    /// Open the terminal chat interface.
+
     Chat,
-    /// Resume a saved chat session.
+
     Resume { session_id: String },
-    /// List saved chat sessions.
+
     Sessions,
-    /// Report recorded model costs and configured persistent budgets.
+
     Cost,
-    /// List, inspect, and switch provider models.
+
     #[command(alias = "models")]
     Model {
         #[command(subcommand)]
         command: ModelCommands,
     },
-    /// Inspect and switch configured providers.
+
     #[command(alias = "providers")]
     Provider {
         #[command(subcommand)]
         command: ProviderCommands,
     },
-    /// Send one non-interactive chat message and exit.
+
     Run(RunCommand),
-    /// Open Axiom Coder mode.
+
     Code(CodeCommand),
-    /// Inspect Axiom proof traces and reports.
+
     Proof {
         #[command(subcommand)]
         command: ProofCommands,
     },
-    /// Inspect and install Axiom skills.
+
     Skill {
         #[command(subcommand)]
         command: SkillCommands,
     },
-    /// Check, install, and manage core Axiom binary updates.
+
     Update {
         #[command(subcommand)]
         command: UpdateCommands,
@@ -81,21 +81,21 @@ enum Commands {
 
 #[derive(Debug, Subcommand)]
 enum ProofCommands {
-    /// List proof traces.
+
     List,
-    /// Show the latest proof summary.
+
     Latest,
-    /// Show a proof report.
+
     Show { proof_id: String },
-    /// Export a proof in a chosen format.
+
     Export {
         proof_id: String,
         #[arg(long, default_value = "markdown")]
         format: String,
     },
-    /// Print the proof report path.
+
     Open { proof_id: String },
-    /// Delete proof files older than DAYS.
+
     Clean {
         #[arg(long = "older-than")]
         older_than: u64,
@@ -104,104 +104,104 @@ enum ProofCommands {
 
 #[derive(Debug, Args)]
 struct CodeCommand {
-    /// Create a plan and stop before proposing edits.
+
     #[arg(long)]
     plan_only: bool,
-    /// Scan the workspace and print a project summary.
+
     #[arg(long)]
     scan: bool,
-    /// Show current git diff if this workspace is a git repository.
+
     #[arg(long)]
     diff: bool,
-    /// Propose and apply an approved patch for TASK.
+
     #[arg(long)]
     apply: bool,
-    /// Detect and optionally run a safe test command.
+
     #[arg(long = "test")]
     test: bool,
-    /// Explain the project structure.
+
     #[arg(long)]
     explain: bool,
-    /// Coding task.
+
     #[arg(value_name = "TASK", trailing_var_arg = true)]
     task: Vec<String>,
 }
 
 #[derive(Debug, Default, Args)]
 struct OnboardingCommand {
-    /// Run setup without prompts.
+
     #[arg(long)]
     non_interactive: bool,
-    /// Workspace path for non-interactive setup.
+
     #[arg(long)]
     workspace: Option<String>,
-    /// Preset: mock, groq, openrouter, gemini, github-models, ollama, lm-studio, openai, or cloudflare.
+
     #[arg(long)]
     provider: Option<String>,
-    /// Default model for non-interactive provider setup.
+
     #[arg(long)]
     model: Option<String>,
-    /// Cloudflare account ID (required with --provider cloudflare).
+
     #[arg(long)]
     account_id: Option<String>,
-    /// Registry URL or local registry path for starter skills.
+
     #[arg(long)]
     registry: Option<String>,
-    /// Configure no active provider.
+
     #[arg(long)]
     skip_provider: bool,
-    /// Confirm non-interactive setup.
+
     #[arg(long)]
     yes: bool,
 }
 
 #[derive(Debug, Args)]
 struct RunCommand {
-    /// User message.
+
     message: String,
-    /// Disable tool execution for this run.
+
     #[arg(long = "no-tools")]
     no_tools: bool,
-    /// Disable proof recording for this run.
+
     #[arg(long = "no-proof")]
     no_proof: bool,
-    /// Override provider for this run without editing config.
+
     #[arg(long)]
     provider: Option<String>,
-    /// Override model for this run without editing config.
+
     #[arg(long)]
     model: Option<String>,
 }
 
 #[derive(Debug, Default, Args)]
 struct DoctorCommand {
-    /// Emit a stable machine-readable report.
+
     #[arg(long)]
     json: bool,
 }
 
 #[derive(Debug, Subcommand)]
 enum ConfigCommands {
-    /// Print the active TOML configuration.
+
     List,
-    /// Back up and migrate a legacy config to the current schema.
+
     Migrate,
 }
 
 #[derive(Debug, Subcommand)]
 enum ModelCommands {
-    /// Show the active provider and model.
+
     Current,
-    /// Fetch the provider's model catalog without making an inference request.
+
     List {
-        /// Configured provider to query; defaults to the active provider.
+
         #[arg(long)]
         provider: Option<String>,
-        /// Show only model IDs containing this text.
+
         #[arg(long)]
         filter: Option<String>,
     },
-    /// Persist a model choice, optionally switching provider too.
+
     Use {
         model: String,
         #[arg(long)]
@@ -211,14 +211,14 @@ enum ModelCommands {
 
 #[derive(Debug, Subcommand)]
 enum ProviderCommands {
-    /// Show the active provider.
+
     Current,
-    /// Show configured providers and their saved model choices.
+
     List,
-    /// Switch to a configured provider and restore its saved model.
+
     Use {
         provider: String,
-        /// Override the saved model while switching.
+
         #[arg(long)]
         model: Option<String>,
     },
@@ -226,28 +226,28 @@ enum ProviderCommands {
 
 #[derive(Debug, Subcommand)]
 enum SkillCommands {
-    /// Manage the configured skills registry.
+
     Registry {
         #[command(subcommand)]
         command: SkillRegistryCommands,
     },
-    /// List skills available in the configured registry.
+
     List,
-    /// Search skills in the configured registry.
+
     Search { query: String },
-    /// Show installed skills.
+
     Installed,
-    /// Show available skill bundles.
+
     Bundles,
-    /// Show information for a skill.
+
     Info { skill_id: String },
-    /// Run an installed tool skill with JSON arguments.
+
     Run {
         skill_id: String,
         #[arg(long)]
         args: Option<String>,
     },
-    /// Install a skill from the configured registry.
+
     Install {
         skill_id: String,
         #[arg(long)]
@@ -255,7 +255,7 @@ enum SkillCommands {
         #[arg(long = "from-local-registry")]
         from_local_registry: Option<PathBuf>,
     },
-    /// Install every skill in a registry bundle.
+
     InstallBundle {
         bundle_id: String,
         #[arg(long)]
@@ -263,7 +263,7 @@ enum SkillCommands {
         #[arg(long = "from-local-registry")]
         from_local_registry: Option<PathBuf>,
     },
-    /// Check or apply skill updates.
+
     Update {
         #[arg(long)]
         check: bool,
@@ -273,41 +273,41 @@ enum SkillCommands {
         apply_patches: bool,
         skill_id: Option<String>,
     },
-    /// Show installed skill health and lifecycle status.
+
     Health,
-    /// Enable an installed skill.
+
     Enable { skill_id: String },
-    /// Disable an installed skill.
+
     Disable { skill_id: String },
-    /// Reset runtime health stats for a skill.
+
     ResetStats { skill_id: String },
-    /// Remove an installed skill.
+
     Remove { skill_id: String },
 }
 
 #[derive(Debug, Subcommand)]
 enum SkillRegistryCommands {
-    /// Print the configured registry URL.
+
     Current,
-    /// Set the configured registry URL.
+
     Set { url: String },
-    /// Load the configured registry and print a summary.
+
     Refresh,
 }
 
 #[derive(Debug, Subcommand)]
 enum UpdateCommands {
-    /// Show core updater status.
+
     Status,
-    /// Check GitHub Releases or a dev manifest for updates.
+
     Check,
-    /// Download, verify, stage, and install an available update.
+
     Install,
-    /// Restore the previous binary backup.
+
     Rollback,
-    /// Set release channel: stable, nightly, or dev.
+
     SetChannel { channel: String },
-    /// Set update policy: manual, notify, or auto-patch.
+
     SetPolicy { policy: String },
 }
 
@@ -464,17 +464,32 @@ fn config(command: ConfigCommands) -> Result<()> {
 }
 
 async fn startup() -> Result<()> {
+    use std::io::IsTerminal;
     let config_path = AxiomConfig::default_config_path()?;
     match startup::route_for_config_path(&config_path)? {
         StartupRoute::Onboarding => {
-            println!("Axiom Agent setup is not complete. Starting onboarding.");
+            if !std::io::stdin().is_terminal() {
+
+                eprintln!("Welcome to Axiom! Setup isn't complete yet.");
+                eprintln!("You're not in an interactive terminal, so I won't start the questionnaire here.");
+                eprintln!();
+                eprintln!("Next steps (pick one):");
+                eprintln!("  1. Run interactively:  axiom onboarding");
+                eprintln!("  2. Scripted setup:      axiom onboarding --non-interactive --provider groq --model <model> --workspace ~/Axiom --yes");
+                eprintln!("  3. Try offline first:   axiom onboarding --non-interactive --provider mock --workspace ./demo-workspace --yes");
+                eprintln!();
+                eprintln!("Then run `axiom doctor` to verify, and `axiom` to chat.");
+                return Ok(());
+            }
+            println!("Welcome to Axiom! Let's get you set up (takes ~1 minute).");
+            println!("I'll walk you through 3 quick steps: workspace → provider → skills.");
             run_onboarding_then_doctor(OnboardingCommand::default()).await?;
             if startup::route_for_config_path(&config_path)? == StartupRoute::Chat {
                 chat::run_terminal_chat().await
             } else {
-                println!(
-                    "Provider setup is still incomplete. Run `axiom onboarding` when you are ready."
-                );
+                println!();
+                println!("You're almost there — provider setup is still incomplete.");
+                println!("Run `axiom onboarding` when you're ready, or `axiom doctor` to see what's missing.");
                 Ok(())
             }
         }
@@ -490,17 +505,25 @@ async fn run_onboarding_then_doctor(command: OnboardingCommand) -> Result<()> {
 async fn chat() -> Result<()> {
     let config_path = AxiomConfig::default_config_path()?;
     if startup::route_for_config_path(&config_path)? == StartupRoute::Onboarding {
-        println!("Onboarding is required before chat can start.");
-        if chat::confirm("Start onboarding now?", true)? {
+        use std::io::IsTerminal;
+        println!("Welcome! Axiom needs a quick one-time setup before chat.");
+        if !std::io::stdin().is_terminal() {
+            println!("Non-interactive session detected, so I won't prompt here.");
+            println!("Run `axiom onboarding` in a terminal, or use:");
+            println!("  axiom onboarding --non-interactive --provider mock --workspace ./demo-workspace --yes");
+            return Ok(());
+        }
+        if chat::confirm("Start the 1-minute setup now?", true)? {
             run_onboarding_then_doctor(OnboardingCommand::default()).await?;
             if startup::route_for_config_path(&config_path)? == StartupRoute::Onboarding {
-                println!(
-                    "Provider setup is still incomplete. Run `axiom onboarding` when you are ready."
-                );
+                println!();
+                println!("Setup is still incomplete — no worries, you can resume anytime.");
+                println!("Run `axiom onboarding` when you're ready, or `axiom doctor` to see what's missing.");
                 return Ok(());
             }
         } else {
-            println!("Run `axiom onboarding` when you are ready.");
+            println!("No problem! Run `axiom onboarding` whenever you're ready.");
+            println!("Tip: `axiom doctor` shows what's missing.");
             return Ok(());
         }
     }
@@ -518,7 +541,8 @@ fn doctor(json_output: bool) -> Result<()> {
     };
 
     let workspace_root = config.default_workspace_path();
-    let workspace_result = Workspace::new(&workspace_root);
+
+    let workspace_result = Workspace::check_existing(&workspace_root);
     let workspace_status = workspace_result
         .as_ref()
         .map(|workspace| format!("ok ({})", workspace.root().display()))
@@ -688,12 +712,13 @@ fn doctor(json_output: bool) -> Result<()> {
         }
     );
     if failed_mandatory_checks.is_empty() {
-        println!("status: all local runtime checks passed");
+        println!("status: all set! Run `axiom` to start chatting, or `axiom code --help` for coding tasks.");
     } else {
         println!(
-            "status: mandatory checks need attention ({})",
+            "status: needs attention ({})",
             failed_mandatory_checks.join(", ")
         );
+        println!("Next: run `axiom onboarding` to fix setup, or `axiom doctor --json` for details.");
     }
 
     Ok(())
