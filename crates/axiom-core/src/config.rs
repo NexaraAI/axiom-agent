@@ -250,9 +250,9 @@ pub struct CoderConfig {
 /// Optional messaging-gateway settings (Telegram / Discord bot tokens).
 /// Tokens are collected during onboarding and resolved like provider keys
 /// (env var, OS keychain, then the private local fallback file). Telegram's
-/// runner is live (`axiom gateway run --telegram`); Discord's runner is still
-/// being built, so its values are only stored, redacted, and scrubbed from
-/// child processes for now.
+/// runners are live (`axiom gateway run --telegram` / `--discord`). Tokens
+/// are resolved like provider keys and are always redacted and scrubbed from
+/// child processes.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GatewayConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]

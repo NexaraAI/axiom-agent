@@ -2,6 +2,7 @@ mod chat;
 mod code_commands;
 mod cost_commands;
 mod credentials;
+mod gateway_discord;
 mod gateway_runtime;
 mod identity;
 mod onboarding;
@@ -346,12 +347,12 @@ enum GatewayCommands {
         discord: bool,
     },
 
-    /// Run the messaging bot (Telegram today; Discord runner still pending).
+    /// Run the messaging bot (Telegram and Discord).
     Run {
         /// Run the Telegram bot.
         #[arg(long)]
         telegram: bool,
-        /// Run the Discord bot (not implemented yet).
+        /// Run the Discord bot.
         #[arg(long)]
         discord: bool,
     },
@@ -403,9 +404,7 @@ async fn gateway(command: GatewayCommands) -> Result<()> {
     match command {
         GatewayCommands::Status => {
             let config = AxiomConfig::load_from_path(&config_path)?;
-            println!(
-                "Messaging gateway (Telegram live via `gateway run`; Discord runner pending):"
-            );
+            println!("Messaging gateway (live bots via `gateway run --telegram` / `--discord`):");
             print_gateway_token(
                 "telegram",
                 config.gateway.telegram_bot_token_env.as_deref(),
@@ -479,18 +478,18 @@ async fn gateway(command: GatewayCommands) -> Result<()> {
             Ok(())
         }
         GatewayCommands::Run { telegram, discord } => {
-            if discord {
-                return Err(anyhow::anyhow!(
-                    "the Discord runner is not built yet (token setup works; see `axiom gateway status`). Telegram is ready: `axiom gateway run --telegram`."
-                ));
+            let config_path = AxiomConfig::default_config_path()?;
+            match (telegram, discord) {
+                (true, false) => gateway_runtime::run_telegram_gateway(config_path).await,
+                (false, true) => gateway_discord::run_discord_gateway(config_path).await,
+                (true, true) => Err(anyhow::anyhow!(
+                    "run one gateway per process: `axiom gateway run --telegram` or `--discord`"
+                )),
+                (false, false) => {
+                    println!("Pick a gateway: `axiom gateway run --telegram` or `--discord`.");
+                    Ok(())
+                }
             }
-            if telegram {
-                let config_path = AxiomConfig::default_config_path()?;
-                return gateway_runtime::run_telegram_gateway(config_path).await;
-            }
-            println!("Pick a gateway: `axiom gateway run --telegram`.");
-            println!("Discord's runner is still pending.");
-            Ok(())
         }
     }
 }
@@ -502,7 +501,7 @@ fn doctor_gateway_status(platform: &str, token_env: Option<&str>) -> String {
             Ok(Some(_)) if platform == "telegram" => {
                 "token saved (run `axiom gateway run --telegram`)".to_string()
             }
-            Ok(Some(_)) => "token saved (runner pending)".to_string(),
+            Ok(Some(_)) => "token saved".to_string(),
             Ok(None) => format!("token named but MISSING: {var}"),
             Err(error) => format!("token unreadable ({error})"),
         },

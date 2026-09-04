@@ -1081,11 +1081,7 @@ pub(crate) async fn prompt_gateway_setup(config_path: &Path, ui: &Renderer) -> R
     );
     println!(
         "{}",
-        ui.plain("Early setup: this saves your bot tokens safely. Telegram's runner is ready")
-    );
-    println!(
-        "{}",
-        ui.plain("(`axiom gateway run --telegram`); Discord's runner is still being built.")
+        ui.plain("Both runners are ready: `axiom gateway run --telegram` or `--discord`.")
     );
     println!("{}", ui.plain("  1) Telegram bot"));
     println!("{}", ui.plain("  2) Discord bot"));
@@ -1128,6 +1124,7 @@ pub(crate) async fn prompt_gateway_setup(config_path: &Path, ui: &Renderer) -> R
     if want_discord {
         println!();
         println!("Discord: create an app at discord.com/developers, add a bot, copy the token.");
+        println!("Then enable the MESSAGE CONTENT intent under Bot settings, or incoming text arrives empty.");
         let token_env = prompt_with_default("Token env variable", "DISCORD_BOT_TOKEN")?;
         let token_env = token_env.trim().to_string();
         if token_env.is_empty() {
@@ -1158,7 +1155,7 @@ pub(crate) async fn prompt_gateway_setup(config_path: &Path, ui: &Renderer) -> R
     );
     println!(
         "{}",
-        ui.plain("`axiom gateway run --telegram` (Discord's runner is still pending),")
+        ui.plain("`axiom gateway run --telegram` or `--discord`,")
     );
     println!(
         "{}",

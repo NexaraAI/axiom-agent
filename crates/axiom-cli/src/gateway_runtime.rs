@@ -81,7 +81,15 @@ async fn answer_telegram_message(
     text: &str,
 ) -> Result<()> {
     let mut session = load_gateway_session(config_path, &format!("telegram:{chat_id}"))?;
-    let reply = match parse_bot_command(text) {
+    let reply = respond_with_session(&mut session, text).await;
+    for chunk in split_telegram_text(&reply) {
+        client.send_message(chat_id, &chunk).await?;
+    }
+    Ok(())
+}
+
+pub(crate) async fn respond_with_session(session: &mut ChatSession, text: &str) -> String {
+    match parse_bot_command(text) {
         BotCommand::Start | BotCommand::Help => HELP_TEXT.to_string(),
         BotCommand::Status => format!(
             "provider: {}\nmodel: {}",
@@ -98,7 +106,10 @@ async fn answer_telegram_message(
             Err(error) => format!("Provider switch failed: {error:#}"),
         },
         BotCommand::Chat { text } => {
-            let cards = session.select_skill_cards(&text, 5)?;
+            let cards = match session.select_skill_cards(&text, 5) {
+                Ok(cards) => cards,
+                Err(error) => return format!("Skill lookup failed: {error:#}"),
+            };
             let mut approval = BotApprover;
             match session
                 .send_user_message_with_options(text, &cards, &mut approval, true)
@@ -116,11 +127,7 @@ async fn answer_telegram_message(
                 }
             }
         }
-    };
-    for chunk in split_telegram_text(&reply) {
-        client.send_message(chat_id, &chunk).await?;
     }
-    Ok(())
 }
 
 async fn list_models_reply(session: &ChatSession, filter: Option<&str>) -> String {
@@ -194,7 +201,7 @@ async fn switch_model_reply(session: &mut ChatSession, id: &str) -> String {
     }
 }
 
-fn load_gateway_session(config_path: &Path, chat_key: &str) -> Result<ChatSession> {
+pub(crate) fn load_gateway_session(config_path: &Path, chat_key: &str) -> Result<ChatSession> {
     let map_path = gateway_session_map_path(config_path);
     let session_id = load_session_map(&map_path).ok().and_then(|map| {
         map.get(chat_key)
@@ -236,7 +243,7 @@ fn save_session_map(path: &Path, map: &BTreeMap<String, String>) -> Result<()> {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-enum BotCommand {
+pub(crate) enum BotCommand {
     Start,
     Help,
     Status,
@@ -246,7 +253,7 @@ enum BotCommand {
     Chat { text: String },
 }
 
-fn parse_bot_command(text: &str) -> BotCommand {
+pub(crate) fn parse_bot_command(text: &str) -> BotCommand {
     let trimmed = text.trim();
     if !trimmed.starts_with('/') {
         return BotCommand::Chat {
@@ -278,11 +285,15 @@ fn parse_bot_command(text: &str) -> BotCommand {
     }
 }
 
-fn chat_allowed(allowlist: &[String], chat_id: i64) -> bool {
+pub(crate) fn chat_allowed(allowlist: &[String], chat_id: i64) -> bool {
     allowlist.is_empty() || allowlist.iter().any(|id| id.trim() == chat_id.to_string())
 }
 
 fn split_telegram_text(text: &str) -> Vec<String> {
+    split_message_text(text, TELEGRAM_CHUNK_LIMIT)
+}
+
+pub(crate) fn split_message_text(text: &str, limit: usize) -> Vec<String> {
     let text = text.trim();
     if text.is_empty() {
         return vec!["(empty reply)".to_string()];
@@ -290,7 +301,7 @@ fn split_telegram_text(text: &str) -> Vec<String> {
     let mut chunks = Vec::new();
     let mut current = String::new();
     for line in text.split('\n') {
-        if current.len() + line.len() + 1 > TELEGRAM_CHUNK_LIMIT {
+        if current.len() + line.len() + 1 > limit {
             if !current.trim().is_empty() {
                 chunks.push(current.trim_end().to_string());
             }
@@ -303,7 +314,7 @@ fn split_telegram_text(text: &str) -> Vec<String> {
         chunks.push(current.trim_end().to_string());
     }
     if chunks.is_empty() {
-        chunks.push(text.chars().take(TELEGRAM_CHUNK_LIMIT).collect());
+        chunks.push(text.chars().take(limit).collect());
     }
     chunks
 }
@@ -316,7 +327,7 @@ const HELP_TEXT: &str = "Axiom gateway bot.\n\
     /provider <name> — switch provider\n\
     /help — this message";
 
-struct BotApprover;
+pub(crate) struct BotApprover;
 
 impl SkillApproval for BotApprover {
     fn approve(&mut self, _request: &ApprovalRequest) -> bool {
