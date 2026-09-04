@@ -96,7 +96,7 @@ async fn run_connection(config_path: &PathBuf, token: &str, allowlist: &[String]
             };
             if sink
                 .send(tokio_tungstenite::tungstenite::Message::Text(
-                    payload.to_string().into(),
+                    payload.into(),
                 ))
                 .await
                 .is_err()
