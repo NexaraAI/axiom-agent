@@ -324,7 +324,7 @@ impl SkillApproval for BotApprover {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 struct TgResponse<T> {
     ok: bool,
     #[serde(default)]
@@ -333,13 +333,13 @@ struct TgResponse<T> {
     description: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 struct TgMe {
     #[serde(default)]
     username: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 struct TgUpdate {
     update_id: i64,
     #[serde(default)]
@@ -348,7 +348,7 @@ struct TgUpdate {
     channel_post: Option<TgMessage>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 struct TgMessage {
     #[serde(default)]
     chat: Option<TgChat>,
@@ -356,7 +356,7 @@ struct TgMessage {
     text: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 struct TgChat {
     id: i64,
 }
