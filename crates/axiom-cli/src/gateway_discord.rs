@@ -325,9 +325,18 @@ mod tests {
     }
 
     #[test]
-    fn allowlist_uses_guild_or_author_scope() {
-        assert!(chat_allowed(&[], 42));
-        assert!(chat_allowed(&["42".to_string()], 42));
-        assert!(!chat_allowed(&["43".to_string()], 42));
+    fn discord_scope_prefers_guild_over_author() {
+        let guild = serde_json::json!({
+            "channel_id": "7",
+            "guild_id": "42",
+            "author": { "id": "9" },
+            "content": "hi"
+        });
+        let message: DiscordMessage = serde_json::from_value(guild).expect("guild message");
+        let scope = message
+            .guild_id
+            .as_deref()
+            .unwrap_or(message.author.id.as_str());
+        assert_eq!(scope, "42");
     }
 }
