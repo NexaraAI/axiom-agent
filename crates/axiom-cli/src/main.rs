@@ -404,7 +404,7 @@ async fn gateway(command: GatewayCommands) -> Result<()> {
         GatewayCommands::Status => {
             let config = AxiomConfig::load_from_path(&config_path)?;
             println!(
-                "Messaging gateway (bot runner pending: tokens are stored, nothing connects yet):"
+                "Messaging gateway (Telegram live via `gateway run`; Discord runner pending):"
             );
             print_gateway_token(
                 "telegram",
@@ -495,11 +495,14 @@ async fn gateway(command: GatewayCommands) -> Result<()> {
     }
 }
 
-fn doctor_gateway_status(token_env: Option<&str>) -> String {
+fn doctor_gateway_status(platform: &str, token_env: Option<&str>) -> String {
     match token_env {
         None => "not configured".to_string(),
         Some(var) => match credentials::resolve_credential(var) {
-            Ok(Some(_)) => "token saved (bot runner pending)".to_string(),
+            Ok(Some(_)) if platform == "telegram" => {
+                "token saved (run `axiom gateway run --telegram`)".to_string()
+            }
+            Ok(Some(_)) => "token saved (runner pending)".to_string(),
             Ok(None) => format!("token named but MISSING: {var}"),
             Err(error) => format!("token unreadable ({error})"),
         },
@@ -907,11 +910,11 @@ fn doctor(json_output: bool) -> Result<()> {
     );
     println!(
         "telegram gateway: {}",
-        doctor_gateway_status(config.gateway.telegram_bot_token_env.as_deref())
+        doctor_gateway_status("telegram", config.gateway.telegram_bot_token_env.as_deref())
     );
     println!(
         "discord gateway: {}",
-        doctor_gateway_status(config.gateway.discord_bot_token_env.as_deref())
+        doctor_gateway_status("discord", config.gateway.discord_bot_token_env.as_deref())
     );
     println!("executable skills: {}", executable_skills.join(", "));
     println!("external skill execution: disabled in v1 (fails closed)");

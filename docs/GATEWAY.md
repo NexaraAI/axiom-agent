@@ -3,12 +3,15 @@
 Chat with Axiom from your phone through a Telegram or Discord bot.
 The bots use the same active provider/model as the terminal.
 
-## Status: early setup (tokens only)
+## Status: Telegram live, Discord tokens only
 
+`axiom gateway run --telegram` starts the Telegram bot: long-polling,
+per-chat sessions with history, and `/models`, `/model`, `/provider`,
+`/status`, `/help` commands. Approval-gated tool actions are denied in bot
+context (bot approver fails closed); reads and answers work fully.
 `axiom onboarding` (bonus step), `axiom gateway setup`, and
-`axiom gateway status` collect and inspect bot tokens today.
-The live bot runner is still being built: nothing connects yet,
-and `axiom doctor` reports tokens as "saved (bot runner pending)".
+`axiom gateway status` collect and inspect tokens. Discord token setup works,
+but its runner is still being built.
 
 ## Setup
 

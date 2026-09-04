@@ -1081,11 +1081,11 @@ pub(crate) async fn prompt_gateway_setup(config_path: &Path, ui: &Renderer) -> R
     );
     println!(
         "{}",
-        ui.plain("Early setup: this only saves your bot tokens safely. The bot runner itself")
+        ui.plain("Early setup: this saves your bot tokens safely. Telegram's runner is ready")
     );
     println!(
         "{}",
-        ui.plain("is still being built — saved tokens will light up automatically when it lands.")
+        ui.plain("(`axiom gateway run --telegram`); Discord's runner is still being built.")
     );
     println!("{}", ui.plain("  1) Telegram bot"));
     println!("{}", ui.plain("  2) Discord bot"));
@@ -1154,11 +1154,15 @@ pub(crate) async fn prompt_gateway_setup(config_path: &Path, ui: &Renderer) -> R
     println!();
     println!(
         "{}",
-        ui.success("Messaging tokens saved. The bot runner is still being built —")
+        ui.success("Messaging tokens saved. Start the Telegram bot with")
     );
     println!(
         "{}",
-        ui.plain("nothing connects yet, and `axiom doctor` will show them as saved/pending.")
+        ui.plain("`axiom gateway run --telegram` (Discord's runner is still pending),")
+    );
+    println!(
+        "{}",
+        ui.plain("and `axiom doctor` will show the saved tokens.")
     );
     Ok(())
 }
