@@ -10,7 +10,7 @@ use futures_util::{SinkExt, StreamExt};
 use serde::Deserialize;
 use serde_json::Value;
 
-use crate::gateway_runtime::{chat_allowed, load_gateway_session, respond_with_session};
+use crate::gateway_runtime::{load_gateway_session, respond_with_session};
 
 const DISCORD_CHUNK_LIMIT: usize = 2000;
 const DISCORD_REST_BASE: &str = "https://discord.com/api/v10";
