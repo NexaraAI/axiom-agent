@@ -29,7 +29,6 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Commands {
-
     Doctor(DoctorCommand),
 
     Config {
@@ -43,7 +42,9 @@ enum Commands {
 
     Chat,
 
-    Resume { session_id: String },
+    Resume {
+        session_id: String,
+    },
 
     Sessions,
 
@@ -92,12 +93,13 @@ enum Commands {
 
 #[derive(Debug, Subcommand)]
 enum ProofCommands {
-
     List,
 
     Latest,
 
-    Show { proof_id: String },
+    Show {
+        proof_id: String,
+    },
 
     Export {
         proof_id: String,
@@ -105,7 +107,9 @@ enum ProofCommands {
         format: String,
     },
 
-    Open { proof_id: String },
+    Open {
+        proof_id: String,
+    },
 
     Clean {
         #[arg(long = "older-than")]
@@ -115,7 +119,6 @@ enum ProofCommands {
 
 #[derive(Debug, Args)]
 struct CodeCommand {
-
     #[arg(long)]
     plan_only: bool,
 
@@ -140,7 +143,6 @@ struct CodeCommand {
 
 #[derive(Debug, Default, Args)]
 struct OnboardingCommand {
-
     #[arg(long)]
     non_interactive: bool,
 
@@ -168,7 +170,6 @@ struct OnboardingCommand {
 
 #[derive(Debug, Args)]
 struct RunCommand {
-
     message: String,
 
     #[arg(long = "no-tools")]
@@ -186,14 +187,12 @@ struct RunCommand {
 
 #[derive(Debug, Default, Args)]
 struct DoctorCommand {
-
     #[arg(long)]
     json: bool,
 }
 
 #[derive(Debug, Subcommand)]
 enum ConfigCommands {
-
     List,
 
     Migrate,
@@ -201,11 +200,9 @@ enum ConfigCommands {
 
 #[derive(Debug, Subcommand)]
 enum ModelCommands {
-
     Current,
 
     List {
-
         #[arg(long)]
         provider: Option<String>,
 
@@ -222,7 +219,6 @@ enum ModelCommands {
 
 #[derive(Debug, Subcommand)]
 enum ProviderCommands {
-
     Current,
 
     List,
@@ -237,7 +233,6 @@ enum ProviderCommands {
 
 #[derive(Debug, Subcommand)]
 enum SkillCommands {
-
     Registry {
         #[command(subcommand)]
         command: SkillRegistryCommands,
@@ -245,13 +240,17 @@ enum SkillCommands {
 
     List,
 
-    Search { query: String },
+    Search {
+        query: String,
+    },
 
     Installed,
 
     Bundles,
 
-    Info { skill_id: String },
+    Info {
+        skill_id: String,
+    },
 
     Run {
         skill_id: String,
@@ -287,18 +286,25 @@ enum SkillCommands {
 
     Health,
 
-    Enable { skill_id: String },
+    Enable {
+        skill_id: String,
+    },
 
-    Disable { skill_id: String },
+    Disable {
+        skill_id: String,
+    },
 
-    ResetStats { skill_id: String },
+    ResetStats {
+        skill_id: String,
+    },
 
-    Remove { skill_id: String },
+    Remove {
+        skill_id: String,
+    },
 }
 
 #[derive(Debug, Subcommand)]
 enum SkillRegistryCommands {
-
     Current,
 
     Set { url: String },
@@ -308,7 +314,6 @@ enum SkillRegistryCommands {
 
 #[derive(Debug, Subcommand)]
 enum UpdateCommands {
-
     Status,
 
     Check,
@@ -324,7 +329,6 @@ enum UpdateCommands {
 
 #[derive(Debug, Subcommand)]
 enum GatewayCommands {
-
     /// Show gateway state: saved tokens, active provider/model the bots will use.
     Status,
 
@@ -344,7 +348,6 @@ enum GatewayCommands {
 
 #[derive(Debug, Args)]
 struct UninstallCommand {
-
     /// Also delete local data: config, skills, sessions, proofs, saved keys.
     #[arg(long = "delete-config")]
     delete_config: bool,
@@ -389,7 +392,9 @@ async fn gateway(command: GatewayCommands) -> Result<()> {
     match command {
         GatewayCommands::Status => {
             let config = AxiomConfig::load_from_path(&config_path)?;
-            println!("Messaging gateway (bot runner pending: tokens are stored, nothing connects yet):");
+            println!(
+                "Messaging gateway (bot runner pending: tokens are stored, nothing connects yet):"
+            );
             print_gateway_token(
                 "telegram",
                 config.gateway.telegram_bot_token_env.as_deref(),
@@ -402,11 +407,19 @@ async fn gateway(command: GatewayCommands) -> Result<()> {
             );
             println!(
                 "active provider: {}",
-                config.llm.active_provider.as_deref().unwrap_or("not configured")
+                config
+                    .llm
+                    .active_provider
+                    .as_deref()
+                    .unwrap_or("not configured")
             );
             println!(
                 "active model: {}",
-                config.llm.active_model.as_deref().unwrap_or("not configured")
+                config
+                    .llm
+                    .active_model
+                    .as_deref()
+                    .unwrap_or("not configured")
             );
             println!("Bots will use the active provider/model above. Change them anytime with:");
             println!("  axiom provider use <name>");
@@ -501,7 +514,10 @@ fn uninstall(command: UninstallCommand) -> Result<()> {
     }
     if !command.yes
         && !chat::confirm(
-            &format!("Permanently delete {} and everything in it?", config_dir.display()),
+            &format!(
+                "Permanently delete {} and everything in it?",
+                config_dir.display()
+            ),
             false,
         )?
     {
@@ -512,7 +528,10 @@ fn uninstall(command: UninstallCommand) -> Result<()> {
         std::fs::remove_dir_all(&config_dir)?;
         println!("Deleted {}.", config_dir.display());
     } else {
-        println!("Nothing to delete: {} does not exist.", config_dir.display());
+        println!(
+            "Nothing to delete: {} does not exist.",
+            config_dir.display()
+        );
     }
     println!("Then remove the program itself with: npm rm -g axiom-agent");
     Ok(())
@@ -648,7 +667,6 @@ async fn startup() -> Result<()> {
     match startup::route_for_config_path(&config_path)? {
         StartupRoute::Onboarding => {
             if !std::io::stdin().is_terminal() {
-
                 eprintln!("Welcome to Axiom! Setup isn't complete yet.");
                 eprintln!("You're not in an interactive terminal, so I won't start the questionnaire here.");
                 eprintln!();
@@ -859,9 +877,17 @@ fn doctor(json_output: bool) -> Result<()> {
     println!("provider: {}", provider.active);
     println!("model: {}", provider.model);
     println!("provider status: {}", provider.status);
-    println!("credential backend: {credential_backend} (env, then OS keychain, then private local file)");
-    println!("telegram gateway: {}", doctor_gateway_status(config.gateway.telegram_bot_token_env.as_deref()));
-    println!("discord gateway: {}", doctor_gateway_status(config.gateway.discord_bot_token_env.as_deref()));
+    println!(
+        "credential backend: {credential_backend} (env, then OS keychain, then private local file)"
+    );
+    println!(
+        "telegram gateway: {}",
+        doctor_gateway_status(config.gateway.telegram_bot_token_env.as_deref())
+    );
+    println!(
+        "discord gateway: {}",
+        doctor_gateway_status(config.gateway.discord_bot_token_env.as_deref())
+    );
     println!("executable skills: {}", executable_skills.join(", "));
     println!("external skill execution: disabled in v1 (fails closed)");
     println!(
@@ -899,7 +925,9 @@ fn doctor(json_output: bool) -> Result<()> {
             "status: needs attention ({})",
             failed_mandatory_checks.join(", ")
         );
-        println!("Next: run `axiom onboarding` to fix setup, or `axiom doctor --json` for details.");
+        println!(
+            "Next: run `axiom onboarding` to fix setup, or `axiom doctor --json` for details."
+        );
     }
 
     Ok(())

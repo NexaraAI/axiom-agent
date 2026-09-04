@@ -206,7 +206,6 @@ impl CostLedgerStore {
     }
 
     pub fn record(&self, event: CostLedgerEvent) -> Result<bool, CostLedgerError> {
-
         let _lock = self.acquire_write_lock()?;
         let mut ledger = self.load()?;
         let inserted = ledger.record(event)?;

@@ -288,10 +288,22 @@ pub(crate) async fn run_terminal_onboarding() -> Result<OnboardingResult> {
 
     println!("{}", ui.onboarding_banner());
     println!();
-    println!("{}", ui.plain("Welcome! I'll get you set up in 3 quick steps:"));
-    println!("{}", ui.plain("  Step 1/3 — Pick a workspace folder (where your files live)"));
-    println!("{}", ui.plain("  Step 2/3 — Connect an AI provider (or try offline demo mode)"));
-    println!("{}", ui.plain("  Step 3/3 — I install starter skills automatically"));
+    println!(
+        "{}",
+        ui.plain("Welcome! I'll get you set up in 3 quick steps:")
+    );
+    println!(
+        "{}",
+        ui.plain("  Step 1/3 — Pick a workspace folder (where your files live)")
+    );
+    println!(
+        "{}",
+        ui.plain("  Step 2/3 — Connect an AI provider (or try offline demo mode)")
+    );
+    println!(
+        "{}",
+        ui.plain("  Step 3/3 — I install starter skills automatically")
+    );
     println!();
     println!("{}", ui.header("config", config_path.display()));
 
@@ -304,7 +316,9 @@ pub(crate) async fn run_terminal_onboarding() -> Result<OnboardingResult> {
         if !confirm("Update your existing setup?", false)? {
             println!(
                 "{}",
-                ui.plain("No changes made. Run `axiom` to chat, or `axiom doctor` to check health.")
+                ui.plain(
+                    "No changes made. Run `axiom` to chat, or `axiom doctor` to check health."
+                )
             );
             let workspace_path = existing.default_workspace_path();
             return Ok(OnboardingResult {
@@ -328,7 +342,10 @@ pub(crate) async fn run_terminal_onboarding() -> Result<OnboardingResult> {
     println!();
     println!(
         "{}",
-        ui.success(&format!("All done! Config saved: {}", result.config_path.display()))
+        ui.success(&format!(
+            "All done! Config saved: {}",
+            result.config_path.display()
+        ))
     );
     println!(
         "{}",
@@ -345,9 +362,18 @@ pub(crate) async fn run_terminal_onboarding() -> Result<OnboardingResult> {
     println!();
     println!("{}", ui.plain("What next? Try one of these:"));
     println!("{}", ui.plain("  axiom                  — start chatting"));
-    println!("{}", ui.plain("  axiom run \"hello\"      — quick one-shot test (no typing loop)"));
-    println!("{}", ui.plain("  axiom doctor           — check everything is healthy"));
-    println!("{}", ui.plain("  axiom code --help      — see coding assistant options"));
+    println!(
+        "{}",
+        ui.plain("  axiom run \"hello\"      — quick one-shot test (no typing loop)")
+    );
+    println!(
+        "{}",
+        ui.plain("  axiom doctor           — check everything is healthy")
+    );
+    println!(
+        "{}",
+        ui.plain("  axiom code --help      — see coding assistant options")
+    );
     println!();
     print_credential_check(&config_path, &ui);
     prompt_gateway_setup(&config_path, &ui).await?;
@@ -464,7 +490,6 @@ pub(crate) async fn apply_onboarding_plan_with_registry_url(
     fs::create_dir_all(config_dir)?;
 
     let mut config = if config_path.exists() {
-
         AxiomConfig::migrate_file(config_path)?;
         configure_onboarding(AxiomConfig::load_from_path(config_path)?, plan, true)
     } else {
@@ -484,10 +509,8 @@ pub(crate) async fn apply_onboarding_plan_with_registry_url(
     let skills_dir = config_dir.join(&config.skills.local_dir);
     println!("Installing essential skills for {os}...");
     if let Some(registry_url) = registry_url_override.as_ref() {
-
         config.skills.registry_url = registry_url.clone();
     } else if is_legacy_fixture_registry_location(&config.skills.registry_url) {
-
         config.skills.registry_url = AxiomConfig::default().skills.registry_url;
     }
 
@@ -726,10 +749,7 @@ async fn prompt_provider_setup() -> Result<ProviderSetup> {
     println!("You can pick one provider, or two comma-separated (first one is active).");
 
     loop {
-        let selection = prompt_with_default(
-            "Choose provider(s), e.g. 2  — or 1,6 for two",
-            "2",
-        )?;
+        let selection = prompt_with_default("Choose provider(s), e.g. 2  — or 1,6 for two", "2")?;
         let mut choices = selection
             .split([',', ' '])
             .map(str::trim)
@@ -741,7 +761,9 @@ async fn prompt_provider_setup() -> Result<ProviderSetup> {
             continue;
         }
         if choices.contains(&"11") && choices.len() > 1 {
-            println!("\"Skip for now\" can't be combined — pick either 11 alone or real provider(s).");
+            println!(
+                "\"Skip for now\" can't be combined — pick either 11 alone or real provider(s)."
+            );
             continue;
         }
 
@@ -856,7 +878,9 @@ async fn discover_and_choose_model(
     models_url: Option<String>,
     suggested_model: Option<&str>,
 ) -> Result<String> {
-    println!("Fetching the LIVE model list from the provider (free metadata call, no chat cost)...");
+    println!(
+        "Fetching the LIVE model list from the provider (free metadata call, no chat cost)..."
+    );
     let provider = OpenAiCompatibleProvider::new(provider_name, base_url, api_key_env.clone())
         .with_models_url(models_url);
     let provider = match api_key_env.as_deref() {
@@ -878,7 +902,9 @@ async fn discover_and_choose_model(
             choose_model_from_catalog(&models, suggested_model)
         }
         Ok(_) => {
-            println!("The provider returned an empty model catalog — falling back to manual entry.");
+            println!(
+                "The provider returned an empty model catalog — falling back to manual entry."
+            );
             println!("Later, with a working key, run: axiom model list --filter <text>");
             prompt_model_without_catalog(suggested_model)
         }
@@ -1025,7 +1051,9 @@ fn print_credential_check(config_path: &Path, ui: &Renderer) {
             _ => {
                 println!(
                     "{}",
-                    ui.warning(&format!("  {var}: MISSING — chat will error until you set it."))
+                    ui.warning(&format!(
+                        "  {var}: MISSING — chat will error until you set it."
+                    ))
                 );
                 println!(
                     "{}",
@@ -1043,7 +1071,10 @@ fn print_credential_check(config_path: &Path, ui: &Renderer) {
 
 pub(crate) async fn prompt_gateway_setup(config_path: &Path, ui: &Renderer) -> Result<()> {
     println!();
-    println!("{}", ui.plain("── Bonus: chat with Axiom from your phone? (optional) ──"));
+    println!(
+        "{}",
+        ui.plain("── Bonus: chat with Axiom from your phone? (optional) ──")
+    );
     println!(
         "{}",
         ui.plain("You can link a Telegram or Discord bot so Axiom replies there.")
@@ -1059,7 +1090,10 @@ pub(crate) async fn prompt_gateway_setup(config_path: &Path, ui: &Renderer) -> R
     println!("{}", ui.plain("  1) Telegram bot"));
     println!("{}", ui.plain("  2) Discord bot"));
     println!("{}", ui.plain("  3) Both"));
-    println!("{}", ui.plain("  4) Skip (default — you can add this later by re-running onboarding)"));
+    println!(
+        "{}",
+        ui.plain("  4) Skip (default — you can add this later by re-running onboarding)")
+    );
     let choice = prompt_with_default("Pick 1-4", "4")?;
     let choice = choice.trim();
     if choice == "4" || choice.is_empty() || choice.eq_ignore_ascii_case("skip") {

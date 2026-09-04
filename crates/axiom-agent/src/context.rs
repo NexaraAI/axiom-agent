@@ -76,7 +76,6 @@ pub fn compact_messages(
         compacted.insert(
             protected.len(),
             ChatMessage {
-
                 role: "user".to_string(),
                 content: summary,
             },

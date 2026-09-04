@@ -44,10 +44,33 @@ pub fn analyze_intent(prompt: &str) -> IntentAnalysis {
     if contains_any(
         &lower,
         &[
-            "python", ".py", "rust", ".rs", "cargo", "javascript", "typescript",
-            ".js", ".ts", ".tsx", ".jsx", "golang", "java", "c++", "c#",
-            "ruby", "php", "swift", "kotlin", "script", "code", "function",
-            "refactor", "debug", "fix bug", "write test", "unit test",
+            "python",
+            ".py",
+            "rust",
+            ".rs",
+            "cargo",
+            "javascript",
+            "typescript",
+            ".js",
+            ".ts",
+            ".tsx",
+            ".jsx",
+            "golang",
+            "java",
+            "c++",
+            "c#",
+            "ruby",
+            "php",
+            "swift",
+            "kotlin",
+            "script",
+            "code",
+            "function",
+            "refactor",
+            "debug",
+            "fix bug",
+            "write test",
+            "unit test",
         ],
     ) {
         task_type = "coding".to_string();
@@ -78,15 +101,35 @@ pub fn analyze_intent(prompt: &str) -> IntentAnalysis {
     if contains_any(
         &lower,
         &[
-            "project", "workspace", "folder", "directory", "structure",
-            "summarize", "summarise", "explain", "overview", "list files",
-            "what is in", "scan",
+            "project",
+            "workspace",
+            "folder",
+            "directory",
+            "structure",
+            "summarize",
+            "summarise",
+            "explain",
+            "overview",
+            "list files",
+            "what is in",
+            "scan",
         ],
     ) {
         push_keyword(&mut keywords, "project");
         push_candidate(&mut candidates, "project.scan");
 
-        if contains_any(&lower, &["summarize", "summarise", "explain", "show", "read", "open", "list"]) {
+        if contains_any(
+            &lower,
+            &[
+                "summarize",
+                "summarise",
+                "explain",
+                "show",
+                "read",
+                "open",
+                "list",
+            ],
+        ) {
             needs_files = true;
             push_keyword(&mut keywords, "file");
             push_candidate(&mut candidates, "file.read");
@@ -107,8 +150,7 @@ pub fn analyze_intent(prompt: &str) -> IntentAnalysis {
     if contains_any(
         &lower,
         &[
-            "file", "read", "write", "save", "open", "edit", "create", "show",
-            "display",
+            "file", "read", "write", "save", "open", "edit", "create", "show", "display",
         ],
     ) {
         needs_files = true;
@@ -119,7 +161,16 @@ pub fn analyze_intent(prompt: &str) -> IntentAnalysis {
         }
         if contains_any(
             &lower,
-            &["file", "read", "open", "show", "display", "explain", "summarize", "summarise"],
+            &[
+                "file",
+                "read",
+                "open",
+                "show",
+                "display",
+                "explain",
+                "summarize",
+                "summarise",
+            ],
         ) {
             push_candidate(&mut candidates, "file.read");
         }

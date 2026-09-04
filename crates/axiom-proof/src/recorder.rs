@@ -448,7 +448,6 @@ pub fn new_approval(
 }
 
 fn capture_with_settings(settings: &ProofSettings, value: String) -> String {
-
     let _legacy_redaction_preference = settings.redact_secrets;
     summarize_text(&value, settings.max_capture_chars)
 }

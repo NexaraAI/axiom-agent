@@ -193,7 +193,6 @@ pub fn summarize_body(body: &str) -> String {
 }
 
 pub fn summarize_bytes(body: &[u8]) -> String {
-
     const MAX_SUMMARY_INPUT_BYTES: usize = 4 * 1024;
     let prefix = &body[..body.len().min(MAX_SUMMARY_INPUT_BYTES)];
     let mut summary = summarize_body(&String::from_utf8_lossy(prefix));

@@ -712,8 +712,17 @@ impl AxiomConfig {
 
 fn validate_gateway_token_env_name(variable: &str) -> Result<()> {
     const RESERVED: &[&str] = &[
-        "PATH", "HOME", "SHELL", "PWD", "LD_PRELOAD", "LD_LIBRARY_PATH",
-        "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY", "AXIOM_HOME",
+        "PATH",
+        "HOME",
+        "SHELL",
+        "PWD",
+        "LD_PRELOAD",
+        "LD_LIBRARY_PATH",
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
+        "ALL_PROXY",
+        "NO_PROXY",
+        "AXIOM_HOME",
     ];
     let mut characters = variable.chars();
     let valid_syntax = characters

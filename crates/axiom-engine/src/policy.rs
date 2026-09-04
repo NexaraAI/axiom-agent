@@ -121,7 +121,6 @@ impl Default for SideEffectPolicy {
 }
 
 impl SideEffectPolicy {
-
     pub fn backward_compatible(auto_approve_medium_risk: bool) -> Self {
         Self {
             filesystem_read: PolicyAction::Allow,
@@ -170,7 +169,6 @@ impl SideEffectPolicy {
             .iter()
             .map(|rule| rule.action)
             .max_by_key(|action| action.priority())
-
             .unwrap_or(PolicyAction::Deny);
         let reason = if matched_rules.is_empty() {
             "side effect has no classification; denied by default".to_string()

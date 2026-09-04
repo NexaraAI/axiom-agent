@@ -99,7 +99,6 @@ pub fn is_secret_path(path: impl AsRef<Path>) -> bool {
 }
 
 fn normalize_secret_component(component: &str) -> String {
-
     component
         .split(':')
         .next()

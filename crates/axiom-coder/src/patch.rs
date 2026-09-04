@@ -28,7 +28,6 @@ pub struct FileChange {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PatchHunk {
-
     pub old_start: usize,
     #[serde(default)]
     pub old_lines: Vec<String>,

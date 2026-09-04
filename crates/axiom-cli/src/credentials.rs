@@ -124,7 +124,9 @@ fn write_file_credential(environment_variable: &str, secret: &str) -> Result<Pat
         BTreeMap::new()
     };
     values.insert(environment_variable.to_string(), secret.to_string());
-    let mut content = String::from("# Axiom local credential fallback (0600). Prefer env vars or the OS keychain.\n");
+    let mut content = String::from(
+        "# Axiom local credential fallback (0600). Prefer env vars or the OS keychain.\n",
+    );
     for (name, value) in &values {
         content.push_str(name);
         content.push('=');
@@ -146,7 +148,9 @@ pub(crate) fn forget_credential(environment_variable: &str) -> Result<bool> {
     if values.remove(environment_variable).is_none() {
         return Ok(false);
     }
-    let mut content = String::from("# Axiom local credential fallback (0600). Prefer env vars or the OS keychain.\n");
+    let mut content = String::from(
+        "# Axiom local credential fallback (0600). Prefer env vars or the OS keychain.\n",
+    );
     for (name, value) in &values {
         content.push_str(name);
         content.push('=');
@@ -176,7 +180,9 @@ pub(crate) fn scrub_credential_names(command: &mut Command, names: &[String]) {
 /// machines into actionable chat/onboarding output instead of a dead end.
 pub(crate) fn credential_hint_for_error(error_text: &str) -> Option<String> {
     let var = error_text
-        .split(|character: char| !(character.is_ascii_uppercase() || character == '_' || character.is_ascii_digit()))
+        .split(|character: char| {
+            !(character.is_ascii_uppercase() || character == '_' || character.is_ascii_digit())
+        })
         .filter(|token| {
             token.len() >= 8
                 && (token.ends_with("_KEY")
@@ -187,8 +193,8 @@ pub(crate) fn credential_hint_for_error(error_text: &str) -> Option<String> {
     Some(format(
         "Fix: export {var}='paste-your-key-here' in this terminal, then retry. \
          (No OS keychain here, so env vars are the way.) \
-         Get a key from your provider dashboard, or run `axiom onboarding` to switch provider."
-     ))
+         Get a key from your provider dashboard, or run `axiom onboarding` to switch provider.",
+    ))
 }
 pub(crate) fn prompt_for_credential(environment_variable: &str) -> Result<bool> {
     axiom_llm::validate_credential_env_name(environment_variable)?;
@@ -222,7 +228,10 @@ pub(crate) fn prompt_for_credential(environment_variable: &str) -> Result<bool> 
         }
         Ok(false) => {
             println!("Saved {environment_variable} locally (no keychain here, so it went to");
-            println!("  {} (private 0600 file, this machine only).", credentials_file_path()?.display());
+            println!(
+                "  {} (private 0600 file, this machine only).",
+                credentials_file_path()?.display()
+            );
             println!("Chat will pick it up automatically — no export needed.");
             Ok(true)
         }

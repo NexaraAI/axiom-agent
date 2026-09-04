@@ -1203,7 +1203,6 @@ impl CoderSession {
 
         match result {
             Ok(()) => {
-
                 let _ = proof.export();
                 Ok(())
             }

@@ -1378,7 +1378,6 @@ impl TerminalInput {
                 .build();
             let mut editor = DefaultEditor::with_config(config)?;
             if history_path.exists() && sanitize_terminal_history_file(&history_path) {
-
                 let _ = editor.load_history(&history_path);
             }
             Some(editor)
@@ -1597,7 +1596,9 @@ async fn run_terminal_session(mut session: ChatSession) -> Result<()> {
             }
             Err(error) => {
                 println!("{}", ui.error(&error));
-                if let Some(hint) = crate::credentials::credential_hint_for_error(&error.to_string()) {
+                if let Some(hint) =
+                    crate::credentials::credential_hint_for_error(&error.to_string())
+                {
                     println!("{}", ui.plain(&hint));
                 }
             }
@@ -2454,7 +2455,6 @@ pub(crate) fn confirm(label: &str, default: bool) -> Result<bool> {
         let mut input = String::new();
         let bytes = io::stdin().read_line(&mut input)?;
         if bytes == 0 {
-
             println!();
             println!("No answer received (end of input). Treating this as 'no' to stay safe.");
             println!("Re-run in a terminal to answer interactively, or pass --yes explicitly.");
@@ -2463,7 +2463,6 @@ pub(crate) fn confirm(label: &str, default: bool) -> Result<bool> {
 
         let trimmed = input.trim().to_ascii_lowercase();
         if trimmed.is_empty() {
-
             if !io::stdin().is_terminal() {
                 println!("Non-interactive input: please answer y or n explicitly.");
                 return Ok(false);

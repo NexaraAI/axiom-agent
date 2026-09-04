@@ -38,7 +38,6 @@ pub struct ChatChunk {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ChatStreamUpdate {
-
     pub visible_delta: String,
     pub content_chars_received: usize,
     pub tool_call_deltas_received: usize,
