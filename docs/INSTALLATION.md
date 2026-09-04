@@ -3,12 +3,12 @@
 ## From npm (recommended)
 
 ```bash
-npm install -g axiom-agent@rc
+npm install -g axiom-agent
 axiom
 ```
 
-`@rc` installs the v1 release candidate. The stable `@latest` channel remains
-separate until the candidate has completed its release review.
+This installs the stable `latest` channel. Pre-release builds (if any) live
+on dedicated dist-tags such as `@rc`.
 
 The npm package is a thin installer and wrapper. It detects your OS and architecture, downloads the matching prebuilt Rust binary from GitHub Releases, verifies `SHA256SUMS`, stores the binary under `vendor/bin/`, and exposes the `axiom` command through `bin/axiom.js`.
 

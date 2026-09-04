@@ -14,15 +14,14 @@ Proof Mode records what happened during each session: what you asked, which skil
 
 ## Current Status
 
-This repository contains Axiom `1.0.0-rc.1`, the first public v1 release
-candidate. Install it from the dedicated npm RC channel:
+This repository contains Axiom `1.0.0`, the first stable v1 release:
 
 ```bash
-npm install -g axiom-agent@rc
+npm install -g axiom-agent
 ```
 
-RC builds are published separately from the stable `latest` channel. Final
-promotion depends on the evidence tracked in
+Pre-release builds (if any) are published separately on dedicated dist-tags.
+The full story is in [the changelog](CHANGELOG.md) and
 [the v1 RC checklist](docs/V1_RC_CHECKLIST.md).
 
 What works:
@@ -70,7 +69,7 @@ What is not done yet:
 Install from npm (recommended):
 
 ```bash
-npm install -g axiom-agent@rc
+npm install -g axiom-agent
 axiom
 ```
 
@@ -395,10 +394,8 @@ See `docs/TESTING.md` and `docs/DEMO.md` for isolated local runs without API key
 
 ## Roadmap
 
-- Current: finish the local v1 implementation and close automated release gates.
-- Next: cut `v1.0.0-rc.1` only after the cross-platform, provenance, credential,
-  accessibility, and operator gates in [the v1 RC checklist](docs/V1_RC_CHECKLIST.md).
-- Later: independently reviewed external executable skills, a full-screen TUI,
+- Current: Axiom `1.0.0` stable is out; keep the release gates green.
+- Next: independently reviewed external executable skills, a full-screen TUI,
   remote registry publishing workflows, and app layers.
 
 ## License

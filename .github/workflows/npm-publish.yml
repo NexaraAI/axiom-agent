@@ -1,5 +1,11 @@
 name: npm Publish
 
+# Manual, on-demand publishing only. Nothing here runs automatically on push:
+# trigger it from Actions ("Run workflow") with publish=true after adding the
+# NPM_TOKEN secret (an npm automation token), or leave the secret unset to use
+# npm trusted publishing (OIDC) instead. It also runs read-only validation
+# whenever a GitHub Release is published.
+
 on:
   workflow_dispatch:
     inputs:
@@ -115,6 +121,16 @@ jobs:
           package-manager-cache: false
       - name: Pin trusted-publishing npm CLI
         run: npm install --global npm@11.5.1
+      - name: Use NPM_TOKEN secret when provided
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          if [ -n "$NPM_TOKEN" ]; then
+            npm config set "//registry.npmjs.org/:_authToken" "$NPM_TOKEN"
+            echo "npm auth via NPM_TOKEN secret"
+          else
+            echo "NPM_TOKEN not set; using npm trusted publishing (OIDC)"
+          fi
       - name: Reconfirm exact release checkout
         shell: bash
         run: |

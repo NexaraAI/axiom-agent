@@ -11,14 +11,14 @@ path = "src/main.rs"
 
 [dependencies]
 anyhow.workspace = true
-axiom-agent = { path = "../axiom-agent", version = "=1.0.0-rc.1" }
-axiom-coder = { path = "../axiom-coder", version = "=1.0.0-rc.1" }
-axiom-core = { path = "../axiom-core", version = "=1.0.0-rc.1" }
-axiom-engine = { path = "../axiom-engine", version = "=1.0.0-rc.1" }
-axiom-lens = { path = "../axiom-lens", version = "=1.0.0-rc.1" }
-axiom-llm = { path = "../axiom-llm", version = "=1.0.0-rc.1" }
-axiom-proof = { path = "../axiom-proof", version = "=1.0.0-rc.1" }
-axiom-upd = { package = "axiom-update", path = "../axiom-update", version = "=1.0.0-rc.1" }
+axiom-agent = { path = "../axiom-agent", version = "=1.0.0" }
+axiom-coder = { path = "../axiom-coder", version = "=1.0.0" }
+axiom-core = { path = "../axiom-core", version = "=1.0.0" }
+axiom-engine = { path = "../axiom-engine", version = "=1.0.0" }
+axiom-lens = { path = "../axiom-lens", version = "=1.0.0" }
+axiom-llm = { path = "../axiom-llm", version = "=1.0.0" }
+axiom-proof = { path = "../axiom-proof", version = "=1.0.0" }
+axiom-upd = { package = "axiom-update", path = "../axiom-update", version = "=1.0.0" }
 clap.workspace = true
 futures-util = "0.3"
 nu-ansi-term.workspace = true

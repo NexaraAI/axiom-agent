@@ -1,13 +1,12 @@
-# Release and RC Operations
+# Release Operations
 
 Axiom publishes verified GitHub Release binaries and a matching npm wrapper.
-The manifests are set to `1.0.0-rc.1` for the first v1 release candidate.
+The manifests are set to `1.0.0` for the first stable v1 release.
 
-The release owner has authorized `1.0.0-rc.1` for prerelease publication. Push
-the tag only after the local gate passes; the tag starts the GitHub binary
-workflow, and npm publication follows only after those artifacts verify. Stable
-promotion remains blocked by the outstanding items in
-[V1_RC_CHECKLIST.md](V1_RC_CHECKLIST.md).
+Push the tag only after the local gate passes; the tag starts the GitHub
+binary workflow, and npm publication follows only after those artifacts
+verify (manually, via the npm Publish workflow, after adding the publish
+secret). See [V1_RC_CHECKLIST.md](V1_RC_CHECKLIST.md) for the RC history.
 
 ## Version Sync
 
@@ -52,7 +51,7 @@ check rejects mutable action tags.
 `.github/workflows/release.yml` triggers on tags like:
 
 ```bash
-v1.0.0-rc.1
+v1.0.0
 ```
 
 That example is the planned first RC tag, not an instruction to create it from
@@ -106,8 +105,7 @@ gh attestation verify ./axiom-x86_64-unknown-linux-gnu --repo NexaraAI/axiom-age
 
 The release job requires only short-lived `id-token`, `attestations`, and artifact-metadata permissions for signing; no signing key is stored in repository secrets.
 
-Tags whose validated semantic version contains a hyphen, including
-`v1.0.0-rc.1` and beta builds, are created as GitHub prereleases and are not
+Tags whose validated semantic version contains a hyphen (rc/beta builds) are created as GitHub prereleases and are not
 marked latest. Only a stable version can become the latest GitHub Release.
 
 ## Dependency policy
@@ -181,7 +179,7 @@ Release publish events run validation but do not push to npm.
 Install the release candidate with:
 
 ```bash
-npm install -g axiom-agent@rc
+npm install -g axiom-agent
 ```
 
 Registry audit note (2026-07-20): npm's live `latest` tag still resolves to the

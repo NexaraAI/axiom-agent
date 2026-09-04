@@ -15,7 +15,7 @@ Axiom Agent is a Cargo workspace with focused crates. It ships as a skill-powere
 ## Installation Flow
 
 ```text
-npm install -g axiom-agent@rc
+npm install -g axiom-agent
 -> postinstall detects OS and architecture
 -> local AXIOM_AGENT_BINARY_PATH copy, or GitHub Release download
 -> SHA256SUMS verification

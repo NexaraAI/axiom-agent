@@ -1,6 +1,6 @@
 {
   "name": "axiom-agent",
-  "version": "1.0.0-rc.1",
+  "version": "1.0.0",
   "description": "Terminal-first Rust CLI for Axiom Agent.",
   "license": "MIT",
   "repository": {
@@ -18,7 +18,7 @@
   },
   "publishConfig": {
     "access": "public",
-    "tag": "rc"
+    "tag": "latest"
   },
   "scripts": {
     "postinstall": "node scripts/postinstall.js",

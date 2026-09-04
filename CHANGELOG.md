@@ -4,6 +4,57 @@ All notable changes to Axiom are documented here. Versions follow semantic
 versioning. Stable releases document user-visible changes, configuration or
 proof migrations, security fixes, and upgrade actions.
 
+## 1.0.0
+
+This is the first stable v1 release, promoted from `1.0.0-rc.1` with the
+full friendly overhaul, messaging gateways, and safety fixes below.
+
+Install it from the stable channel:
+
+```bash
+npm install -g axiom-agent
+```
+
+### Added
+
+- Telegram and Discord messaging gateways: `axiom gateway run --telegram`
+  and `--discord` with per-chat sessions, `/models`, `/model`, `/provider`,
+  `/status`, and `/help` bot commands, chat allowlists, and fail-closed tool
+  approvals in bot context.
+- `axiom gateway status`, `setup`, and `disable` for token management, plus
+  gateway state in `axiom doctor`.
+- `axiom setup` as a friendly alias for re-running onboarding.
+- `axiom uninstall` (with `--delete-config --yes` for a full local wipe).
+- Linux ARM64 prebuilt binary (`axiom-aarch64-unknown-linux-gnu`) so npm
+  installs work on ARM devices and Termux (via proot).
+- File-backed credential fallback: pasted keys persist in a private `0600`
+  file when no OS keychain exists, instead of being silently discarded.
+- Loud key check at the end of onboarding and actionable credential errors
+  in chat with copy-paste fixes.
+
+### Changed
+
+- Friendlier first run: guided 3-step onboarding, non-TTY guards that never
+  hang CI, low-RAM guidance, and a "what next" summary.
+- Skill Lens intent now covers rust/js/ts/go and more, routes project
+  questions to `project.scan`, and skill manifests carry honest keywords.
+- Prompt-only skills (`python.run`, shell safeties) no longer advertise
+  built-in execution they do not have.
+- `axiom doctor` is read-only (never creates the workspace) and friendlier.
+- npm wrapper warns on `AXIOM_AGENT_BINARY_PATH` overrides; checksum
+  verification streams in constant memory.
+
+### Security
+
+- Confirm prompts fail closed on EOF/piped input (never auto-approve).
+- Bounded reads for sessions, cost ledger, and checksum files.
+- Skill registry entries carry SHA-256 integrity hashes.
+
+### Upgrade actions
+
+- Re-run `axiom onboarding` (or `axiom setup`) once: it verifies saved keys
+  and offers messaging setup. No config migration is required.
+
 ## 1.0.0-rc.1
 
 This is the first public v1 release candidate. It brings the complete terminal

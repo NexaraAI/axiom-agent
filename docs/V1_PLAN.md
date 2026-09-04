@@ -21,7 +21,7 @@ turning the implemented candidate into v1.
 
 ## Release status
 
-The v1 implementation has reached `1.0.0-rc.1`. The candidate is published on
+The v1 implementation has reached `1.0.0` stable. The release is published on
 the prerelease channel for final platform and field validation; it is not the
 stable v1 promotion. [V1_RC_CHECKLIST.md](V1_RC_CHECKLIST.md) is the live
 go/no-go record for automated, external, and operator gates.

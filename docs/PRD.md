@@ -6,7 +6,7 @@ Axiom v1 is a terminal-native coding agent. It provides guided provider setup,
 interactive chat, one-shot automation, bounded multi-step tool use, project
 editing with review and recovery, resumable sessions, and proof reports.
 
-The repository and package are versioned `1.0.0-rc.1`. This release candidate
+The repository and package are versioned `1.0.0`. This stable release
 is the final public validation step before the stable v1 promotion.
 
 ## Supported release targets
