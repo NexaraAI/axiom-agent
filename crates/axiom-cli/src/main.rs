@@ -2,6 +2,7 @@ mod chat;
 mod code_commands;
 mod cost_commands;
 mod credentials;
+mod gateway_runtime;
 mod identity;
 mod onboarding;
 mod proof_commands;
@@ -344,6 +345,16 @@ enum GatewayCommands {
         #[arg(long)]
         discord: bool,
     },
+
+    /// Run the messaging bot (Telegram today; Discord runner still pending).
+    Run {
+        /// Run the Telegram bot.
+        #[arg(long)]
+        telegram: bool,
+        /// Run the Discord bot (not implemented yet).
+        #[arg(long)]
+        discord: bool,
+    },
 }
 
 #[derive(Debug, Args)]
@@ -465,6 +476,20 @@ async fn gateway(command: GatewayCommands) -> Result<()> {
                 let _ = credentials::forget_credential(var);
             }
             println!("Gateway tokens forgotten. Provider, model, and chat settings untouched.");
+            Ok(())
+        }
+        GatewayCommands::Run { telegram, discord } => {
+            if discord {
+                return Err(anyhow::anyhow!(
+                    "the Discord runner is not built yet (token setup works; see `axiom gateway status`). Telegram is ready: `axiom gateway run --telegram`."
+                ));
+            }
+            if telegram {
+                let config_path = AxiomConfig::default_config_path()?;
+                return gateway_runtime::run_telegram_gateway(config_path).await;
+            }
+            println!("Pick a gateway: `axiom gateway run --telegram`.");
+            println!("Discord's runner is still pending.");
             Ok(())
         }
     }
