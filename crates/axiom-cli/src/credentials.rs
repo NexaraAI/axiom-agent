@@ -183,13 +183,12 @@ pub(crate) fn credential_hint_for_error(error_text: &str) -> Option<String> {
         .split(|character: char| {
             !(character.is_ascii_uppercase() || character == '_' || character.is_ascii_digit())
         })
-        .filter(|token| {
+        .find(|token| {
             token.len() >= 8
                 && (token.ends_with("_KEY")
                     || token.ends_with("_TOKEN")
                     || token.ends_with("_SECRET"))
-        })
-        .next()?;
+        })?;
     Some(format!(
         "Fix: export {var}='paste-your-key-here' in this terminal, then retry. \
          (No OS keychain here, so env vars are the way.) \
