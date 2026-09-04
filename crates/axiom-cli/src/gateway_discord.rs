@@ -1,5 +1,5 @@
 use std::{
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::{Arc, Mutex},
     time::Duration,
 };
@@ -57,7 +57,7 @@ pub(crate) async fn run_discord_gateway(config_path: PathBuf) -> Result<()> {
     }
 }
 
-async fn run_connection(config_path: &PathBuf, token: &str, allowlist: &[String]) -> Result<()> {
+async fn run_connection(config_path: &Path, token: &str, allowlist: &[String]) -> Result<()> {
     let (stream, _) = tokio_tungstenite::connect_async(DISCORD_GATEWAY_URL).await?;
     let (mut sink, mut source) = stream.split();
     let hello: GwEnvelope = read_envelope(&mut source).await?;
@@ -201,7 +201,7 @@ struct GwEnvelope {
     t: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 struct DiscordAuthor {
     id: String,
     #[serde(default)]
@@ -218,15 +218,6 @@ struct DiscordMessage {
     author: DiscordAuthor,
     #[serde(default)]
     content: String,
-}
-
-impl Default for DiscordAuthor {
-    fn default() -> Self {
-        Self {
-            id: String::new(),
-            bot: false,
-        }
-    }
 }
 
 struct DiscordRest {

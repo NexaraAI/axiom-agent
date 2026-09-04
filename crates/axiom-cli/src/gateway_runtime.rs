@@ -96,7 +96,7 @@ pub(crate) async fn respond_with_session(session: &mut ChatSession, text: &str) 
             session.active_provider().unwrap_or("not configured"),
             session.active_model().unwrap_or("not configured"),
         ),
-        BotCommand::Models { filter } => list_models_reply(&session, filter.as_deref()).await,
+        BotCommand::Models { filter } => list_models_reply(session, filter.as_deref()).await,
         BotCommand::Model { id } => switch_model_reply(session, &id).await,
         BotCommand::Provider { name } => match session.set_provider(name.clone()) {
             Ok(active) => format!(
