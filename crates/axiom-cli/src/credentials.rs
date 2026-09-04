@@ -190,10 +190,10 @@ pub(crate) fn credential_hint_for_error(error_text: &str) -> Option<String> {
                     || token.ends_with("_SECRET"))
         })
         .next()?;
-    Some(format(
+    Some(format!(
         "Fix: export {var}='paste-your-key-here' in this terminal, then retry. \
          (No OS keychain here, so env vars are the way.) \
-         Get a key from your provider dashboard, or run `axiom onboarding` to switch provider.",
+         Get a key from your provider dashboard, or run `axiom onboarding` to switch provider."
     ))
 }
 pub(crate) fn prompt_for_credential(environment_variable: &str) -> Result<bool> {
