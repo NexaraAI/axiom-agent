@@ -1,9 +1,14 @@
-use std::{collections::BTreeSet, process::Command};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    path::PathBuf,
+    process::Command,
+};
 
 use anyhow::{Context, Result};
-use axiom_core::{AxiomConfig, ProviderConfig};
+use axiom_core::{atomic_write, AxiomConfig, ProviderConfig};
 
 const KEYRING_SERVICE: &str = "nexara-ai-axiom";
+const FILE_STORE_NAME: &str = "credentials.env";
 
 trait CredentialStore {
     fn get(&self, environment_variable: &str) -> Result<Option<String>>;
@@ -60,7 +65,96 @@ pub(crate) fn credential_environment_names(config: &AxiomConfig) -> Result<Vec<S
             names.insert(environment_variable.to_string());
         }
     }
+    for gateway_variable in [
+        config.gateway.telegram_bot_token_env.as_deref(),
+        config.gateway.discord_bot_token_env.as_deref(),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        axiom_llm::validate_credential_env_name(gateway_variable)?;
+        names.insert(gateway_variable.to_string());
+    }
     Ok(names.into_iter().collect())
+}
+
+fn credentials_file_path() -> Result<PathBuf> {
+    Ok(AxiomConfig::default_config_dir()?.join(FILE_STORE_NAME))
+}
+
+fn read_file_credential(environment_variable: &str) -> Result<Option<String>> {
+    let path = credentials_file_path()?;
+    if !path.exists() {
+        return Ok(None);
+    }
+    let content = std::fs::read_to_string(&path)?;
+    Ok(parse_credentials_file(&content).remove(environment_variable))
+}
+
+fn parse_credentials_file(content: &str) -> BTreeMap<String, String> {
+    let mut values = BTreeMap::new();
+    for line in content.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let Some((name, value)) = line.split_once('=') else {
+            continue;
+        };
+        let name = name.trim();
+        if name.is_empty()
+            || !name
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+        {
+            continue;
+        }
+        if !value.trim().is_empty() {
+            values.insert(name.to_string(), value.trim().to_string());
+        }
+    }
+    values
+}
+
+fn write_file_credential(environment_variable: &str, secret: &str) -> Result<PathBuf> {
+    let path = credentials_file_path()?;
+    let mut values = if path.exists() {
+        parse_credentials_file(&std::fs::read_to_string(&path)?)
+    } else {
+        BTreeMap::new()
+    };
+    values.insert(environment_variable.to_string(), secret.to_string());
+    let mut content = String::from("# Axiom local credential fallback (0600). Prefer env vars or the OS keychain.\n");
+    for (name, value) in &values {
+        content.push_str(name);
+        content.push('=');
+        content.push_str(value);
+        content.push('\n');
+    }
+    atomic_write(&path, content.as_bytes())?;
+    Ok(path)
+}
+
+/// Removes a variable from the local fallback file (used when tokens are
+/// revoked via `axiom gateway disable`). Returns true if something was removed.
+pub(crate) fn forget_credential(environment_variable: &str) -> Result<bool> {
+    let path = credentials_file_path()?;
+    if !path.exists() {
+        return Ok(false);
+    }
+    let mut values = parse_credentials_file(&std::fs::read_to_string(&path)?);
+    if values.remove(environment_variable).is_none() {
+        return Ok(false);
+    }
+    let mut content = String::from("# Axiom local credential fallback (0600). Prefer env vars or the OS keychain.\n");
+    for (name, value) in &values {
+        content.push_str(name);
+        content.push('=');
+        content.push_str(value);
+        content.push('\n');
+    }
+    atomic_write(&path, content.as_bytes())?;
+    Ok(true)
 }
 
 pub(crate) fn scrub_provider_credentials(
@@ -122,22 +216,36 @@ pub(crate) fn prompt_for_credential(environment_variable: &str) -> Result<bool> 
     }
 
     match store_credential(environment_variable, &secret) {
-        Ok(()) => {
+        Ok(true) => {
             println!("Saved {environment_variable} in the OS credential manager.");
             Ok(true)
         }
+        Ok(false) => {
+            println!("Saved {environment_variable} locally (no keychain here, so it went to");
+            println!("  {} (private 0600 file, this machine only).", credentials_file_path()?.display());
+            println!("Chat will pick it up automatically — no export needed.");
+            Ok(true)
+        }
         Err(error) => {
-            println!("Could not use the OS keychain ({error}). No problem — use an env var instead:");
+            println!("Could not save the credential ({error}). As a last resort, export it each session:");
             println!("  export {environment_variable}='paste-your-key-here'");
-            println!("Paste your actual key in place of the placeholder, then continue setup.");
             Ok(false)
         }
     }
 }
 
-pub(crate) fn store_credential(environment_variable: &str, secret: &str) -> Result<()> {
+/// Stores a secret in the OS keychain when available, otherwise in the
+/// private local fallback file. Returns `true` for keychain, `false` for the
+/// local file. Pasted keys are never silently dropped.
+pub(crate) fn store_credential(environment_variable: &str, secret: &str) -> Result<bool> {
     axiom_llm::validate_credential_env_name(environment_variable)?;
-    OsCredentialStore.set(environment_variable, secret)
+    match OsCredentialStore.set(environment_variable, secret) {
+        Ok(()) => Ok(true),
+        Err(_) => {
+            write_file_credential(environment_variable, secret)?;
+            Ok(false)
+        }
+    }
 }
 
 fn resolve_with_store(
@@ -150,7 +258,14 @@ fn resolve_with_store(
             return Ok(Some(value));
         }
     }
-    store.get(environment_variable)
+    match store.get(environment_variable) {
+        Ok(Some(secret)) => Ok(Some(secret)),
+        Ok(None) => Ok(read_file_credential(environment_variable)?),
+        Err(keyring_error) => match read_file_credential(environment_variable)? {
+            Some(secret) => Ok(Some(secret)),
+            None => Err(keyring_error),
+        },
+    }
 }
 
 fn keyring_entry(environment_variable: &str) -> Result<keyring::Entry> {

@@ -5,7 +5,7 @@ use std::{
 };
 
 use anyhow::{anyhow, bail, Context, Result};
-use axiom_core::{atomic_write, AxiomConfig, ProviderConfig};
+use axiom_core::{atomic_write, AxiomConfig, GatewayConfig, ProviderConfig};
 use axiom_engine::{
     essential_bundle_id_for_os, install_bundle_from_registry_client, LocalRegistrySource,
     RegistryClient, RegistrySource,
@@ -350,6 +350,7 @@ pub(crate) async fn run_terminal_onboarding() -> Result<OnboardingResult> {
     println!("{}", ui.plain("  axiom code --help      — see coding assistant options"));
     println!();
     print_credential_check(&config_path, &ui);
+    prompt_gateway_setup(&config_path, &ui).await?;
 
     Ok(result)
 }
@@ -855,7 +856,7 @@ async fn discover_and_choose_model(
     models_url: Option<String>,
     suggested_model: Option<&str>,
 ) -> Result<String> {
-    println!("Fetching the model catalog (no chat/completion request is made)...");
+    println!("Fetching the LIVE model list from the provider (free metadata call, no chat cost)...");
     let provider = OpenAiCompatibleProvider::new(provider_name, base_url, api_key_env.clone())
         .with_models_url(models_url);
     let provider = match api_key_env.as_deref() {
@@ -872,13 +873,19 @@ async fn discover_and_choose_model(
         None => provider,
     };
     match provider.models().await {
-        Ok(models) if !models.is_empty() => choose_model_from_catalog(&models, suggested_model),
+        Ok(models) if !models.is_empty() => {
+            println!("Live catalog loaded: {} models. Type a full ID to select, or part of a name to search.", models.len());
+            choose_model_from_catalog(&models, suggested_model)
+        }
         Ok(_) => {
-            println!("The provider returned an empty model catalog.");
+            println!("The provider returned an empty model catalog — falling back to manual entry.");
+            println!("Later, with a working key, run: axiom model list --filter <text>");
             prompt_model_without_catalog(suggested_model)
         }
         Err(error) => {
-            println!("Could not load models: {error}");
+            println!("Live catalog fetch failed: {error}");
+            println!("No worries — type the model ID manually (e.g. the suggested default).");
+            println!("Later, with a working key, run: axiom model list --filter <text>");
             prompt_model_without_catalog(suggested_model)
         }
     }
@@ -1032,6 +1039,94 @@ fn print_credential_check(config_path: &Path, ui: &Renderer) {
         }
     }
     println!();
+}
+
+pub(crate) async fn prompt_gateway_setup(config_path: &Path, ui: &Renderer) -> Result<()> {
+    println!();
+    println!("{}", ui.plain("── Bonus: chat with Axiom from your phone? (optional) ──"));
+    println!(
+        "{}",
+        ui.plain("You can link a Telegram or Discord bot so Axiom replies there.")
+    );
+    println!(
+        "{}",
+        ui.plain("Early setup: this only saves your bot tokens safely. The bot runner itself")
+    );
+    println!(
+        "{}",
+        ui.plain("is still being built — saved tokens will light up automatically when it lands.")
+    );
+    println!("{}", ui.plain("  1) Telegram bot"));
+    println!("{}", ui.plain("  2) Discord bot"));
+    println!("{}", ui.plain("  3) Both"));
+    println!("{}", ui.plain("  4) Skip (default — you can add this later by re-running onboarding)"));
+    let choice = prompt_with_default("Pick 1-4", "4")?;
+    let choice = choice.trim();
+    if choice == "4" || choice.is_empty() || choice.eq_ignore_ascii_case("skip") {
+        return Ok(());
+    }
+    let want_telegram = matches!(choice, "1" | "3" | "telegram" | "both");
+    let want_discord = matches!(choice, "2" | "3" | "discord" | "both");
+    if !want_telegram && !want_discord {
+        println!("Noted — skipping messaging setup. Re-run `axiom onboarding` anytime to add it.");
+        return Ok(());
+    }
+    let mut gateway = GatewayConfig::default();
+    if want_telegram {
+        println!();
+        println!("Telegram: talk to @BotFather, /newbot, and copy the token.");
+        let token_env = prompt_with_default("Token env variable", "TELEGRAM_BOT_TOKEN")?;
+        let token_env = token_env.trim().to_string();
+        if token_env.is_empty() {
+            println!("Blank name — skipping Telegram.");
+        } else {
+            crate::credentials::prompt_for_credential(&token_env)?;
+            gateway.telegram_bot_token_env = Some(token_env);
+            let chats = prompt("Allowed chat IDs, comma-separated (blank = decide later)")?;
+            gateway.telegram_allowed_chat_ids = chats
+                .split(',')
+                .map(str::trim)
+                .filter(|id| !id.is_empty())
+                .map(str::to_string)
+                .collect();
+        }
+    }
+    if want_discord {
+        println!();
+        println!("Discord: create an app at discord.com/developers, add a bot, copy the token.");
+        let token_env = prompt_with_default("Token env variable", "DISCORD_BOT_TOKEN")?;
+        let token_env = token_env.trim().to_string();
+        if token_env.is_empty() {
+            println!("Blank name — skipping Discord.");
+        } else {
+            crate::credentials::prompt_for_credential(&token_env)?;
+            gateway.discord_bot_token_env = Some(token_env);
+            let guilds = prompt("Allowed server IDs, comma-separated (blank = decide later)")?;
+            gateway.discord_allowed_guild_ids = guilds
+                .split(',')
+                .map(str::trim)
+                .filter(|id| !id.is_empty())
+                .map(str::to_string)
+                .collect();
+        }
+    }
+    if gateway == GatewayConfig::default() {
+        println!("Nothing to save for messaging — skipping. Re-run `axiom onboarding` anytime to add it.");
+        return Ok(());
+    }
+    let mut config = AxiomConfig::load_from_path(config_path)?;
+    config.gateway = gateway;
+    config.save_to_path(config_path)?;
+    println!();
+    println!(
+        "{}",
+        ui.success("Messaging tokens saved. The bot runner is still being built —")
+    );
+    println!(
+        "{}",
+        ui.plain("nothing connects yet, and `axiom doctor` will show them as saved/pending.")
+    );
+    Ok(())
 }
 
 fn prompt_with_default(label: &str, default: &str) -> Result<String> {

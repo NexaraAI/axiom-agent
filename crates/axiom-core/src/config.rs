@@ -29,6 +29,8 @@ pub struct AxiomConfig {
     pub network: NetworkConfig,
     pub coder: CoderConfig,
     pub proof: ProofConfig,
+    #[serde(default)]
+    pub gateway: GatewayConfig,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -245,6 +247,23 @@ pub struct CoderConfig {
     pub scope_confirmation_bytes: u64,
 }
 
+/// Optional messaging-gateway settings (Telegram / Discord bot tokens).
+/// Tokens are collected during onboarding and resolved like provider keys
+/// (env var, OS keychain, then the private local fallback file). The live
+/// bot runner is a follow-up; until it lands these values are only stored,
+/// redacted, and scrubbed from child processes.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GatewayConfig {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub telegram_bot_token_env: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub telegram_allowed_chat_ids: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub discord_bot_token_env: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub discord_allowed_guild_ids: Vec<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProofConfig {
     #[serde(default = "default_proof_enabled")]
@@ -352,6 +371,7 @@ impl Default for AxiomConfig {
                 max_capture_chars: default_proof_max_capture_chars(),
                 retention_days: default_proof_retention_days(),
             },
+            gateway: GatewayConfig::default(),
         }
     }
 }
@@ -677,8 +697,38 @@ impl AxiomConfig {
                 validate_host_pattern(field, pattern)?;
             }
         }
+        for gateway_variable in [
+            self.gateway.telegram_bot_token_env.as_deref(),
+            self.gateway.discord_bot_token_env.as_deref(),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            validate_gateway_token_env_name(gateway_variable)?;
+        }
         Ok(())
     }
+}
+
+fn validate_gateway_token_env_name(variable: &str) -> Result<()> {
+    const RESERVED: &[&str] = &[
+        "PATH", "HOME", "SHELL", "PWD", "LD_PRELOAD", "LD_LIBRARY_PATH",
+        "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY", "AXIOM_HOME",
+    ];
+    let mut characters = variable.chars();
+    let valid_syntax = characters
+        .next()
+        .is_some_and(|character| character == '_' || character.is_ascii_alphabetic())
+        && characters.all(|character| character == '_' || character.is_ascii_alphanumeric());
+    if !valid_syntax || RESERVED.contains(&variable) {
+        return Err(AxiomError::InvalidConfig {
+            field: "gateway token env",
+            message: format!(
+                "unsafe token variable `{variable}`; use a dedicated name like TELEGRAM_BOT_TOKEN"
+            ),
+        });
+    }
+    Ok(())
 }
 
 fn validate_host_pattern(field: &'static str, pattern: &str) -> Result<()> {

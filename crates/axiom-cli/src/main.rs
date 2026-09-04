@@ -37,6 +37,8 @@ enum Commands {
         command: ConfigCommands,
     },
 
+    /// Run or update terminal onboarding (`setup` works too).
+    #[command(alias = "setup")]
     Onboarding(OnboardingCommand),
 
     Chat,
@@ -77,6 +79,15 @@ enum Commands {
         #[command(subcommand)]
         command: UpdateCommands,
     },
+
+    /// Manage the Telegram/Discord messaging gateway (tokens, status).
+    Gateway {
+        #[command(subcommand)]
+        command: GatewayCommands,
+    },
+
+    /// Remove Axiom (binary via npm, local data on request).
+    Uninstall(UninstallCommand),
 }
 
 #[derive(Debug, Subcommand)]
@@ -311,6 +322,38 @@ enum UpdateCommands {
     SetPolicy { policy: String },
 }
 
+#[derive(Debug, Subcommand)]
+enum GatewayCommands {
+
+    /// Show gateway state: saved tokens, active provider/model the bots will use.
+    Status,
+
+    /// (Re)run the Telegram/Discord token setup.
+    Setup,
+
+    /// Forget saved gateway tokens (keep everything else).
+    Disable {
+        /// Only forget the Telegram token.
+        #[arg(long)]
+        telegram: bool,
+        /// Only forget the Discord token.
+        #[arg(long)]
+        discord: bool,
+    },
+}
+
+#[derive(Debug, Args)]
+struct UninstallCommand {
+
+    /// Also delete local data: config, skills, sessions, proofs, saved keys.
+    #[arg(long = "delete-config")]
+    delete_config: bool,
+
+    /// Confirm without prompting.
+    #[arg(long)]
+    yes: bool,
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     tracing_subscriber::fmt()
@@ -335,8 +378,144 @@ async fn main() -> Result<()> {
         Some(Commands::Proof { command }) => proof_commands::run(command),
         Some(Commands::Skill { command }) => skill_commands::run(command).await,
         Some(Commands::Update { command }) => update_commands::run(command).await,
+        Some(Commands::Gateway { command }) => gateway(command).await,
+        Some(Commands::Uninstall(command)) => uninstall(command),
         None => startup().await,
     }
+}
+
+async fn gateway(command: GatewayCommands) -> Result<()> {
+    let config_path = AxiomConfig::default_config_path()?;
+    match command {
+        GatewayCommands::Status => {
+            let config = AxiomConfig::load_from_path(&config_path)?;
+            println!("Messaging gateway (bot runner pending: tokens are stored, nothing connects yet):");
+            print_gateway_token(
+                "telegram",
+                config.gateway.telegram_bot_token_env.as_deref(),
+                &config.gateway.telegram_allowed_chat_ids,
+            );
+            print_gateway_token(
+                "discord",
+                config.gateway.discord_bot_token_env.as_deref(),
+                &config.gateway.discord_allowed_guild_ids,
+            );
+            println!(
+                "active provider: {}",
+                config.llm.active_provider.as_deref().unwrap_or("not configured")
+            );
+            println!(
+                "active model: {}",
+                config.llm.active_model.as_deref().unwrap_or("not configured")
+            );
+            println!("Bots will use the active provider/model above. Change them anytime with:");
+            println!("  axiom provider use <name>");
+            println!("  axiom model use <id>   (find IDs via: axiom model list --filter <text>)");
+            println!("Bot-side commands (live once the runner lands, see docs/GATEWAY.md):");
+            println!("  /models [filter]   /model <id>   /provider <name>   /status   /help");
+            Ok(())
+        }
+        GatewayCommands::Setup => {
+            if !config_path.exists() {
+                println!("No Axiom setup yet — run `axiom onboarding` first, then add messaging.");
+                return Ok(());
+            }
+            let ui = AxiomConfig::load_from_path(&config_path)
+                .map(|config| ui::Renderer::from_config(&config))
+                .unwrap_or_else(|_| ui::Renderer::for_onboarding());
+            onboarding::prompt_gateway_setup(&config_path, &ui).await
+        }
+        GatewayCommands::Disable { telegram, discord } => {
+            if !telegram && !discord {
+                return Err(anyhow::anyhow!(
+                    "pick at least one: `axiom gateway disable --telegram` and/or `--discord`"
+                ));
+            }
+            let mut config = AxiomConfig::load_from_path(&config_path)?;
+            let mut forgotten = Vec::new();
+            if telegram {
+                if let Some(var) = config.gateway.telegram_bot_token_env.clone() {
+                    forgotten.push(var);
+                }
+                config.gateway.telegram_bot_token_env = None;
+                config.gateway.telegram_allowed_chat_ids.clear();
+            }
+            if discord {
+                if let Some(var) = config.gateway.discord_bot_token_env.clone() {
+                    forgotten.push(var);
+                }
+                config.gateway.discord_bot_token_env = None;
+                config.gateway.discord_allowed_guild_ids.clear();
+            }
+            config.save_to_path(&config_path)?;
+            for var in &forgotten {
+                let _ = credentials::forget_credential(var);
+            }
+            println!("Gateway tokens forgotten. Provider, model, and chat settings untouched.");
+            Ok(())
+        }
+    }
+}
+
+fn doctor_gateway_status(token_env: Option<&str>) -> String {
+    match token_env {
+        None => "not configured".to_string(),
+        Some(var) => match credentials::resolve_credential(var) {
+            Ok(Some(_)) => "token saved (bot runner pending)".to_string(),
+            Ok(None) => format!("token named but MISSING: {var}"),
+            Err(error) => format!("token unreadable ({error})"),
+        },
+    }
+}
+
+fn print_gateway_token(platform: &str, token_env: Option<&str>, allowlist: &[String]) {
+    match token_env {
+        None => println!("{platform}: not configured (run `axiom gateway setup`)"),
+        Some(var) => {
+            let state = match credentials::resolve_credential(var) {
+                Ok(Some(_)) => "token saved".to_string(),
+                Ok(None) => "token named but MISSING — re-run `axiom gateway setup`".to_string(),
+                Err(error) => format!("token unreadable: {error}"),
+            };
+            println!("{platform}: {state} (var {var})");
+            if allowlist.is_empty() {
+                println!("  allowed chats: not restricted yet (anyone with the bot link could talk to it — set IDs in setup)");
+            } else {
+                println!("  allowed chats: {}", allowlist.join(", "));
+            }
+        }
+    }
+}
+
+fn uninstall(command: UninstallCommand) -> Result<()> {
+    let config_dir = AxiomConfig::default_config_dir()?;
+    if !command.delete_config {
+        println!("This removes the installed program. Your data stays where it is.");
+        println!("  npm rm -g axiom-agent");
+        println!();
+        println!("Config, skills, sessions, proofs, and saved keys live in:");
+        println!("  {}", config_dir.display());
+        println!("To wipe those too:");
+        println!("  axiom uninstall --delete-config --yes");
+        return Ok(());
+    }
+    if !command.yes
+        && !chat::confirm(
+            &format!("Permanently delete {} and everything in it?", config_dir.display()),
+            false,
+        )?
+    {
+        println!("Cancelled. Nothing was deleted.");
+        return Ok(());
+    }
+    if config_dir.exists() {
+        std::fs::remove_dir_all(&config_dir)?;
+        println!("Deleted {}.", config_dir.display());
+    } else {
+        println!("Nothing to delete: {} does not exist.", config_dir.display());
+    }
+    println!("Then remove the program itself with: npm rm -g axiom-agent");
+    Ok(())
 }
 
 fn provider(command: ProviderCommands) -> Result<()> {
@@ -680,7 +859,9 @@ fn doctor(json_output: bool) -> Result<()> {
     println!("provider: {}", provider.active);
     println!("model: {}", provider.model);
     println!("provider status: {}", provider.status);
-    println!("credential backend: {credential_backend} (environment fallback enabled)");
+    println!("credential backend: {credential_backend} (env, then OS keychain, then private local file)");
+    println!("telegram gateway: {}", doctor_gateway_status(config.gateway.telegram_bot_token_env.as_deref()));
+    println!("discord gateway: {}", doctor_gateway_status(config.gateway.discord_bot_token_env.as_deref()));
     println!("executable skills: {}", executable_skills.join(", "));
     println!("external skill execution: disabled in v1 (fails closed)");
     println!(
