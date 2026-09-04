@@ -78,8 +78,7 @@ async fn run_connection(config_path: &PathBuf, token: &str, allowlist: &[String]
                 "properties": { "os": "linux", "browser": "axiom", "device": "axiom" },
             }
         })
-        .to_string()
-        .into(),
+        .to_string(),
     ))
     .await?;
 
@@ -96,7 +95,7 @@ async fn run_connection(config_path: &PathBuf, token: &str, allowlist: &[String]
             };
             if sink
                 .send(tokio_tungstenite::tungstenite::Message::Text(
-                    payload.into(),
+                    payload.to_string(),
                 ))
                 .await
                 .is_err()
