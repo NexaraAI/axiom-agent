@@ -28,6 +28,8 @@ pub struct ChatChunk {
     #[serde(default)]
     pub content_delta: String,
     #[serde(default)]
+    pub reasoning_delta: String,
+    #[serde(default)]
     pub tool_call_deltas: Vec<ChatToolCallDelta>,
     #[serde(default)]
     pub usage: Option<TokenUsage>,
@@ -39,6 +41,7 @@ pub struct ChatChunk {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ChatStreamUpdate {
     pub visible_delta: String,
+    pub reasoning_delta: String,
     pub content_chars_received: usize,
     pub tool_call_deltas_received: usize,
     pub done: bool,
@@ -102,6 +105,7 @@ impl ChatStream {
             .collect();
         Self::from_chunks(vec![ChatChunk {
             content_delta: response.content,
+            reasoning_delta: String::new(),
             tool_call_deltas,
             usage: response.usage,
             model: Some(response.model),
@@ -145,6 +149,7 @@ impl ChatStream {
         mut observer: impl FnMut(ChatStreamUpdate),
     ) -> Result<ChatResponse> {
         let mut content = String::new();
+        let mut total_reasoning = String::new();
         let mut tool_calls = BTreeMap::<usize, PartialToolCall>::new();
         let mut usage = None;
         let mut model = None;
@@ -168,6 +173,13 @@ impl ChatStream {
                 "assistant content",
                 content.len(),
                 chunk.content_delta.len(),
+                MAX_ASSISTANT_CONTENT_BYTES,
+            )?;
+            ensure_additional_bytes(
+                provider,
+                "assistant reasoning",
+                total_reasoning.len(),
+                chunk.reasoning_delta.len(),
                 MAX_ASSISTANT_CONTENT_BYTES,
             )?;
             ensure_additional_count(
@@ -231,16 +243,25 @@ impl ChatStream {
                 partial.arguments.push_str(&delta.arguments_delta);
                 total_argument_bytes += delta.arguments_delta.len();
             }
-            let visible_delta = projector.push(&chunk.content_delta);
-            if !visible_delta.is_empty() || had_tool_call_deltas {
+            let projected = projector.push(&chunk.content_delta);
+            let mut reasoning_delta = chunk.reasoning_delta.clone();
+            reasoning_delta.push_str(&projected.reasoning);
+
+            if !projected.visible.is_empty()
+                || !reasoning_delta.is_empty()
+                || had_tool_call_deltas
+            {
                 observer(ChatStreamUpdate {
-                    visible_delta,
+                    visible_delta: projected.visible,
+                    reasoning_delta,
                     content_chars_received,
                     tool_call_deltas_received,
                     done: false,
                 });
             }
             content.push_str(&chunk.content_delta);
+            total_reasoning.push_str(&chunk.reasoning_delta);
+            total_reasoning.push_str(&projected.reasoning);
             if let Some(chunk_usage) = chunk.usage {
                 usage = Some(chunk_usage);
             }
@@ -248,8 +269,20 @@ impl ChatStream {
                 model = Some(chunk_model);
             }
         }
+        let final_projected = projector.finish();
+        if !final_projected.visible.is_empty() || !final_projected.reasoning.is_empty() {
+            total_reasoning.push_str(&final_projected.reasoning);
+            observer(ChatStreamUpdate {
+                visible_delta: final_projected.visible,
+                reasoning_delta: final_projected.reasoning,
+                content_chars_received,
+                tool_call_deltas_received,
+                done: false,
+            });
+        }
         observer(ChatStreamUpdate {
-            visible_delta: projector.finish(),
+            visible_delta: String::new(),
+            reasoning_delta: String::new(),
             content_chars_received,
             tool_call_deltas_received,
             done: true,
@@ -272,10 +305,14 @@ impl ChatStream {
             })
             .collect::<Result<Vec<_>>>()?;
         if content.trim().is_empty() && tool_calls.is_empty() {
-            return Err(LlmError::ResponseParse {
-                provider: provider.to_string(),
-                body_summary: "stream contained no assistant content or tool calls".to_string(),
-            });
+            if !total_reasoning.trim().is_empty() {
+                content = total_reasoning;
+            } else {
+                return Err(LlmError::ResponseParse {
+                    provider: provider.to_string(),
+                    body_summary: "stream contained no assistant content or tool calls".to_string(),
+                });
+            }
         }
 
         Ok(ChatResponse {
@@ -289,64 +326,135 @@ impl ChatStream {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+enum ProjectorMode {
+    #[default]
+    Normal,
+    HiddenControlBlock,
+    ThinkingBlock,
+}
+
+#[derive(Debug, Default, PartialEq, Eq)]
+struct ProjectedDeltas {
+    visible: String,
+    reasoning: String,
+}
+
 #[derive(Debug, Default)]
 struct ControlBlockProjector {
     pending: String,
-    hidden: bool,
+    mode: ProjectorMode,
 }
 
 impl ControlBlockProjector {
-    const OPENERS: [&'static str; 2] = ["```axiom-tool", "```axiom-todo"];
+    const HIDDEN_OPENERS: [&'static str; 2] = ["```axiom-tool", "```axiom-todo"];
+    const THINK_OPENER: &'static str = "<think>";
+    const THINK_CLOSER: &'static str = "</think>";
 
-    fn push(&mut self, delta: &str) -> String {
+    fn push(&mut self, delta: &str) -> ProjectedDeltas {
         self.pending.push_str(delta);
-        let mut visible = String::new();
+        let mut deltas = ProjectedDeltas::default();
+
         loop {
-            if self.hidden {
-                if let Some(end) = self.pending.find("```") {
-                    self.pending.drain(..end + 3);
-                    self.hidden = false;
-                    continue;
+            match self.mode {
+                ProjectorMode::HiddenControlBlock => {
+                    if let Some(end) = self.pending.find("```") {
+                        self.pending.drain(..end + 3);
+                        self.mode = ProjectorMode::Normal;
+                        continue;
+                    }
+                    let keep = self.pending.len().min(2);
+                    let discard = floor_char_boundary(&self.pending, self.pending.len() - keep);
+                    self.pending.drain(..discard);
+                    break;
                 }
-                let keep = self.pending.len().min(2);
-                let discard = floor_char_boundary(&self.pending, self.pending.len() - keep);
-                self.pending.drain(..discard);
-                break;
-            }
+                ProjectorMode::ThinkingBlock => {
+                    if let Some(end) = self.pending.find(Self::THINK_CLOSER) {
+                        deltas.reasoning.push_str(&self.pending[..end]);
+                        self.pending.drain(..end + Self::THINK_CLOSER.len());
+                        self.mode = ProjectorMode::Normal;
+                        continue;
+                    }
+                    let retained = longest_suffix_prefix(&self.pending, Self::THINK_CLOSER);
+                    let emit_bytes = floor_char_boundary(
+                        &self.pending,
+                        self.pending.len().saturating_sub(retained),
+                    );
+                    if emit_bytes > 0 {
+                        deltas.reasoning.push_str(&self.pending[..emit_bytes]);
+                        self.pending.drain(..emit_bytes);
+                    }
+                    break;
+                }
+                ProjectorMode::Normal => {
+                    let hidden_match = Self::HIDDEN_OPENERS
+                        .iter()
+                        .filter_map(|opener| self.pending.find(opener).map(|idx| (idx, *opener, true)))
+                        .min_by_key(|(idx, _, _)| *idx);
+                    let think_match = self
+                        .pending
+                        .find(Self::THINK_OPENER)
+                        .map(|idx| (idx, Self::THINK_OPENER, false));
 
-            if let Some((index, opener)) = Self::OPENERS
-                .iter()
-                .filter_map(|opener| self.pending.find(opener).map(|index| (index, *opener)))
-                .min_by_key(|(index, _)| *index)
-            {
-                visible.push_str(&self.pending[..index]);
-                self.pending.drain(..index + opener.len());
-                self.hidden = true;
-                continue;
-            }
+                    let earliest = match (hidden_match, think_match) {
+                        (Some(h), Some(t)) => {
+                            if h.0 <= t.0 {
+                                Some(h)
+                            } else {
+                                Some(t)
+                            }
+                        }
+                        (Some(h), None) => Some(h),
+                        (None, Some(t)) => Some(t),
+                        (None, None) => None,
+                    };
 
-            let retained = Self::OPENERS
-                .iter()
-                .map(|opener| longest_suffix_prefix(&self.pending, opener))
-                .max()
-                .unwrap_or_default();
-            let emit_bytes =
-                floor_char_boundary(&self.pending, self.pending.len().saturating_sub(retained));
-            if emit_bytes > 0 {
-                visible.push_str(&self.pending[..emit_bytes]);
-                self.pending.drain(..emit_bytes);
+                    if let Some((index, opener, is_hidden)) = earliest {
+                        deltas.visible.push_str(&self.pending[..index]);
+                        self.pending.drain(..index + opener.len());
+                        self.mode = if is_hidden {
+                            ProjectorMode::HiddenControlBlock
+                        } else {
+                            ProjectorMode::ThinkingBlock
+                        };
+                        continue;
+                    }
+
+                    let mut retained = Self::HIDDEN_OPENERS
+                        .iter()
+                        .map(|opener| longest_suffix_prefix(&self.pending, opener))
+                        .max()
+                        .unwrap_or_default();
+                    retained = retained.max(longest_suffix_prefix(&self.pending, Self::THINK_OPENER));
+
+                    let emit_bytes = floor_char_boundary(
+                        &self.pending,
+                        self.pending.len().saturating_sub(retained),
+                    );
+                    if emit_bytes > 0 {
+                        deltas.visible.push_str(&self.pending[..emit_bytes]);
+                        self.pending.drain(..emit_bytes);
+                    }
+                    break;
+                }
             }
-            break;
         }
-        visible
+
+        deltas
     }
 
-    fn finish(mut self) -> String {
-        if self.hidden {
-            String::new()
-        } else {
-            std::mem::take(&mut self.pending)
+    fn finish(mut self) -> ProjectedDeltas {
+        let mut deltas = ProjectedDeltas::default();
+        match self.mode {
+            ProjectorMode::Normal => {
+                deltas.visible = std::mem::take(&mut self.pending);
+            }
+            ProjectorMode::ThinkingBlock => {
+                deltas.reasoning = std::mem::take(&mut self.pending);
+            }
+            ProjectorMode::HiddenControlBlock => {}
         }
+        deltas
     }
 }
 
@@ -560,6 +668,16 @@ fn parse_sse_event(provider: &str, event: &[u8]) -> Result<Option<ChatChunk>> {
     for choice in payload.choices {
         chunk.done |= choice.finish_reason.is_some();
         if let Some(delta) = choice.delta {
+            if let Some(reasoning) = delta.reasoning_content.or(delta.reasoning) {
+                ensure_additional_bytes(
+                    provider,
+                    "SSE assistant reasoning delta",
+                    chunk.reasoning_delta.len(),
+                    reasoning.len(),
+                    MAX_ASSISTANT_CONTENT_BYTES,
+                )?;
+                chunk.reasoning_delta.push_str(&reasoning);
+            }
             if let Some(content) = delta.content {
                 ensure_additional_bytes(
                     provider,
@@ -635,6 +753,10 @@ struct OpenAiStreamChoice {
 struct OpenAiStreamDelta {
     #[serde(default)]
     content: Option<String>,
+    #[serde(default)]
+    reasoning_content: Option<String>,
+    #[serde(default)]
+    reasoning: Option<String>,
     #[serde(default)]
     tool_calls: Vec<OpenAiStreamToolCall>,
 }
@@ -912,10 +1034,49 @@ mod tests {
     #[test]
     fn projector_preserves_unicode_across_partial_markers() {
         let mut projector = ControlBlockProjector::default();
-        let mut visible = projector.push("hi 🦀 ``");
-        visible.push_str(&projector.push("not-a-control"));
-        visible.push_str(&projector.finish());
+        let mut visible = projector.push("hi 🦀 ``").visible;
+        visible.push_str(&projector.push("not-a-control").visible);
+        visible.push_str(&projector.finish().visible);
         assert_eq!(visible, "hi 🦀 ``not-a-control");
+    }
+
+    #[tokio::test]
+    async fn live_projection_extracts_think_blocks_into_reasoning_delta() {
+        let stream = ChatStream::from_chunks(vec![
+            ChatChunk {
+                content_delta: "<think>Planning my answer...".to_string(),
+                ..ChatChunk::default()
+            },
+            ChatChunk {
+                content_delta: " Step 1 done.</think>Hello, I am ready!".to_string(),
+                done: true,
+                ..ChatChunk::default()
+            },
+        ]);
+        let mut visible = String::new();
+        let mut reasoning = String::new();
+
+        let response = stream
+            .collect_response_with_observer("test", "model", |update| {
+                visible.push_str(&update.visible_delta);
+                reasoning.push_str(&update.reasoning_delta);
+            })
+            .await
+            .expect("collect");
+
+        assert_eq!(reasoning, "Planning my answer... Step 1 done.");
+        assert_eq!(visible, "Hello, I am ready!");
+        assert!(!visible.contains("<think>"));
+        assert!(!visible.contains("</think>"));
+        assert!(response.content.contains("<think>"));
+    }
+
+    #[test]
+    fn sse_delta_reasoning_content_is_parsed_correctly() {
+        let event = b"data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"thinking step\",\"content\":null}}]}";
+        let chunk = parse_sse_event("test", event).expect("parse sse").expect("chunk");
+        assert_eq!(chunk.reasoning_delta, "thinking step");
+        assert_eq!(chunk.content_delta, "");
     }
 
     #[test]

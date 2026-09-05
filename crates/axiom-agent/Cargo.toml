@@ -7,8 +7,8 @@ authors.workspace = true
 
 [dependencies]
 anyhow.workspace = true
-axiom-engine = { path = "../axiom-engine", version = "=1.0.3" }
-axiom-llm = { path = "../axiom-llm", version = "=1.0.3" }
+axiom-engine = { path = "../axiom-engine", version = "=1.0.4" }
+axiom-llm = { path = "../axiom-llm", version = "=1.0.4" }
 serde.workspace = true
 serde_json.workspace = true
 tiktoken-rs.workspace = true

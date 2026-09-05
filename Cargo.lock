@@ -209,7 +209,7 @@ checksum = "f2032f911046de80f0a198e0901378627c33f59ea0ac00e363d481118bd70a53"
 
 [[package]]
 name = "axiom-agent"
-version = "1.0.3"
+version = "1.0.4"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -223,7 +223,7 @@ dependencies = [
 
 [[package]]
 name = "axiom-cli"
-version = "1.0.3"
+version = "1.0.4"
 dependencies = [
  "anyhow",
  "axiom-agent",
@@ -250,7 +250,7 @@ dependencies = [
 
 [[package]]
 name = "axiom-coder"
-version = "1.0.3"
+version = "1.0.4"
 dependencies = [
  "axiom-core",
  "serde",
@@ -261,7 +261,7 @@ dependencies = [
 
 [[package]]
 name = "axiom-core"
-version = "1.0.3"
+version = "1.0.4"
 dependencies = [
  "dirs",
  "serde",
@@ -273,7 +273,7 @@ dependencies = [
 
 [[package]]
 name = "axiom-engine"
-version = "1.0.3"
+version = "1.0.4"
 dependencies = [
  "async-trait",
  "axiom-core",
@@ -289,7 +289,7 @@ dependencies = [
 
 [[package]]
 name = "axiom-lens"
-version = "1.0.3"
+version = "1.0.4"
 dependencies = [
  "axiom-engine",
  "serde",
@@ -297,7 +297,7 @@ dependencies = [
 
 [[package]]
 name = "axiom-llm"
-version = "1.0.3"
+version = "1.0.4"
 dependencies = [
  "async-trait",
  "reqwest",
@@ -309,7 +309,7 @@ dependencies = [
 
 [[package]]
 name = "axiom-proof"
-version = "1.0.3"
+version = "1.0.4"
 dependencies = [
  "axiom-core",
  "serde",
@@ -319,7 +319,7 @@ dependencies = [
 
 [[package]]
 name = "axiom-update"
-version = "1.0.3"
+version = "1.0.4"
 dependencies = [
  "axiom-core",
  "reqwest",

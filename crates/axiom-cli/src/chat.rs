@@ -1361,6 +1361,7 @@ struct TerminalInput {
 
 struct TerminalStreamRenderer {
     ui: Renderer,
+    thinking_open: bool,
     response_open: bool,
     visible_content: bool,
     spinner: Option<Spinner>,
@@ -1371,6 +1372,7 @@ impl TerminalStreamRenderer {
         let spinner = Spinner::start("Thinking...", ui.primary_color());
         Self {
             ui,
+            thinking_open: false,
             response_open: false,
             visible_content: false,
             spinner: Some(spinner),
@@ -1381,7 +1383,10 @@ impl TerminalStreamRenderer {
         if let Some(mut spinner) = self.spinner.take() {
             spinner.stop();
         }
-        Spinner::clear_line();
+        if self.thinking_open {
+            println!();
+            self.thinking_open = false;
+        }
         if self.response_open {
             println!();
             self.response_open = false;
@@ -1391,12 +1396,27 @@ impl TerminalStreamRenderer {
 
 impl StreamObserver for TerminalStreamRenderer {
     fn on_stream_update(&mut self, update: &ChatStreamUpdate) {
+        if !update.reasoning_delta.is_empty() {
+            if let Some(mut spinner) = self.spinner.take() {
+                spinner.stop();
+            }
+            if !self.thinking_open {
+                print!("{}", self.ui.thinking_prefix());
+                self.thinking_open = true;
+            }
+            print!("{}", self.ui.thinking_delta(&update.reasoning_delta));
+            let _ = io::stdout().flush();
+        }
+
         if !update.visible_delta.is_empty() {
             if let Some(mut spinner) = self.spinner.take() {
                 spinner.stop();
             }
+            if self.thinking_open {
+                println!();
+                self.thinking_open = false;
+            }
             if !self.response_open {
-                Spinner::clear_line();
                 print!("{}", self.ui.assistant_prefix());
                 self.response_open = true;
             }
@@ -1404,6 +1424,7 @@ impl StreamObserver for TerminalStreamRenderer {
             let _ = io::stdout().flush();
             self.visible_content = true;
         }
+
         if update.done {
             self.finish_line();
         }

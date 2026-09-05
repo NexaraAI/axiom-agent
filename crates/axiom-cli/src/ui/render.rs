@@ -82,7 +82,7 @@ impl Renderer {
             "{}\n  {}  {}\n{}\n  {} {}\n  {} {} {}\n  {} {}\n  {} {}\n{}\n  {}\n  {}\n{}",
             self.smoke(&format!("╭─{border}")),
             self.red("◆ AXIOM AGENT"),
-            self.smoke("v1.0.3 · Autonomous Workspace Harness"),
+            self.smoke(&format!("v{} · Autonomous Workspace Harness", env!("CARGO_PKG_VERSION"))),
             self.smoke(&format!("├─{border}")),
             self.smoke("provider:"),
             self.bone(provider),
@@ -132,7 +132,35 @@ impl Renderer {
         }
     }
 
+    pub(crate) fn thinking_prefix(&self) -> String {
+        format!("  {} ", self.smoke("💭 Thinking:"))
+    }
+
+    pub(crate) fn thinking_delta(&self, content: &str) -> String {
+        self.smoke(content)
+    }
+
+    pub(crate) fn thinking(&self, content: &str) -> String {
+        format!("  {} {}", self.smoke("💭 Thinking:"), self.smoke(content))
+    }
+
     pub(crate) fn assistant(&self, content: &str) -> String {
+        if let Some(rest) = content.strip_prefix("<think>") {
+            if let Some((thought, answer)) = rest.split_once("</think>") {
+                let thought = thought.trim();
+                let answer = answer.trim();
+                if !thought.is_empty() && !answer.is_empty() {
+                    return format!(
+                        "{}\n{} {}",
+                        self.thinking(thought),
+                        self.red("◆ Axiom:"),
+                        self.ash(answer)
+                    );
+                } else if answer.is_empty() {
+                    return self.thinking(thought);
+                }
+            }
+        }
         format!("{} {}", self.red("◆ Axiom:"), self.ash(content))
     }
 

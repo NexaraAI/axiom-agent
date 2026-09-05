@@ -4,6 +4,28 @@ All notable changes to Axiom are documented here. Versions follow semantic
 versioning. Stable releases document user-visible changes, configuration or
 proof migrations, security fixes, and upgrade actions.
 
+## 1.0.4
+
+This release fixes terminal line-erasure on streaming completion and adds live streaming visibility for model thinking/reasoning processes.
+
+Install it:
+
+```bash
+npm install -g axiom-agent@1.0.4
+```
+
+### Fixed & Improved
+
+- **Fixed Disappearing Responses (Terminal Line-Erase Bug)**:
+  - Eliminated redundant `Spinner::clear_line()` calls in `TerminalStreamRenderer::finish_line()`.
+  - Single-line and short streaming responses are no longer wiped from the terminal screen when the stream concludes.
+- **Thinking & Reasoning Process Visibility**:
+  - Full support for live streaming of reasoning/thinking models (OpenAI-compatible `reasoning_content` and `reasoning` SSE deltas from NVIDIA NIM, DeepSeek, Groq, Ollama, OpenRouter, and Together AI).
+  - Built-in projector extracts in-band `<think>...</think>` tags (from models like DeepSeek-R1 and Qwen-2.5-Coder-R1) and routes them into reasoning events while keeping visible output clean.
+  - Subdued executive styling: Thinking processes stream under `💭 Thinking:` in subtle muted grey, cleanly finishing with a newline before the assistant's response (`◆ Axiom:`).
+- **Dynamic Versioning in Dashboard Banner**:
+  - CLI dashboard banner now dynamically reflects `CARGO_PKG_VERSION`.
+
 ## 1.0.3
 
 This release resolves interactive confirmation UX and native tool calling compatibility across all LLM providers.

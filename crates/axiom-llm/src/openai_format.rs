@@ -139,13 +139,27 @@ pub fn parse_chat_response(
         });
     }
     let raw_content = message.content.as_deref().unwrap_or_default();
+    let raw_reasoning = message
+        .reasoning_content
+        .as_deref()
+        .or(message.reasoning.as_deref())
+        .unwrap_or_default();
     ensure_bytes(
         provider,
         "assistant content",
         raw_content.len(),
         MAX_ASSISTANT_CONTENT_BYTES,
     )?;
-    let content = raw_content.trim();
+    ensure_bytes(
+        provider,
+        "assistant reasoning",
+        raw_reasoning.len(),
+        MAX_ASSISTANT_CONTENT_BYTES,
+    )?;
+    let mut content = raw_content.trim();
+    if content.is_empty() && !raw_reasoning.trim().is_empty() {
+        content = raw_reasoning.trim();
+    }
     if content.is_empty() && tool_calls.is_empty() {
         return Err(LlmError::ResponseParse {
             provider: provider.to_string(),
@@ -238,6 +252,10 @@ struct OpenAiChoice {
 #[derive(Debug, Deserialize)]
 struct OpenAiMessage {
     content: Option<String>,
+    #[serde(default)]
+    reasoning_content: Option<String>,
+    #[serde(default)]
+    reasoning: Option<String>,
     #[serde(default)]
     tool_calls: Vec<OpenAiToolCall>,
 }
