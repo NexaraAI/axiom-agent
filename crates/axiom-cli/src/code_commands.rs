@@ -33,7 +33,7 @@ use axiom_proof::{
 };
 use serde_json::json;
 
-use crate::{chat, onboarding, startup, ui::animation::Spinner, CodeCommand};
+use crate::{chat, onboarding, startup, ui::Spinner, CodeCommand};
 
 pub(crate) async fn run(command: CodeCommand) -> Result<()> {
     ensure_onboarding_completed().await?;
