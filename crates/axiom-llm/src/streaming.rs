@@ -247,9 +247,7 @@ impl ChatStream {
             let mut reasoning_delta = chunk.reasoning_delta.clone();
             reasoning_delta.push_str(&projected.reasoning);
 
-            if !projected.visible.is_empty()
-                || !reasoning_delta.is_empty()
-                || had_tool_call_deltas
+            if !projected.visible.is_empty() || !reasoning_delta.is_empty() || had_tool_call_deltas
             {
                 observer(ChatStreamUpdate {
                     visible_delta: projected.visible,
@@ -389,7 +387,9 @@ impl ControlBlockProjector {
                 ProjectorMode::Normal => {
                     let hidden_match = Self::HIDDEN_OPENERS
                         .iter()
-                        .filter_map(|opener| self.pending.find(opener).map(|idx| (idx, *opener, true)))
+                        .filter_map(|opener| {
+                            self.pending.find(opener).map(|idx| (idx, *opener, true))
+                        })
                         .min_by_key(|(idx, _, _)| *idx);
                     let think_match = self
                         .pending
@@ -425,7 +425,8 @@ impl ControlBlockProjector {
                         .map(|opener| longest_suffix_prefix(&self.pending, opener))
                         .max()
                         .unwrap_or_default();
-                    retained = retained.max(longest_suffix_prefix(&self.pending, Self::THINK_OPENER));
+                    retained =
+                        retained.max(longest_suffix_prefix(&self.pending, Self::THINK_OPENER));
 
                     let emit_bytes = floor_char_boundary(
                         &self.pending,
@@ -1074,7 +1075,9 @@ mod tests {
     #[test]
     fn sse_delta_reasoning_content_is_parsed_correctly() {
         let event = b"data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"thinking step\",\"content\":null}}]}";
-        let chunk = parse_sse_event("test", event).expect("parse sse").expect("chunk");
+        let chunk = parse_sse_event("test", event)
+            .expect("parse sse")
+            .expect("chunk");
         assert_eq!(chunk.reasoning_delta, "thinking step");
         assert_eq!(chunk.content_delta, "");
     }
