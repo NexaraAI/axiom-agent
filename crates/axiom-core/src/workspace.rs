@@ -204,24 +204,7 @@ impl Workspace {
             });
         }
 
-        let missing_suffix = normalized
-            .strip_prefix(&existing_ancestor)
-            .map(|p| p.to_path_buf())
-            .or_else(|_| {
-                #[cfg(windows)]
-                {
-                    let norm_stripped = strip_verbatim_prefix(&normalized);
-                    let anc_stripped = strip_verbatim_prefix(&existing_ancestor);
-                    norm_stripped
-                        .strip_prefix(&anc_stripped)
-                        .map(|p| p.to_path_buf())
-                        .map_err(|_| ())
-                }
-                #[cfg(not(windows))]
-                {
-                    Err(())
-                }
-            })
+        let missing_suffix = strip_ancestor_prefix(&normalized, &existing_ancestor)
             .map_err(|_| AxiomError::InvalidPath {
                 path: normalized.clone(),
             })?;
@@ -285,12 +268,6 @@ fn strip_verbatim_prefix(path: &Path) -> PathBuf {
     path.to_path_buf()
 }
 
-#[cfg(not(windows))]
-#[inline]
-fn strip_verbatim_prefix(path: &Path) -> PathBuf {
-    path.to_path_buf()
-}
-
 fn path_starts_with(path: &Path, base: &Path) -> bool {
     if path.starts_with(base) {
         return true;
@@ -305,6 +282,25 @@ fn path_starts_with(path: &Path, base: &Path) -> bool {
     {
         false
     }
+}
+
+fn strip_ancestor_prefix<'a>(path: &'a Path, ancestor: &Path) -> Result<&'a Path, ()> {
+    if let Ok(suffix) = path.strip_prefix(ancestor) {
+        return Ok(suffix);
+    }
+    #[cfg(windows)]
+    {
+        let p = strip_verbatim_prefix(path);
+        let a = strip_verbatim_prefix(ancestor);
+        if p.starts_with(&a) {
+            let mut path_comps = path.components();
+            for _ in a.components() {
+                path_comps.next();
+            }
+            return Ok(path_comps.as_path());
+        }
+    }
+    Err(())
 }
 
 #[cfg(test)]
