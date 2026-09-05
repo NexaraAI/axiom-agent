@@ -41,6 +41,9 @@ pub fn select_relevant_skills_with_budget(
     max_card_token_budget: u32,
 ) -> Vec<SkillCard> {
     let intent = analyze_intent(prompt);
+    if intent.task_type == "identity" {
+        return Vec::new();
+    }
     let platform = Platform::current();
     let prompt_lower = prompt.to_ascii_lowercase();
     let available = installed_skills

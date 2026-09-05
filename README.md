@@ -14,7 +14,7 @@ Proof Mode records what happened during each session: what you asked, which skil
 
 ## Current Status
 
-This repository contains Axiom `1.0.0`, the first stable v1 release:
+This repository contains Axiom `1.0.1`, a stable release with battle-tested UX and stability improvements:
 
 ```bash
 npm install -g axiom-agent

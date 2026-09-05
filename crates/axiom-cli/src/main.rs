@@ -705,9 +705,7 @@ async fn startup() -> Result<()> {
                 eprintln!("Then run `axiom doctor` to verify, and `axiom` to chat.");
                 return Ok(());
             }
-            println!("Welcome to Axiom! Let's get you set up (takes ~1 minute).");
-            println!("I'll walk you through 3 quick steps: workspace → provider → skills.");
-            run_onboarding_then_doctor(OnboardingCommand::default()).await?;
+            onboarding::run_onboarding_command(OnboardingCommand::default()).await?;
             if startup::route_for_config_path(&config_path)? == StartupRoute::Chat {
                 chat::run_terminal_chat().await
             } else {

@@ -288,23 +288,6 @@ pub(crate) async fn run_terminal_onboarding() -> Result<OnboardingResult> {
 
     println!("{}", ui.onboarding_banner());
     println!();
-    println!(
-        "{}",
-        ui.plain("Welcome! I'll get you set up in 3 quick steps:")
-    );
-    println!(
-        "{}",
-        ui.plain("  Step 1/3 — Pick a workspace folder (where your files live)")
-    );
-    println!(
-        "{}",
-        ui.plain("  Step 2/3 — Connect an AI provider (or try offline demo mode)")
-    );
-    println!(
-        "{}",
-        ui.plain("  Step 3/3 — I install starter skills automatically")
-    );
-    println!();
     println!("{}", ui.header("config", config_path.display()));
 
     if let Some(existing) = existing_config {
@@ -736,20 +719,20 @@ async fn prompt_provider_setup() -> Result<ProviderSetup> {
     println!("    4) GitHub Models — included quota if you have GitHub");
     println!("  Hosted (paid / advanced):");
     println!("    5) NVIDIA NIM (hosted API)");
-    println!("    8) OpenAI (paid)");
-    println!("    9) Cloudflare AI Gateway");
+    println!("    6) OpenAI (paid)");
+    println!("    7) Cloudflare AI Gateway");
     println!("  Local (no key, but needs lots of RAM/disk — can be slow on small machines):");
-    println!("    6) Ollama (runs on your machine)");
-    println!("    7) LM Studio (runs on your machine)");
+    println!("    8) Ollama (runs on your machine)");
+    println!("    9) LM Studio (runs on your machine)");
     println!("  Other:");
     println!("    10) Custom OpenAI-compatible endpoint");
     println!("    11) Skip for now (you can set up later; chat will remind you)");
     println!();
-    println!("Tip: on a low-memory machine, start with 1 or 2. Local models (6/7) can use gigabytes of RAM.");
+    println!("Tip: on a low-memory machine, start with 1 or 2. Local models (8/9) can use gigabytes of RAM.");
     println!("You can pick one provider, or two comma-separated (first one is active).");
 
     loop {
-        let selection = prompt_with_default("Choose provider(s), e.g. 2  — or 1,6 for two", "2")?;
+        let selection = prompt_with_default("Choose provider(s), e.g. 2  — or 1,8 for two", "2")?;
         let mut choices = selection
             .split([',', ' '])
             .map(str::trim)
@@ -757,7 +740,7 @@ async fn prompt_provider_setup() -> Result<ProviderSetup> {
             .collect::<Vec<_>>();
         choices.dedup();
         if choices.is_empty() || choices.len() > 2 {
-            println!("Pick just one number, or two separated by comma/space (e.g. \"1,6\").");
+            println!("Pick just one number, or two separated by comma/space (e.g. \"1,8\").");
             continue;
         }
         if choices.contains(&"11") && choices.len() > 1 {
@@ -771,15 +754,13 @@ async fn prompt_provider_setup() -> Result<ProviderSetup> {
         let mut invalid = false;
         for choice in choices {
             let setup = match choice {
-                "1" => prompt_preset_setup("groq").await?,
-                "2" => prompt_preset_setup("openrouter").await?,
-                "3" => prompt_preset_setup("gemini").await?,
-                "4" => prompt_preset_setup("github-models").await?,
-                "5" => prompt_preset_setup("nvidia").await?,
-                "6" => prompt_preset_setup("ollama").await?,
-                "7" => prompt_preset_setup("lm-studio").await?,
-                "8" => prompt_preset_setup("openai").await?,
-                "9" => {
+                "1" | "groq" => prompt_preset_setup("groq").await?,
+                "2" | "openrouter" => prompt_preset_setup("openrouter").await?,
+                "3" | "gemini" => prompt_preset_setup("gemini").await?,
+                "4" | "github-models" => prompt_preset_setup("github-models").await?,
+                "5" | "nvidia" | "nvidia-nim" => prompt_preset_setup("nvidia").await?,
+                "6" | "openai" => prompt_preset_setup("openai").await?,
+                "7" | "cloudflare" => {
                     let account_id = prompt_required("Cloudflare account_id")?;
                     let gateway_id = prompt_with_default("Cloudflare gateway_id", "default")?;
                     let api_token_env = prompt_with_default(
@@ -795,6 +776,8 @@ async fn prompt_provider_setup() -> Result<ProviderSetup> {
                         default_model,
                     }
                 }
+                "8" | "ollama" => prompt_preset_setup("ollama").await?,
+                "9" | "lm-studio" => prompt_preset_setup("lm-studio").await?,
                 "10" => {
                     let provider_name = prompt_required("Provider name")?;
                     let base_url = prompt_required("Base URL")?;
@@ -825,7 +808,7 @@ async fn prompt_provider_setup() -> Result<ProviderSetup> {
                 }
                 "11" => ProviderSetup::Skip,
                 _ => {
-                    println!("Hmm, \"{choice}\" isn't 1–11. Try again (e.g. 2, or 1,6).");
+                    println!("Hmm, \"{choice}\" isn't 1–11. Try again (e.g. 2, or 1,8).");
                     invalid = true;
                     break;
                 }

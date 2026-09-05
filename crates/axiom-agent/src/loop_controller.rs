@@ -478,7 +478,20 @@ impl<'a> AgentLoop<'a> {
                     return Err(error.into());
                 }
             };
-            progress.ledger.record(response.usage.as_ref());
+            if let Some(usage) = response.usage.as_ref() {
+                progress.ledger.record(Some(usage));
+            } else {
+                let prompt_tokens =
+                    u32::try_from(progress.context_tokens_estimate).unwrap_or(u32::MAX);
+                let completion_tokens =
+                    u32::try_from((response.content.len() + 3) / 4).unwrap_or(u32::MAX);
+                let total_tokens = prompt_tokens.saturating_add(completion_tokens);
+                progress.ledger.record(Some(&axiom_llm::TokenUsage {
+                    prompt_tokens,
+                    completion_tokens,
+                    total_tokens,
+                }));
+            }
             let mut todo_update_applied = false;
             let mut todo_update_error = None;
             let assistant_content = match parse_todo_update(&response.content) {

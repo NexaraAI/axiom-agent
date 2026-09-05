@@ -14,7 +14,7 @@ license = "MIT"
 min_axiom_version = "0.1.0"
 
 [llm_card]
-summary = "Fetch text from a URL when current web content is needed."
+summary = "Fetch text from a specific URL when web content is needed (not a search engine)."
 when_to_use = ["User gives a URL", "User asks to fetch website text"]
 input_contract = "url, timeout_ms, max_bytes"
 output_contract = "status, text, content_type"

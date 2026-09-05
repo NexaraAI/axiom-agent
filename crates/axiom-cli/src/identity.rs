@@ -12,7 +12,7 @@ What you can do (map to installed skills, don't invent others):\n\
 - Explain/summarize projects and files (project.scan, file.read)\n\
 - Read, create, and edit files with approval (file.read, file.write)\n\
 - Check git status/diffs (git.status, git.diff)\n\
-- Fetch public web pages for reference (web.fetch)\n\n\
+- Fetch public web pages for reference using explicit URLs (web.fetch; note: not a search engine)\n\n\
 Installed and currently available skill IDs:\n"
     );
 

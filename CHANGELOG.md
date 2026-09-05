@@ -4,6 +4,38 @@ All notable changes to Axiom are documented here. Versions follow semantic
 versioning. Stable releases document user-visible changes, configuration or
 proof migrations, security fixes, and upgrade actions.
 
+## 1.0.1
+
+This release delivers battle-tested stability and UX refinements based on real-world
+first-run testing across platforms.
+
+Install it:
+
+```bash
+npm install -g axiom-agent@1.0.1
+```
+
+### Fixed
+
+- **Automatic binary download on launch**: If npm 11 `allowScripts` blocks or skips
+  the `postinstall` script, `bin/axiom.js` now detects the missing binary and
+  automatically downloads the matching platform release on first run.
+- **Onboarding UX stream**: Removed redundant duplicate welcome banners, cleaned
+  the onboarding sequence, and smoothly transitioned directly into chat.
+- **Sequential provider menu**: Fixed provider list numbering to be strictly
+  sequential (1 to 11) with flexible selection matching by number or name.
+- **Provider model prefix deduplication**: Cleaned up duplicated provider prefixes
+  in the status bar (e.g., `nvidia/nvidia/nemotron...` -> `nvidia/nemotron...`).
+- **Token usage fallback**: Implemented automatic token estimation when streaming
+  providers do not include token usage chunks, ensuring session stats never show 0/0.
+- **`web.fetch` HTML cleanup**: Stripped `<script>`, `<style>`, `<noscript>`, `<svg>`,
+  and tags, decoding entities and collapsing whitespace to avoid dumping raw minified
+  code into context.
+- **Clean tool output preview**: Suppressed disruptive multiline JSON preview dumps
+  after assistant replies; replaced with a single inline status pointer (`!show <id>`).
+- **Lens smalltalk bypass**: Lens now safely bypasses tool selection for greetings
+  and identity prompts ("what's up", "who are you", etc.), eliminating spurious tool matches.
+
 ## 1.0.0
 
 This is the first stable v1 release, promoted from `1.0.0-rc.1` with the

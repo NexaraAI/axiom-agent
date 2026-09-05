@@ -53,6 +53,17 @@ function resolveAxiomBinary(options = {}) {
 
   const installedPath = defaultInstalledBinaryPath(baseDir, platform, arch);
   if (!fsImpl.existsSync(installedPath)) {
+    const postinstallPath = path.join(baseDir, "..", "scripts", "postinstall.js");
+    if (fsImpl.existsSync(postinstallPath)) {
+      console.log("[axiom] Downloading native binary for your platform...");
+      const { spawnSync } = require("child_process");
+      const downloadResult = spawnSync(process.execPath, [postinstallPath], {
+        stdio: "inherit"
+      });
+      if (downloadResult.status === 0 && fsImpl.existsSync(installedPath)) {
+        return installedPath;
+      }
+    }
     throw new Error(
       "Axiom binary is missing. Try reinstalling with npm or set AXIOM_AGENT_BINARY_PATH during development."
     );

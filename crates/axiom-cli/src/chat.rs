@@ -1572,15 +1572,12 @@ async fn run_terminal_session(mut session: ChatSession) -> Result<()> {
                     tool_results,
                     runtime,
                 } = turn;
-                for result in tool_results {
-                    println!("{}", ui.tool_notice(&result.skill_id, false));
-                    let saved = session.save_tool_output(&result)?;
-                    println!("{}", ui.plain("Result verified and summarized."));
-                    println!("{}", ui.plain(&saved.preview));
+                for result in &tool_results {
+                    let saved = session.save_tool_output(result)?;
                     println!(
                         "{}",
                         ui.status_line(&format!(
-                            "saved as {}{}; use !show {}",
+                            "tool output saved as {}{}; use !show {}",
                             saved.id,
                             if saved.truncated {
                                 " (preview truncated)"
@@ -1918,9 +1915,18 @@ impl TransitionObserver for DurableTransitionWriter {
                     provider,
                     model,
                     ..
-                } => println!("Axiom: working with {provider}/{model} (iteration {iteration})..."),
+                } => {
+                    let display_model =
+                        model.strip_prefix(&format!("{provider}/")).unwrap_or(model);
+                    println!(
+                        "Axiom: working with {provider}/{display_model} (iteration {iteration})..."
+                    );
+                }
                 AgentTransitionKind::ToolStarted { request, .. } => {
                     println!("Axiom Tool: running {}...", request.skill_id)
+                }
+                AgentTransitionKind::ToolCompleted { event, .. } => {
+                    println!("Axiom Tool: executed {}", event.result.skill_id)
                 }
                 AgentTransitionKind::ReflectQueued { .. } => {
                     println!("Axiom: verifying tool results...")

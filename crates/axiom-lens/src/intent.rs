@@ -232,8 +232,23 @@ fn is_identity_or_smalltalk_prompt(input: &str) -> bool {
         "what do you do",
         "tell me about yourself",
         "help me understand",
+        "what's up",
+        "whatsup",
+        "whats up",
+        "how are you",
     ];
-    const STANDALONE_SMALLTALK: &[&str] = &["hi", "hello", "hey", "thanks", "thank you"];
+    const STANDALONE_SMALLTALK: &[&str] = &[
+        "hi",
+        "hello",
+        "hey",
+        "thanks",
+        "thank you",
+        "what's up",
+        "whatsup",
+        "whats up",
+        "how are you",
+        "sup",
+    ];
 
     IDENTITY_PHRASES
         .iter()
@@ -324,5 +339,19 @@ mod tests {
         assert!(!intent
             .candidate_skill_ids
             .contains(&"git.status".to_string()));
+    }
+
+    #[test]
+    fn detects_smalltalk_and_greetings_as_identity_intent() {
+        for prompt in &[
+            "you work dammn nice whatsup man",
+            "what can you do?",
+            "how are you",
+            "hello!",
+        ] {
+            let intent = analyze_intent(prompt);
+            assert_eq!(intent.task_type, "identity", "failed on: {prompt}");
+            assert!(intent.candidate_skill_ids.is_empty());
+        }
     }
 }

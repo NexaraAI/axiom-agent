@@ -862,7 +862,12 @@ async fn web_fetch(
     {
         append_bounded_response_chunk(&mut bytes, &chunk, context.max_web_response_bytes)?;
     }
-    let text = String::from_utf8_lossy(&bytes).to_string();
+    let raw_text = String::from_utf8_lossy(&bytes).to_string();
+    let text = if content_type.to_ascii_lowercase().contains("html") {
+        extract_text_from_html(&raw_text)
+    } else {
+        raw_text
+    };
 
     Ok(json!({
         "url": url,
@@ -883,6 +888,129 @@ fn append_bounded_response_chunk(
     }
     response.extend_from_slice(chunk);
     Ok(())
+}
+
+fn extract_text_from_html(html: &str) -> String {
+    let mut result = String::with_capacity(html.len() / 2);
+    let mut in_tag = false;
+    let mut tag_name = String::new();
+    let mut skip_content_tag: Option<&str> = None;
+    let mut chars = html.chars().peekable();
+
+    while let Some(c) = chars.next() {
+        if let Some(skip_tag) = skip_content_tag {
+            if c == '<' && chars.peek() == Some(&'/') {
+                chars.next();
+                let mut close_name = String::new();
+                while let Some(&next_c) = chars.peek() {
+                    if next_c.is_alphanumeric() {
+                        close_name.push(next_c.to_ascii_lowercase());
+                        chars.next();
+                    } else {
+                        break;
+                    }
+                }
+                while let Some(&next_c) = chars.peek() {
+                    chars.next();
+                    if next_c == '>' {
+                        break;
+                    }
+                }
+                if close_name == skip_tag {
+                    skip_content_tag = None;
+                }
+            }
+            continue;
+        }
+
+        if c == '<' {
+            in_tag = true;
+            tag_name.clear();
+            let is_close = chars.peek() == Some(&'/');
+            if is_close {
+                chars.next();
+            }
+            while let Some(&next_c) = chars.peek() {
+                if next_c.is_alphanumeric() {
+                    tag_name.push(next_c.to_ascii_lowercase());
+                    chars.next();
+                } else {
+                    break;
+                }
+            }
+            if !is_close && matches!(tag_name.as_str(), "script" | "style" | "noscript" | "svg") {
+                skip_content_tag = match tag_name.as_str() {
+                    "script" => Some("script"),
+                    "style" => Some("style"),
+                    "noscript" => Some("noscript"),
+                    "svg" => Some("svg"),
+                    _ => None,
+                };
+            }
+            if matches!(
+                tag_name.as_str(),
+                "p" | "div" | "br" | "li" | "h1" | "h2" | "h3" | "h4" | "h5" | "h6" | "tr"
+            ) {
+                result.push('\n');
+            }
+            continue;
+        }
+
+        if in_tag {
+            if c == '>' {
+                in_tag = false;
+            }
+            continue;
+        }
+
+        if c == '&' {
+            let mut entity = String::new();
+            while let Some(&next_c) = chars.peek() {
+                if next_c == ';' {
+                    chars.next();
+                    break;
+                }
+                if next_c.is_alphanumeric() || next_c == '#' {
+                    entity.push(next_c);
+                    chars.next();
+                } else {
+                    break;
+                }
+            }
+            match entity.as_str() {
+                "amp" => result.push('&'),
+                "lt" => result.push('<'),
+                "gt" => result.push('>'),
+                "quot" => result.push('"'),
+                "apos" | "#39" => result.push('\''),
+                "nbsp" => result.push(' '),
+                _ => {
+                    result.push('&');
+                    result.push_str(&entity);
+                }
+            }
+            continue;
+        }
+
+        result.push(c);
+    }
+
+    let mut cleaned = String::new();
+    let mut consecutive_newlines = 0;
+    for line in result.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            consecutive_newlines += 1;
+            if consecutive_newlines <= 2 {
+                cleaned.push('\n');
+            }
+        } else {
+            consecutive_newlines = 0;
+            cleaned.push_str(trimmed);
+            cleaned.push('\n');
+        }
+    }
+    cleaned.trim().to_string()
 }
 
 fn validated_web_target(
@@ -2100,5 +2228,31 @@ min_axiom_version = "0.1.0"
             "axiom-engine-executor-test-{nanos}-{id}-{:?}",
             std::thread::current().id()
         ))
+    }
+
+    #[test]
+    fn extract_text_from_html_strips_scripts_styles_and_tags() {
+        let sample = r#"
+            <!DOCTYPE html>
+            <html>
+            <head>
+                <title>Test Page</title>
+                <style>body { color: red; }</style>
+                <script>var secret = 12345;</script>
+            </head>
+            <body>
+                <noscript>JavaScript disabled</noscript>
+                <h1>Welcome &amp; Hello</h1>
+                <p>This is a paragraph with <a href="/link">a link</a> &quot;quoted&quot;.</p>
+            </body>
+            </html>
+        "#;
+        let text = extract_text_from_html(sample);
+        assert!(!text.contains("var secret"));
+        assert!(!text.contains("color: red"));
+        assert!(!text.contains("JavaScript disabled"));
+        assert!(!text.contains("<h1>"));
+        assert!(text.contains("Welcome & Hello"));
+        assert!(text.contains("This is a paragraph with a link \"quoted\"."));
     }
 }
