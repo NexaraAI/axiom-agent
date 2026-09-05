@@ -4,6 +4,28 @@ All notable changes to Axiom are documented here. Versions follow semantic
 versioning. Stable releases document user-visible changes, configuration or
 proof migrations, security fixes, and upgrade actions.
 
+## 1.0.3
+
+This release resolves interactive confirmation UX and native tool calling compatibility across all LLM providers.
+
+Install it:
+
+```bash
+npm install -g axiom-agent@1.0.3
+```
+
+### Fixed & Improved
+
+- **Interactive Plan Confirmation**:
+  - Replaced cryptic `[a/e/c]: ` prompt with an executive decision menu displaying clear options:
+    `[1] Apply changes now`, `[2] Revise / edit plan`, `[3] Cancel`.
+  - Pressing **Enter** defaults to **Apply** (`ApplyChoice::Apply`), preventing accidental cancellations.
+  - Plan revision allows pressing Enter to keep current plan without token waste.
+  - Cancelling or encountering errors during auto-routed tasks never exits to shell; it stays seamlessly in the chat session.
+- **Universal Provider Tool Call Routing**:
+  - `skill_id_for_native_tool` now handles all tool naming conventions used by diverse LLMs (including `web.fetch`, `axiom_web_fetch`, `web_fetch`, `axiom.web.fetch`).
+  - Fixes `provider requested unknown Axiom function: web.fetch` when executing with models like NVIDIA Nemotron.
+
 ## 1.0.2
 
 This release brings an autonomous harness overhaul inspired by Hermes Agent and OpenCode,

@@ -821,10 +821,22 @@ impl<'a> AgentLoop<'a> {
     }
 
     fn skill_id_for_native_tool(&self, name: &str) -> Option<&str> {
+        let cleaned = name.trim();
+        let unprefix = cleaned
+            .strip_prefix("axiom_")
+            .or_else(|| cleaned.strip_prefix("axiom."))
+            .unwrap_or(cleaned);
+
         self.installed_skills
             .iter()
             .map(|skill| skill.manifest.id.as_str())
-            .find(|skill_id| native_tool_name(skill_id) == name)
+            .find(|skill_id| {
+                *skill_id == cleaned
+                    || native_tool_name(skill_id) == cleaned
+                    || *skill_id == unprefix
+                    || skill_id.replace('.', "_") == cleaned
+                    || skill_id.replace('.', "_") == unprefix
+            })
     }
 }
 

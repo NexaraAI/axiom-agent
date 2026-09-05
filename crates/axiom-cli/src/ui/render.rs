@@ -82,7 +82,7 @@ impl Renderer {
             "{}\n  {}  {}\n{}\n  {} {}\n  {} {} {}\n  {} {}\n  {} {}\n{}\n  {}\n  {}\n{}",
             self.smoke(&format!("╭─{border}")),
             self.red("◆ AXIOM AGENT"),
-            self.smoke("v1.0.2 · Autonomous Workspace Harness"),
+            self.smoke("v1.0.3 · Autonomous Workspace Harness"),
             self.smoke(&format!("├─{border}")),
             self.smoke("provider:"),
             self.bone(provider),

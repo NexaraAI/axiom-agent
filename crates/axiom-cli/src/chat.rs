@@ -1570,7 +1570,11 @@ async fn run_terminal_session(mut session: ChatSession) -> Result<()> {
                     ui.lens_notice("this looks like a project coding task.")
                 );
                 if confirm("Switch to Axiom Coder mode?", true)? {
-                    crate::code_commands::run_task_from_chat(trimmed.to_string()).await?;
+                    if let Err(error) =
+                        crate::code_commands::run_task_from_chat(trimmed.to_string()).await
+                    {
+                        println!("{}", ui.error(&error));
+                    }
                     continue;
                 }
             }
@@ -1579,7 +1583,11 @@ async fn run_terminal_session(mut session: ChatSession) -> Result<()> {
                     "{}",
                     ui.lens_notice("switching to Axiom Coder mode for project level coding.")
                 );
-                crate::code_commands::run_task_from_chat(trimmed.to_string()).await?;
+                if let Err(error) =
+                    crate::code_commands::run_task_from_chat(trimmed.to_string()).await
+                {
+                    println!("{}", ui.error(&error));
+                }
                 continue;
             }
         }

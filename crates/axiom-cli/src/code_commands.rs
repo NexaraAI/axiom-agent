@@ -352,6 +352,10 @@ impl CoderSession {
                         "edit",
                     ));
                     let revision = prompt_plan_revision()?;
+                    if revision.is_empty() {
+                        println!("Keeping current plan.");
+                        continue;
+                    }
                     let revised_task = format!(
                         "{task}\n\nRevise the plan using this user feedback:\n{revision}\n\nPrevious plan:\n{plan}"
                     );
@@ -369,7 +373,11 @@ impl CoderSession {
                     ));
                     proof.cancel_trace("coder plan cancelled before patch generation");
                     let _ = proof.export();
-                    println!("Cancelled.");
+                    if self.auto_routed_to_coder {
+                        println!("Plan cancelled. Returning to chat session.");
+                    } else {
+                        println!("Cancelled.");
+                    }
                     return Ok(());
                 }
             }
@@ -1622,32 +1630,33 @@ enum ApplyChoice {
 }
 
 fn prompt_apply_choice() -> Result<ApplyChoice> {
+    println!();
+    println!("╭────────────────────────────────────────────────────────────");
+    println!("│  Plan Decision:");
+    println!("│  [1] Apply changes now       (Enter / '1' / 'y' / 'a')");
+    println!("│  [2] Revise / edit plan      ('2' / 'e' / 'edit')");
+    println!("│  [3] Cancel                  ('3' / 'c' / 'n' / 'cancel')");
+    println!("╰────────────────────────────────────────────────────────────");
     loop {
-        print!("Apply changes, edit plan, or cancel? [a/e/c]: ");
+        print!("Choice [1-3] (Default: 1 - Apply): ");
         io::stdout().flush()?;
         let mut input = String::new();
         io::stdin().read_line(&mut input)?;
         match input.trim().to_ascii_lowercase().as_str() {
-            "a" | "apply" => return Ok(ApplyChoice::Apply),
-            "e" | "edit" => return Ok(ApplyChoice::Edit),
-            "" | "c" | "cancel" => return Ok(ApplyChoice::Cancel),
-            _ => println!("Enter a, e, or c."),
+            "" | "1" | "y" | "yes" | "a" | "apply" => return Ok(ApplyChoice::Apply),
+            "2" | "e" | "edit" | "r" | "revise" => return Ok(ApplyChoice::Edit),
+            "3" | "c" | "cancel" | "n" | "no" | "q" | "quit" => return Ok(ApplyChoice::Cancel),
+            _ => println!("Please select 1 (Apply), 2 (Edit), or 3 (Cancel)."),
         }
     }
 }
 
 fn prompt_plan_revision() -> Result<String> {
-    loop {
-        print!("Describe the plan changes: ");
-        io::stdout().flush()?;
-        let mut input = String::new();
-        io::stdin().read_line(&mut input)?;
-        let revision = input.trim();
-        if !revision.is_empty() {
-            return Ok(revision.to_string());
-        }
-        println!("Plan feedback cannot be empty.");
-    }
+    print!("Describe desired plan changes (or press Enter to keep plan): ");
+    io::stdout().flush()?;
+    let mut input = String::new();
+    io::stdin().read_line(&mut input)?;
+    Ok(input.trim().to_string())
 }
 
 fn print_scan_summary(scan: &ProjectScanSummary) {
