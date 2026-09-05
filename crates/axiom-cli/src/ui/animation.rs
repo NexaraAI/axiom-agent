@@ -15,6 +15,7 @@ const SPINNER_FRAMES: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦
 pub(crate) struct Spinner {
     handle: Option<JoinHandle<()>>,
     running: Arc<AtomicBool>,
+    #[allow(dead_code)]
     message: Arc<std::sync::RwLock<String>>,
     enabled: bool,
 }
@@ -71,6 +72,7 @@ impl Spinner {
         }
     }
 
+    #[allow(dead_code)]
     pub(crate) fn set_message(&self, message: impl Into<String>) {
         if let Ok(mut guard) = self.message.write() {
             *guard = message.into();
