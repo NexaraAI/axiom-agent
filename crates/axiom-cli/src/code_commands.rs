@@ -149,10 +149,7 @@ impl CoderSession {
             cost_session_id: axiom_proof::trace::new_session_id(),
             credential_env_names,
             identity_system_message: {
-                let mut msg = crate::identity::system_message(
-                    "Axiom Agent",
-                    &installed_skill_ids,
-                );
+                let mut msg = crate::identity::system_message("Axiom Agent", &installed_skill_ids);
                 if let Some(rules) = crate::chat::load_workspace_rules(&workspace_path) {
                     msg.push_str("\nWorkspace Project Guidelines:\n");
                     msg.push_str(&rules);

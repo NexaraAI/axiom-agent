@@ -652,7 +652,11 @@ impl<'a> AgentLoop<'a> {
                     let last = messages.last_mut().expect("last message exists");
                     last.content.push_str("\n\n");
                     last.content.push_str(&observation);
-                    if let Some(last_delta) = progress.history_delta.last_mut().filter(|m| m.role == "user") {
+                    if let Some(last_delta) = progress
+                        .history_delta
+                        .last_mut()
+                        .filter(|m| m.role == "user")
+                    {
                         last_delta.content = last.content.clone();
                     }
                 } else {
@@ -688,8 +692,14 @@ impl<'a> AgentLoop<'a> {
             };
             if let Some(last_message) = messages.last_mut().filter(|m| m.role == "user") {
                 last_message.content.push_str("\n\n");
-                last_message.content.push_str(&reflection_instruction.content);
-                if let Some(last_delta) = progress.history_delta.last_mut().filter(|m| m.role == "user") {
+                last_message
+                    .content
+                    .push_str(&reflection_instruction.content);
+                if let Some(last_delta) = progress
+                    .history_delta
+                    .last_mut()
+                    .filter(|m| m.role == "user")
+                {
                     last_delta.content = last_message.content.clone();
                 }
             } else {
