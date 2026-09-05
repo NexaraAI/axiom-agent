@@ -838,12 +838,14 @@ impl CoderSession {
         }
         let skill_context = build_skill_context_message(&cards).unwrap_or_default();
         let prompt = build_plan_prompt(task, scan, &skill_context);
-        let mut spinner = Spinner::start("Drafting implementation plan...", nu_ansi_term::Color::Cyan);
-        let result = self.llm_chat(vec![ChatMessage {
-            role: "user".to_string(),
-            content: prompt,
-        }])
-        .await;
+        let mut spinner =
+            Spinner::start("Drafting implementation plan...", nu_ansi_term::Color::Cyan);
+        let result = self
+            .llm_chat(vec![ChatMessage {
+                role: "user".to_string(),
+                content: prompt,
+            }])
+            .await;
         spinner.stop();
         result
     }
@@ -856,12 +858,14 @@ impl CoderSession {
     ) -> Result<String> {
         let context = self.patch_context(scan)?;
         let prompt = build_patch_prompt_with_context(task, scan, plan, &context);
-        let mut spinner = Spinner::start("Generating patch from model...", nu_ansi_term::Color::Cyan);
-        let result = self.llm_chat(vec![ChatMessage {
-            role: "user".to_string(),
-            content: prompt,
-        }])
-        .await;
+        let mut spinner =
+            Spinner::start("Generating patch from model...", nu_ansi_term::Color::Cyan);
+        let result = self
+            .llm_chat(vec![ChatMessage {
+                role: "user".to_string(),
+                content: prompt,
+            }])
+            .await;
         spinner.stop();
         result
     }
@@ -1413,11 +1417,7 @@ impl CoderSession {
 
     fn select_skill_cards(&self, prompt: &str, max_cards: usize) -> Result<Vec<SkillCard>> {
         let installed = load_installed_skills(self.skills_dir())?;
-        let mut cards = select_relevant_skills(
-            prompt,
-            &installed,
-            max_cards,
-        );
+        let mut cards = select_relevant_skills(prompt, &installed, max_cards);
 
         for core_id in &["project.scan", "file.read", "file.write", "web.fetch"] {
             if !cards.iter().any(|c| c.id == *core_id) {

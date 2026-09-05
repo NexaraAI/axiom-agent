@@ -118,9 +118,17 @@ impl Renderer {
 
     pub(crate) fn tool_notice(&self, skill_id: &str, high_risk: bool) -> String {
         if high_risk {
-            format!("  {} {}", self.ember("▲ [HIGH RISK] Axiom Tool:"), self.bone(&format!("executed {skill_id}")))
+            format!(
+                "  {} {}",
+                self.ember("▲ [HIGH RISK] Axiom Tool:"),
+                self.bone(&format!("executed {skill_id}"))
+            )
         } else {
-            format!("  {} {}", self.green("✔ Axiom Tool:"), self.bone(&format!("executed {skill_id}")))
+            format!(
+                "  {} {}",
+                self.green("✔ Axiom Tool:"),
+                self.bone(&format!("executed {skill_id}"))
+            )
         }
     }
 
