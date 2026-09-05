@@ -620,8 +620,9 @@ fn normalize_tool_request_value(
         } else if let Some(tool) = map.get("tool").and_then(serde_json::Value::as_str) {
             tool.to_string()
         } else {
-            return Err(SkillExecutionError::ExecutionPayloadMalformed {
+            return Err(SkillExecutionError::SchemaValidation {
                 skill_id: "unknown".to_string(),
+                direction: "input",
                 message: "missing skill_id or name in tool request".to_string(),
             });
         };
@@ -641,8 +642,9 @@ fn normalize_tool_request_value(
             arguments,
         })
     } else {
-        Err(SkillExecutionError::ExecutionPayloadMalformed {
+        Err(SkillExecutionError::SchemaValidation {
             skill_id: "unknown".to_string(),
+            direction: "input",
             message: "expected json object for tool request".to_string(),
         })
     }
@@ -866,7 +868,10 @@ async fn web_fetch(
         ddg.query_pairs_mut().append_pair("q", &query);
         ddg.to_string()
     } else {
-        return Err(SkillExecutionError::MissingArgument("url".to_string()));
+        return Err(SkillExecutionError::MissingArgument {
+            skill_id: "web.fetch".to_string(),
+            argument: "url",
+        });
     };
 
     let mut current_url = validate_web_url(&raw_url, context)?;
@@ -1017,7 +1022,7 @@ async fn web_fetch(
     };
 
     Ok(json!({
-        "url": url,
+        "url": current_url.to_string(),
         "status": status,
         "content_type": content_type,
         "text": text,
@@ -1169,7 +1174,10 @@ fn validated_web_target(
     } else if let Ok(q) = string_arg(request, "query") {
         format!("https://html.duckduckgo.com/html/?q={q}")
     } else {
-        return Err(SkillExecutionError::MissingArgument("url".to_string()));
+        return Err(SkillExecutionError::MissingArgument {
+            skill_id: "web.fetch".to_string(),
+            argument: "url",
+        });
     };
     let mut parsed = validate_web_url(&url, context)?;
 
