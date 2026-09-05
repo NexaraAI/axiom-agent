@@ -142,6 +142,7 @@ impl CoderSession {
             .filter(|skill| skill.record.is_selectable())
             .map(|skill| skill.manifest.id)
             .collect();
+        let workspace_path = config.default_workspace_path();
         let credential_env_names = crate::credentials::credential_environment_names(&config)?;
         Ok(Self {
             config_path,

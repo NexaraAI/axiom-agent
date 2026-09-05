@@ -205,10 +205,6 @@ impl ChatSession {
         })
     }
 
-    pub(crate) fn load_workspace_rules(workspace_root: &std::path::Path) -> Option<String> {
-        load_workspace_rules(workspace_root)
-    }
-
     pub(crate) fn provider_names(&self) -> Vec<String> {
         self.config.providers.keys().cloned().collect()
     }
