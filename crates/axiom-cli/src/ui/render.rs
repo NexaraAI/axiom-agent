@@ -137,7 +137,11 @@ impl Renderer {
     }
 
     pub(crate) fn error(&self, error: impl std::fmt::Display) -> String {
-        format!("  {} {}", self.ember("✖ Error:"), self.bone(&error.to_string()))
+        format!(
+            "  {} {}",
+            self.ember("✖ Error:"),
+            self.bone(&error.to_string())
+        )
     }
 
     pub(crate) fn success(&self, message: &str) -> String {

@@ -167,9 +167,23 @@ pub fn analyze_intent(prompt: &str) -> IntentAnalysis {
     if contains_any(
         &lower,
         &[
-            "website", "fetch", "url", "http://", "https://", "search", "web",
-            "research", "lookup", "browse", "docs", "documentation", "google", "find online",
-            "online", "readme", "wiki",
+            "website",
+            "fetch",
+            "url",
+            "http://",
+            "https://",
+            "search",
+            "web",
+            "research",
+            "lookup",
+            "browse",
+            "docs",
+            "documentation",
+            "google",
+            "find online",
+            "online",
+            "readme",
+            "wiki",
         ],
     ) {
         needs_web = true;

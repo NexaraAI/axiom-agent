@@ -341,7 +341,7 @@ impl CoderSession {
                         "approved",
                     ));
                     return self
-                        .run_apply_task_with_plan(task, &scan, &plan, &mut proof)
+                        .run_apply_task_with_plan(task, &scan, &plan, &mut proof, false)
                         .await;
                 }
                 ApplyChoice::Edit => {
@@ -381,7 +381,7 @@ impl CoderSession {
         let scan = self.scan(&mut proof)?;
         let plan = self.request_plan(task, &scan, Some(&mut proof)).await?;
         print_plan(&plan);
-        self.run_apply_task_with_plan(task, &scan, &plan, &mut proof)
+        self.run_apply_task_with_plan(task, &scan, &plan, &mut proof, true)
             .await
     }
 
@@ -391,8 +391,9 @@ impl CoderSession {
         scan: &ProjectScanSummary,
         plan: &str,
         proof: &mut ProofRecorder,
+        prompt_confirm: bool,
     ) -> Result<()> {
-        if !chat::confirm("Request patch from model?", true)? {
+        if prompt_confirm && !chat::confirm("Request patch from model?", true)? {
             proof.record_approval(new_approval(
                 "request_patch",
                 "medium",

@@ -912,7 +912,9 @@ async fn web_fetch(
         })?;
         let resolved_addresses = tokio::net::lookup_host((host, port))
             .await
-            .map_err(|error| SkillExecutionError::Network(format!("DNS resolution failed: {error}")))?
+            .map_err(|error| {
+                SkillExecutionError::Network(format!("DNS resolution failed: {error}"))
+            })?
             .collect::<Vec<_>>();
         if resolved_addresses.is_empty() {
             return Err(SkillExecutionError::Network(

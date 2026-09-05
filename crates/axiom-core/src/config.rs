@@ -484,7 +484,10 @@ fn default_tier_models() -> BTreeMap<String, BTreeMap<String, String>> {
         (
             "nvidia".to_string(),
             BTreeMap::from([
-                ("light".to_string(), "meta/llama-3.1-8b-instruct".to_string()),
+                (
+                    "light".to_string(),
+                    "meta/llama-3.1-8b-instruct".to_string(),
+                ),
                 (
                     "medium".to_string(),
                     "nvidia/nemotron-3.5-lightning-30b-a3b".to_string(),

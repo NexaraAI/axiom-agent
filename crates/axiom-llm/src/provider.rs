@@ -121,7 +121,9 @@ pub(crate) async fn read_response_body_limited(
         message: if error.is_timeout() {
             format!("connection timed out after 300s: {error}")
         } else if error.is_decode() {
-            format!("stream decoding interrupted (connection closed or truncated by server): {error}")
+            format!(
+                "stream decoding interrupted (connection closed or truncated by server): {error}"
+            )
         } else {
             error.to_string()
         },
