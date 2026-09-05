@@ -300,10 +300,7 @@ impl ChatSession {
             if let Some(model) = self.config.llm.model_for_tier(&provider, &normalized) {
                 let model = model.to_string();
                 self.config.llm.active_model = Some(model.clone());
-                self.config
-                    .llm
-                    .provider_models
-                    .insert(provider, model);
+                self.config.llm.provider_models.insert(provider, model);
             }
         }
         self.save_config()?;
@@ -2234,7 +2231,10 @@ async fn handle_chat_command(session: &mut ChatSession, input: &str) -> Result<C
                 println!("Configured models for provider '{provider}':");
                 for t in &["light", "medium", "high"] {
                     let marker = if *t == active_tier { "*" } else { " " };
-                    let m = tiers.get(*t).map(String::as_str).unwrap_or("not configured");
+                    let m = tiers
+                        .get(*t)
+                        .map(String::as_str)
+                        .unwrap_or("not configured");
                     println!("  {marker} {t:7} -> {m}");
                 }
             }
