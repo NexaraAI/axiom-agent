@@ -55,6 +55,16 @@ pub fn analyze_intent(prompt: &str) -> IntentAnalysis {
             ".ts",
             ".tsx",
             ".jsx",
+            "html",
+            ".html",
+            "css",
+            ".css",
+            "web",
+            "game",
+            "app",
+            "application",
+            "frontend",
+            "backend",
             "golang",
             "java",
             "c++",
@@ -71,6 +81,9 @@ pub fn analyze_intent(prompt: &str) -> IntentAnalysis {
             "fix bug",
             "write test",
             "unit test",
+            "make",
+            "build",
+            "develop",
         ],
     ) {
         task_type = "coding".to_string();
@@ -82,6 +95,8 @@ pub fn analyze_intent(prompt: &str) -> IntentAnalysis {
             language = Some("typescript".to_string());
         } else if contains_any(&lower, &["javascript", ".js", ".jsx"]) {
             language = Some("javascript".to_string());
+        } else if contains_any(&lower, &["html", ".html", "css", ".css", "web"]) {
+            language = Some("web".to_string());
         } else if contains_any(&lower, &["golang"]) {
             language = Some("go".to_string());
         }
@@ -89,7 +104,20 @@ pub fn analyze_intent(prompt: &str) -> IntentAnalysis {
         push_keyword(&mut keywords, "code");
 
         push_candidate(&mut candidates, "file.read");
-        if contains_any(&lower, &["write", "create", "refactor", "fix", "implement"]) {
+        if contains_any(
+            &lower,
+            &[
+                "write",
+                "create",
+                "make",
+                "build",
+                "generate",
+                "develop",
+                "refactor",
+                "fix",
+                "implement",
+            ],
+        ) {
             push_candidate(&mut candidates, "file.write");
         }
         if contains_any(&lower, &["python"]) {
@@ -150,12 +178,18 @@ pub fn analyze_intent(prompt: &str) -> IntentAnalysis {
     if contains_any(
         &lower,
         &[
-            "file", "read", "write", "save", "open", "edit", "create", "show", "display",
+            "file", "read", "write", "save", "open", "edit", "create", "make", "build", "generate",
+            "show", "display",
         ],
     ) {
         needs_files = true;
         push_keyword(&mut keywords, "file");
-        if contains_any(&lower, &["write", "save", "create", "edit"]) {
+        if contains_any(
+            &lower,
+            &[
+                "write", "save", "create", "edit", "make", "build", "generate",
+            ],
+        ) {
             risk_level = "medium".to_string();
             push_candidate(&mut candidates, "file.write");
         }
@@ -353,5 +387,17 @@ mod tests {
             assert_eq!(intent.task_type, "identity", "failed on: {prompt}");
             assert!(intent.candidate_skill_ids.is_empty());
         }
+    }
+
+    #[test]
+    fn selects_file_write_for_web_game_creation() {
+        let intent = analyze_intent("can you make a simple snake game in html css well?");
+        assert_eq!(intent.task_type, "coding");
+        assert!(intent
+            .candidate_skill_ids
+            .contains(&"file.write".to_string()));
+        assert!(intent
+            .candidate_skill_ids
+            .contains(&"file.read".to_string()));
     }
 }

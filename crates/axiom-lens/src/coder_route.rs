@@ -69,13 +69,20 @@ pub fn detect_project_coding_task(prompt: &str) -> CodingTaskDetection {
             "pyproject.toml",
             "compile",
             "build failing",
+            "game",
+            "app",
+            "application",
+            "website",
+            "html",
+            "css",
+            "script",
         ],
     );
     let has_project_action = contains_any(
         &lower,
         &[
             "fix", "edit", "modify", "create", "update", "refactor", "test", "scan", "explain",
-            "debug",
+            "debug", "make", "build", "develop",
         ],
     );
 
@@ -140,6 +147,13 @@ mod tests {
     fn detects_project_coding_intent() {
         let detection = detect_project_coding_task("fix cargo error");
 
+        assert_eq!(detection.confidence, CodingTaskConfidence::Obvious);
+    }
+
+    #[test]
+    fn detects_game_creation_task() {
+        let detection =
+            detect_project_coding_task("can you make a simple snake game in html css well?");
         assert_eq!(detection.confidence, CodingTaskConfidence::Obvious);
     }
 

@@ -41,7 +41,11 @@ use axiom_proof::{
 use axiom_upd::{parse_version, UpdateDirs, UpdatePolicy, UpdateState};
 use rustyline::{error::ReadlineError, Config as ReadlineConfig, DefaultEditor};
 
-use crate::{startup::StartupRoute, ui::Renderer, RunCommand};
+use crate::{
+    startup::StartupRoute,
+    ui::{Renderer, Spinner},
+    RunCommand,
+};
 
 pub(crate) struct ChatSession {
     config_path: PathBuf,
@@ -1330,18 +1334,24 @@ struct TerminalStreamRenderer {
     ui: Renderer,
     response_open: bool,
     visible_content: bool,
+    spinner: Option<Spinner>,
 }
 
 impl TerminalStreamRenderer {
     fn new(ui: Renderer) -> Self {
+        let spinner = Spinner::start("Thinking...", ui.primary_color());
         Self {
             ui,
             response_open: false,
             visible_content: false,
+            spinner: Some(spinner),
         }
     }
 
     fn finish_line(&mut self) {
+        if let Some(mut spinner) = self.spinner.take() {
+            spinner.stop();
+        }
         if self.response_open {
             println!();
             self.response_open = false;
@@ -1352,6 +1362,9 @@ impl TerminalStreamRenderer {
 impl StreamObserver for TerminalStreamRenderer {
     fn on_stream_update(&mut self, update: &ChatStreamUpdate) {
         if !update.visible_delta.is_empty() {
+            if let Some(mut spinner) = self.spinner.take() {
+                spinner.stop();
+            }
             if !self.response_open {
                 print!("{}", self.ui.assistant_prefix());
                 self.response_open = true;
@@ -1460,25 +1473,21 @@ fn restrict_private_file(_path: &Path) -> Result<()> {
 }
 
 async fn run_terminal_session(mut session: ChatSession) -> Result<()> {
+    if io::stdout().is_terminal() && std::env::var_os("NO_COLOR").is_none() {
+        print!("\x1B[2J\x1B[H");
+        let _ = io::stdout().flush();
+    }
     let ui = Renderer::from_config(&session.config);
 
-    println!("{}", ui.banner());
     println!(
         "{}",
-        ui.header(
-            "provider",
-            session.active_provider().unwrap_or("not configured")
+        ui.dashboard_banner(
+            session.active_provider().unwrap_or("not configured"),
+            session.active_model().unwrap_or("not configured"),
+            &session.workspace_path().display().to_string(),
+            session.session_id()
         )
     );
-    println!(
-        "{}",
-        ui.header("model", session.active_model().unwrap_or("not configured"))
-    );
-    println!(
-        "{}",
-        ui.header("workspace", session.workspace_path().display())
-    );
-    println!("{}", ui.header("session", session.session_id()));
     if let Some(notice) = session.cost_budget_notice() {
         println!("{}", ui.status_line(&notice));
     }
@@ -2240,6 +2249,20 @@ async fn handle_chat_command(session: &mut ChatSession, input: &str) -> Result<C
         "!clear" => {
             session.clear_history();
             session.persist_session()?;
+            if io::stdout().is_terminal() && std::env::var_os("NO_COLOR").is_none() {
+                print!("\x1B[2J\x1B[H");
+                let _ = io::stdout().flush();
+            }
+            let ui = Renderer::from_config(&session.config);
+            println!(
+                "{}",
+                ui.dashboard_banner(
+                    session.active_provider().unwrap_or("not configured"),
+                    session.active_model().unwrap_or("not configured"),
+                    &session.workspace_path().display().to_string(),
+                    session.session_id()
+                )
+            );
             println!("Conversation cleared.");
             Ok(CommandResult::Continue)
         }
@@ -2503,7 +2526,13 @@ enum CommandResult {
 
 pub(crate) fn load_workspace_rules(workspace_root: &std::path::Path) -> Option<String> {
     const MAX_RULES_BYTES: u64 = 16 * 1024;
-    for candidate in &[".axiomrules", "AXIOM.md", "AGENTS.md"] {
+    for candidate in &[
+        ".axiomrules",
+        "AXIOM.md",
+        "AGENTS.md",
+        "MEMORY.md",
+        ".axiom/memory.md",
+    ] {
         let path = workspace_root.join(candidate);
         if let Ok(metadata) = std::fs::metadata(&path) {
             if metadata.is_file() && metadata.len() <= MAX_RULES_BYTES {

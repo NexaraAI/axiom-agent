@@ -484,7 +484,7 @@ impl<'a> AgentLoop<'a> {
                 let prompt_tokens =
                     u32::try_from(progress.context_tokens_estimate).unwrap_or(u32::MAX);
                 let completion_tokens =
-                    u32::try_from((response.content.len() + 3) / 4).unwrap_or(u32::MAX);
+                    u32::try_from(response.content.len().div_ceil(4)).unwrap_or(u32::MAX);
                 let total_tokens = prompt_tokens.saturating_add(completion_tokens);
                 progress.ledger.record(Some(&axiom_llm::TokenUsage {
                     prompt_tokens,

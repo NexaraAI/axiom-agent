@@ -1,6 +1,6 @@
 use std::{
     fs,
-    io::{self, Write},
+    io::{self, IsTerminal, Write},
     path::{Path, PathBuf},
 };
 
@@ -285,6 +285,11 @@ pub(crate) async fn run_terminal_onboarding() -> Result<OnboardingResult> {
         .as_ref()
         .map(Renderer::from_config)
         .unwrap_or_else(Renderer::for_onboarding);
+
+    if io::stdout().is_terminal() && std::env::var_os("NO_COLOR").is_none() {
+        print!("\x1B[2J\x1B[H");
+        let _ = io::stdout().flush();
+    }
 
     println!("{}", ui.onboarding_banner());
     println!();
