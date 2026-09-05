@@ -206,13 +206,14 @@ impl Workspace {
 
         let missing_suffix = normalized
             .strip_prefix(&existing_ancestor)
+            .map(|p| p.to_path_buf())
             .or_else(|_| {
                 #[cfg(windows)]
                 {
                     let norm_stripped = strip_verbatim_prefix(&normalized);
                     let anc_stripped = strip_verbatim_prefix(&existing_ancestor);
                     norm_stripped
-                        .strip_prefix(anc_stripped)
+                        .strip_prefix(&anc_stripped)
                         .map(|p| p.to_path_buf())
                         .map_err(|_| ())
                 }
@@ -281,6 +282,12 @@ fn strip_verbatim_prefix(path: &Path) -> PathBuf {
     if let Some(stripped) = path_str.strip_prefix(r"\\?\") {
         return PathBuf::from(stripped);
     }
+    path.to_path_buf()
+}
+
+#[cfg(not(windows))]
+#[inline]
+fn strip_verbatim_prefix(path: &Path) -> PathBuf {
     path.to_path_buf()
 }
 
