@@ -565,11 +565,16 @@ pub enum SkillExecutionError {
 }
 
 pub fn extract_tool_request(text: &str) -> Result<ToolRequest, SkillExecutionError> {
-    let start_marker = "```axiom-tool";
-    let start = text
-        .find(start_marker)
-        .ok_or(SkillExecutionError::MissingToolBlock)?;
-    let json_start = start + start_marker.len();
+    let markers = &["```axiom-tool", "```tool-call", "```tool"];
+    let mut found = None;
+    for marker in markers {
+        if let Some(pos) = text.find(marker) {
+            found = Some((pos, marker.len()));
+            break;
+        }
+    }
+    let (start, marker_len) = found.ok_or(SkillExecutionError::MissingToolBlock)?;
+    let json_start = start + marker_len;
     let after_start = text[json_start..].trim_start();
     let end = after_start
         .find("```")

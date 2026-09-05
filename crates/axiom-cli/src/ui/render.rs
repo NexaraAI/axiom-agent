@@ -41,6 +41,7 @@ impl Renderer {
         }
     }
 
+    #[allow(dead_code)]
     pub(crate) fn banner(&self) -> String {
         format!(
             "{}\n{}\n{}\n{}\n{}",
@@ -59,6 +60,35 @@ impl Renderer {
             self.bone("The coding agent built to prove every action."),
             self.bone("Welcome! Quick friendly setup: 1) workspace → 2) provider → 3) skills."),
             self.bone("Takes ~1 minute. You can Skip anytime and re-run with `axiom onboarding`."),
+            self.smoke("© 2026 DemonZDevelopment")
+        )
+    }
+
+    pub(crate) fn primary_color(&self) -> Color {
+        self.palette.primary
+    }
+
+    pub(crate) fn dashboard_banner(
+        &self,
+        provider: &str,
+        model: &str,
+        workspace: &str,
+        session_id: &str,
+    ) -> String {
+        format!(
+            "{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}",
+            self.red("─── NEXARA AI / AXIOM (Autonomous Agent Harness) ───"),
+            self.bone(
+                "The coding agent built to prove and execute every action in your workspace."
+            ),
+            self.smoke("────────────────────────────────────────────────────────"),
+            self.header("provider", provider),
+            self.header("model", model),
+            self.header("workspace", workspace),
+            self.header("session", session_id),
+            self.smoke(
+                "Type /help or !help for commands · /clear to reset screen · /exit to leave"
+            ),
             self.smoke("© 2026 DemonZDevelopment")
         )
     }

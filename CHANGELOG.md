@@ -15,6 +15,20 @@ Install it:
 npm install -g axiom-agent@1.0.1
 ```
 
+### Added
+
+- **Pure Agent Harness Execution**: Re-engineered system prompt and intent analysis
+  so Axiom acts as an active workspace harness: when asked to create, make, or build
+  code/games/apps/scripts, it directly writes the files to the workspace using `file.write`
+  instead of just chatting code blocks.
+- **Animated Rust TUI**: Added an async Braille dots animation spinner (`⠋ Thinking... (0.4s)`)
+  with live elapsed timers and tool execution status that smoothly and atomically clears
+  when assistant tokens stream in.
+- **Terminal Screen Clear**: Terminal screen is automatically wiped on first launch
+  (during onboarding), on regular `axiom` startup, and on typing `/clear` (`!clear`).
+- **TUI Dashboard Banner**: Structured header display highlighting active provider,
+  model, workspace, and session info.
+
 ### Fixed
 
 - **Automatic binary download on launch**: If npm 11 `allowScripts` blocks or skips

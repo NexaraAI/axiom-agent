@@ -286,6 +286,11 @@ pub(crate) async fn run_terminal_onboarding() -> Result<OnboardingResult> {
         .map(Renderer::from_config)
         .unwrap_or_else(Renderer::for_onboarding);
 
+    if io::stdout().is_terminal() && std::env::var_os("NO_COLOR").is_none() {
+        print!("\x1B[2J\x1B[H");
+        let _ = io::stdout().flush();
+    }
+
     println!("{}", ui.onboarding_banner());
     println!();
     println!("{}", ui.header("config", config_path.display()));
