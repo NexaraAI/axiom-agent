@@ -434,7 +434,7 @@ async fn gateway(command: GatewayCommands) -> Result<()> {
             println!("Bots will use the active provider/model above. Change them anytime with:");
             println!("  axiom provider use <name>");
             println!("  axiom model use <id>   (find IDs via: axiom model list --filter <text>)");
-            println!("Bot-side commands (live once the runner lands, see docs/GATEWAY.md):");
+            println!("Bot-side commands (supported in bot chats, see docs/GATEWAY.md):");
             println!("  /models [filter]   /model <id>   /provider <name>   /status   /help");
             Ok(())
         }

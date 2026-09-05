@@ -645,11 +645,20 @@ impl<'a> AgentLoop<'a> {
                 let observation = tool_observation(&event);
                 let observation_message = ChatMessage {
                     role: "user".to_string(),
-                    content: observation,
+                    content: observation.clone(),
                 };
                 progress.tool_events.push(event.clone());
-                messages.push(observation_message.clone());
-                progress.history_delta.push(observation_message.clone());
+                if tool_sequence > 1 && messages.last().map_or(false, |m| m.role == "user") {
+                    let last = messages.last_mut().expect("last message exists");
+                    last.content.push_str("\n\n");
+                    last.content.push_str(&observation);
+                    if let Some(last_delta) = progress.history_delta.last_mut().filter(|m| m.role == "user") {
+                        last_delta.content = last.content.clone();
+                    }
+                } else {
+                    messages.push(observation_message.clone());
+                    progress.history_delta.push(observation_message.clone());
+                }
                 self.record_transition(
                     &mut progress,
                     AgentTransitionKind::ToolCompleted {
@@ -677,7 +686,16 @@ impl<'a> AgentLoop<'a> {
                 role: "user".to_string(),
                 content: "Reflect on all Axiom Tool Results, update your plan if needed, and either request the next necessary tools or provide the final answer to the original request.".to_string(),
             };
-            messages.push(reflection_instruction.clone());
+            if let Some(last_message) = messages.last_mut().filter(|m| m.role == "user") {
+                last_message.content.push_str("\n\n");
+                last_message.content.push_str(&reflection_instruction.content);
+                if let Some(last_delta) = progress.history_delta.last_mut().filter(|m| m.role == "user") {
+                    last_delta.content = last_message.content.clone();
+                }
+            } else {
+                messages.push(reflection_instruction.clone());
+                progress.history_delta.push(reflection_instruction.clone());
+            }
             self.record_transition(
                 &mut progress,
                 AgentTransitionKind::ReflectQueued {

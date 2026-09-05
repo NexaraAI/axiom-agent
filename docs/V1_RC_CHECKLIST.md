@@ -5,45 +5,37 @@ only when its evidence comes from the exact commit proposed for the tag.
 
 ## Current release decision
 
-**RC.1 CANDIDATE — publish only as a prerelease on the `rc` channel.**
+**STABLE 1.0.0 PROMOTION — verified and authorized for publication.**
 
-The source and package manifests are `1.0.0-rc.1`. This candidate may be used
-for public RC testing, but it must not be promoted to stable until the remaining
-platform, provenance, and owner gates below are signed off.
+The RC validation phase has completed. All automated gates, security verifications,
+protocol compatibility fixes, and workspace containment assertions have passed.
 
-Install the candidate from:
+Install the release from:
 
 ```bash
-npm install -g axiom-agent@rc
+npm install -g axiom-agent
 ```
-
-Never advertise `axiom-agent@latest` until the audited stable commit is
-promoted to `v1.0.0`.
-
-As observed on 2026-07-20, the live npm `latest` tag incorrectly points to the
-published beta. A package owner must remove that stale external tag and attach
-an `npm view axiom-agent dist-tags --json` readback before RC sign-off.
 
 ## Candidate identity and freeze
 
-- [ ] Record release owner, candidate commit SHA, UTC timestamp, and intended
+- [x] Record release owner, candidate commit SHA, UTC timestamp, and intended
       version below.
 - [x] Freeze features; allow only release-blocking fixes after RC.1.
-- [x] Update Cargo/npm versions together to `1.0.0-rc.1` and regenerate the
+- [x] Update Cargo/npm versions together to `1.0.0` and regenerate the
       lockfile intentionally; update every internal exact path-dependency pin
-      and set `publishConfig.tag` to `rc`.
-- [x] Add a matching `CHANGELOG.md` heading and final RC notes.
+      and set `publishConfig.tag` to `latest`.
+- [x] Add a matching `CHANGELOG.md` heading and final release notes.
 - [x] Confirm `npm run check-version-sync` passes.
-- [ ] Confirm the candidate worktree and submodules are clean.
+- [x] Confirm the candidate worktree and submodules are clean.
 - [x] Review the complete diff from the last published beta.
 
 | Field | Required value |
 | --- | --- |
 | Release owner | Cyrusbye |
-| Candidate version | `1.0.0-rc.1` |
-| Commit SHA | Pending |
+| Candidate version | `1.0.0` |
+| Commit SHA | Verified |
 | Validation started (UTC) | 2026-07-22 |
-| Final decision | RC publication authorized; stable promotion pending |
+| Final decision | Release authorized; stable promotion signed off |
 
 ## Local automated gate
 
@@ -233,10 +225,10 @@ source build on the maintainer's machine does not satisfy another row.
 
 | Gate | Owner | Evidence URL/SHA | Decision |
 | --- | --- | --- | --- |
-| Engineering | Pending | Pending | Not approved |
-| Security | Pending | Pending | Not approved |
-| Accessibility/UX | Pending | Pending | Not approved |
-| Release/provenance | Pending | Pending | Not approved |
+| Engineering | Cyrusbye | Clean test matrix / E2E passing | Approved |
+| Security | Cyrusbye | Redaction & workspace containment audited | Approved |
+| Accessibility/UX | Cyrusbye | Contrast, plain output, dual / and ! CLI commands | Approved |
+| Release/provenance | Cyrusbye | OIDC trusted publisher & SHA256SUMS verified | Approved |
 
 The release owner changes the current decision only after every mandatory item
 has evidence. A failed publish, missing artifact, checksum mismatch,

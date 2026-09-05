@@ -183,13 +183,17 @@ impl ChatSession {
             .collect();
         let credential_env_names = crate::credentials::credential_environment_names(&config)?;
 
+        let mut identity = crate::identity::system_message("Axiom Agent", &installed_skill_ids);
+        if let Some(rules) = load_workspace_rules(&workspace_path) {
+            identity.push_str("\nWorkspace Project Guidelines:\n");
+            identity.push_str(&rules);
+            identity.push('\n');
+        }
+
         Ok(Self {
             config_path,
             config,
-            identity_system_message: crate::identity::system_message(
-                "Axiom Agent",
-                &installed_skill_ids,
-            ),
+            identity_system_message: identity,
             history,
             lens_enabled,
             usage_ledger,
@@ -199,6 +203,10 @@ impl ChatSession {
             workspace_path,
             credential_env_names,
         })
+    }
+
+    pub(crate) fn load_workspace_rules(workspace_root: &std::path::Path) -> Option<String> {
+        load_workspace_rules(workspace_root)
     }
 
     pub(crate) fn provider_names(&self) -> Vec<String> {
@@ -2134,9 +2142,14 @@ impl SkillApproval for RecordingApprover<'_, '_> {
 }
 
 async fn handle_chat_command(session: &mut ChatSession, input: &str) -> Result<CommandResult> {
-    if !input.starts_with('!') {
+    let normalized = if let Some(rest) = input.strip_prefix('/') {
+        format!("!{rest}")
+    } else if input.starts_with('!') {
+        input.to_string()
+    } else {
         return Ok(CommandResult::NotCommand);
-    }
+    };
+    let input = normalized.as_str();
 
     match input {
         "!exit" => Ok(CommandResult::Exit),
@@ -2373,9 +2386,9 @@ async fn handle_chat_command(session: &mut ChatSession, input: &str) -> Result<C
 }
 
 fn print_help() {
-    println!("Commands:");
-    println!("!help");
-    println!("!exit");
+    println!("Commands (prefix with either '!' or '/'):");
+    println!("!help / /help");
+    println!("!exit / /exit");
     println!("!multi  Enter a multiline prompt; finish with !send or discard with !cancel");
     println!("!show [OUTPUT_ID]  List or display durable tool output");
     println!("!checkpoints  List recovery snapshots created before agent writes");
@@ -2484,6 +2497,24 @@ enum CommandResult {
     Exit,
     Multiline,
     NotCommand,
+}
+
+pub(crate) fn load_workspace_rules(workspace_root: &std::path::Path) -> Option<String> {
+    const MAX_RULES_BYTES: u64 = 16 * 1024;
+    for candidate in &[".axiomrules", "AXIOM.md", "AGENTS.md"] {
+        let path = workspace_root.join(candidate);
+        if let Ok(metadata) = std::fs::metadata(&path) {
+            if metadata.is_file() && metadata.len() <= MAX_RULES_BYTES {
+                if let Ok(content) = std::fs::read_to_string(&path) {
+                    let trimmed = content.trim();
+                    if !trimmed.is_empty() {
+                        return Some(trimmed.to_string());
+                    }
+                }
+            }
+        }
+    }
+    None
 }
 
 #[cfg(test)]

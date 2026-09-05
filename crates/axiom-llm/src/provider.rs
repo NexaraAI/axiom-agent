@@ -252,6 +252,10 @@ where
 {
     const MAX_ATTEMPTS: u8 = 3;
     let mut attempt = 0_u8;
+    #[cfg(test)]
+    let base_delay_ms: u64 = 50;
+    #[cfg(not(test))]
+    let base_delay_ms: u64 = 1_500;
 
     loop {
         attempt += 1;
@@ -259,7 +263,7 @@ where
             Ok(value) => return Ok(value),
             Err(error) if is_retryable(&error) && attempt < MAX_ATTEMPTS => {
                 sleep(Duration::from_millis(
-                    100 * u64::from(1_u8 << (attempt - 1)),
+                    base_delay_ms * u64::from(1_u8 << (attempt - 1)),
                 ))
                 .await;
             }

@@ -192,24 +192,38 @@ impl Workspace {
         };
 
         let normalized = normalize_lexically(&joined)?;
-        if !normalized.starts_with(&self.root) {
+        if !path_starts_with(&normalized, &self.root) {
             return Err(AxiomError::UnsafeWorkspacePath { path: normalized });
         }
 
         let existing_ancestor = nearest_existing_ancestor(&normalized);
         let canonical_ancestor = fs::canonicalize(&existing_ancestor)?;
-        if !canonical_ancestor.starts_with(&self.root) {
+        if !path_starts_with(&canonical_ancestor, &self.root) {
             return Err(AxiomError::UnsafeWorkspacePath {
                 path: canonical_ancestor,
             });
         }
 
-        let missing_suffix =
-            normalized
-                .strip_prefix(&existing_ancestor)
-                .map_err(|_| AxiomError::InvalidPath {
-                    path: normalized.clone(),
-                })?;
+        let missing_suffix = normalized
+            .strip_prefix(&existing_ancestor)
+            .or_else(|_| {
+                #[cfg(windows)]
+                {
+                    let norm_stripped = strip_verbatim_prefix(&normalized);
+                    let anc_stripped = strip_verbatim_prefix(&existing_ancestor);
+                    norm_stripped
+                        .strip_prefix(anc_stripped)
+                        .map(|p| p.to_path_buf())
+                        .map_err(|_| ())
+                }
+                #[cfg(not(windows))]
+                {
+                    Err(())
+                }
+            })
+            .map_err(|_| AxiomError::InvalidPath {
+                path: normalized.clone(),
+            })?;
 
         if missing_suffix.as_os_str().is_empty() {
             Ok(canonical_ancestor)
@@ -256,6 +270,34 @@ fn normalize_lexically(path: &Path) -> Result<PathBuf> {
     }
 
     Ok(normalized)
+}
+
+#[cfg(windows)]
+fn strip_verbatim_prefix(path: &Path) -> PathBuf {
+    let path_str = path.to_string_lossy();
+    if let Some(stripped) = path_str.strip_prefix(r"\\?\UNC\") {
+        return PathBuf::from(format!(r"\\{}", stripped));
+    }
+    if let Some(stripped) = path_str.strip_prefix(r"\\?\") {
+        return PathBuf::from(stripped);
+    }
+    path.to_path_buf()
+}
+
+fn path_starts_with(path: &Path, base: &Path) -> bool {
+    if path.starts_with(base) {
+        return true;
+    }
+    #[cfg(windows)]
+    {
+        let p = strip_verbatim_prefix(path);
+        let b = strip_verbatim_prefix(base);
+        p.starts_with(b)
+    }
+    #[cfg(not(windows))]
+    {
+        false
+    }
 }
 
 #[cfg(test)]
