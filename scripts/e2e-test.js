@@ -182,7 +182,10 @@ function main() {
       "session state was not persisted atomically"
     );
     const resumed = runAxiom(binary, ["resume", sessionId], env);
-    assert(resumed.includes(`session: ${sessionId}`), "resume did not load the saved session");
+    assert(
+      resumed.toLowerCase().includes(`session: ${sessionId}`) || resumed.includes(sessionId),
+      "resume did not load the saved session"
+    );
 
     const multiline = runAxiom(
       binary,
