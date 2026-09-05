@@ -88,7 +88,6 @@ fn configure_provider_http_client(builder: reqwest::ClientBuilder) -> reqwest::C
         .connect_timeout(Duration::from_secs(15))
         .timeout(Duration::from_secs(300))
         .tcp_keepalive(Duration::from_secs(15))
-        .gzip(true)
         .redirect(reqwest::redirect::Policy::none())
         .no_proxy()
 }
