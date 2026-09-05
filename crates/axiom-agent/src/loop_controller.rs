@@ -648,7 +648,7 @@ impl<'a> AgentLoop<'a> {
                     content: observation.clone(),
                 };
                 progress.tool_events.push(event.clone());
-                if tool_sequence > 1 && messages.last().map_or(false, |m| m.role == "user") {
+                if tool_sequence > 1 && messages.last().is_some_and(|m| m.role == "user") {
                     let last = messages.last_mut().expect("last message exists");
                     last.content.push_str("\n\n");
                     last.content.push_str(&observation);
