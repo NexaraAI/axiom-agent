@@ -204,9 +204,11 @@ impl Workspace {
             });
         }
 
-        let missing_suffix = strip_ancestor_prefix(&normalized, &existing_ancestor)
-            .map_err(|_| AxiomError::InvalidPath {
-                path: normalized.clone(),
+        let missing_suffix =
+            strip_ancestor_prefix(&normalized, &existing_ancestor).map_err(|_| {
+                AxiomError::InvalidPath {
+                    path: normalized.clone(),
+                }
             })?;
 
         if missing_suffix.as_os_str().is_empty() {
@@ -284,7 +286,7 @@ fn path_starts_with(path: &Path, base: &Path) -> bool {
     }
 }
 
-fn strip_ancestor_prefix<'a>(path: &'a Path, ancestor: &Path) -> Result<&'a Path, ()> {
+fn strip_ancestor_prefix<'a>(path: &'a Path, ancestor: &Path) -> std::result::Result<&'a Path, ()> {
     if let Ok(suffix) = path.strip_prefix(ancestor) {
         return Ok(suffix);
     }
