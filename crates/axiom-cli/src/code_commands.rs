@@ -33,7 +33,7 @@ use axiom_proof::{
 };
 use serde_json::json;
 
-use crate::{chat, onboarding, startup, CodeCommand};
+use crate::{chat, onboarding, startup, ui::animation::Spinner, CodeCommand};
 
 pub(crate) async fn run(command: CodeCommand) -> Result<()> {
     ensure_onboarding_completed().await?;
@@ -837,11 +837,14 @@ impl CoderSession {
         }
         let skill_context = build_skill_context_message(&cards).unwrap_or_default();
         let prompt = build_plan_prompt(task, scan, &skill_context);
-        self.llm_chat(vec![ChatMessage {
+        let mut spinner = Spinner::start("Drafting implementation plan...", nu_ansi_term::Color::Cyan);
+        let result = self.llm_chat(vec![ChatMessage {
             role: "user".to_string(),
             content: prompt,
         }])
-        .await
+        .await;
+        spinner.stop();
+        result
     }
 
     async fn request_patch(
@@ -852,11 +855,14 @@ impl CoderSession {
     ) -> Result<String> {
         let context = self.patch_context(scan)?;
         let prompt = build_patch_prompt_with_context(task, scan, plan, &context);
-        self.llm_chat(vec![ChatMessage {
+        let mut spinner = Spinner::start("Generating patch from model...", nu_ansi_term::Color::Cyan);
+        let result = self.llm_chat(vec![ChatMessage {
             role: "user".to_string(),
             content: prompt,
         }])
-        .await
+        .await;
+        spinner.stop();
+        result
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1405,11 +1411,24 @@ impl CoderSession {
     }
 
     fn select_skill_cards(&self, prompt: &str, max_cards: usize) -> Result<Vec<SkillCard>> {
-        Ok(select_relevant_skills(
+        let installed = load_installed_skills(self.skills_dir())?;
+        let mut cards = select_relevant_skills(
             prompt,
-            &load_installed_skills(self.skills_dir())?,
+            &installed,
             max_cards,
-        ))
+        );
+
+        for core_id in &["project.scan", "file.read", "file.write", "web.fetch"] {
+            if !cards.iter().any(|c| c.id == *core_id) {
+                if let Some(skill) = installed.iter().find(|s| s.manifest.id == *core_id) {
+                    if skill.record.is_selectable() {
+                        cards.push(skill.manifest.to_skill_card());
+                    }
+                }
+            }
+        }
+
+        Ok(cards)
     }
 
     fn provider_names(&self) -> Vec<String> {

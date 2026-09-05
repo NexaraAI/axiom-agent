@@ -7,14 +7,26 @@ pub fn build_skill_context_message(cards: &[SkillCard]) -> Option<String> {
 
     let mut message = String::from(
         "Axiom Skill Context:\n\
-You are inside Axiom Agent.\n\
-The following skills are relevant and available for this request.\n\
-Use them as guidance. If a skill is executable, request it only when needed.\n\
-Do not invent unavailable skills.\n\
-When you need Axiom to execute a skill, respond exactly with this format and no extra text:\n\
+You are inside Axiom Agent, an autonomous workspace execution harness.\n\
+The following tools and skills are available for this workspace.\n\
+When the user asks you to create, write, modify, inspect, or scan files, do NOT merely paste code blocks in chat. ACT AS AN AGENT HARNESS: call the appropriate skill!\n\
+Format your tool request as a JSON block:\n\
 ```axiom-tool\n\
-{\"skill_id\":\"file.read\",\"arguments\":{\"path\":\"README.md\"}}\n\
-```\n\n\
+{\"skill_id\":\"file.write\",\"arguments\":{\"path\":\"index.html\",\"content\":\"<!DOCTYPE html>...\"}}\n\
+```\n\
+Or for inspecting files:\n\
+```axiom-tool\n\
+{\"skill_id\":\"file.read\",\"arguments\":{\"path\":\"index.html\"}}\n\
+```\n\
+Or for scanning the directory:\n\
+```axiom-tool\n\
+{\"skill_id\":\"project.scan\",\"arguments\":{\"root\":\".\"}}\n\
+```\n\
+Or for fetching web docs or searching:\n\
+```axiom-tool\n\
+{\"skill_id\":\"web.fetch\",\"arguments\":{\"query\":\"search topic or url\"}}\n\
+```\n\
+Write or update files one by one so each file is verified and saved properly into the workspace.\n\n\
 Available skill cards:\n",
     );
 

@@ -268,15 +268,46 @@ impl ChatSession {
         prompt: &str,
         max_cards: usize,
     ) -> Result<Vec<SkillCard>> {
-        if !self.lens_enabled {
-            return Ok(Vec::new());
+        let installed = load_installed_skills(self.skills_dir())?;
+        let mut cards = if self.lens_enabled {
+            select_relevant_skills(prompt, &installed, max_cards)
+        } else {
+            Vec::new()
+        };
+
+        for core_id in &["project.scan", "file.read", "file.write", "web.fetch"] {
+            if !cards.iter().any(|c| c.id == *core_id) {
+                if let Some(skill) = installed.iter().find(|s| s.manifest.id == *core_id) {
+                    if skill.record.is_selectable() {
+                        cards.push(skill.manifest.to_skill_card());
+                    }
+                }
+            }
         }
 
-        Ok(select_relevant_skills(
-            prompt,
-            &load_installed_skills(self.skills_dir())?,
-            max_cards,
-        ))
+        Ok(cards)
+    }
+
+    pub(crate) fn set_tier(&mut self, tier: &str) -> Result<String> {
+        let normalized = tier.trim().to_ascii_lowercase();
+        if !["light", "medium", "high"].contains(&normalized.as_str()) {
+            return Err(anyhow!(
+                "invalid tier '{tier}'; supported tiers are: light, medium, high"
+            ));
+        }
+        self.config.llm.tier = normalized.clone();
+        if let Some(provider) = self.active_provider().map(str::to_string) {
+            if let Some(model) = self.config.llm.model_for_tier(&provider, &normalized) {
+                let model = model.to_string();
+                self.config.llm.active_model = Some(model.clone());
+                self.config
+                    .llm
+                    .provider_models
+                    .insert(provider, model);
+            }
+        }
+        self.save_config()?;
+        Ok(normalized)
     }
 
     pub(crate) fn set_model(&mut self, model: impl Into<String>) -> Result<String> {
@@ -1353,6 +1384,7 @@ impl TerminalStreamRenderer {
         if let Some(mut spinner) = self.spinner.take() {
             spinner.stop();
         }
+        Spinner::clear_line();
         if self.response_open {
             println!();
             self.response_open = false;
@@ -1367,6 +1399,7 @@ impl StreamObserver for TerminalStreamRenderer {
                 spinner.stop();
             }
             if !self.response_open {
+                Spinner::clear_line();
                 print!("{}", self.ui.assistant_prefix());
                 self.response_open = true;
             }
@@ -1485,8 +1518,9 @@ async fn run_terminal_session(mut session: ChatSession) -> Result<()> {
         ui.dashboard_banner(
             session.active_provider().unwrap_or("not configured"),
             session.active_model().unwrap_or("not configured"),
+            &session.config.llm.tier,
             &session.workspace_path().display().to_string(),
-            session.session_id()
+            session.session_id(),
         )
     );
     if let Some(notice) = session.cost_budget_notice() {
@@ -1919,6 +1953,7 @@ impl TransitionObserver for DurableTransitionWriter {
         });
         self.store.save(&mut state)?;
         if self.live_status {
+            Spinner::clear_line();
             match &checkpoint.transition.kind {
                 AgentTransitionKind::ProviderRequestPrepared {
                     iteration,
@@ -1929,17 +1964,17 @@ impl TransitionObserver for DurableTransitionWriter {
                     let display_model =
                         model.strip_prefix(&format!("{provider}/")).unwrap_or(model);
                     println!(
-                        "Axiom: working with {provider}/{display_model} (iteration {iteration})..."
+                        "  ⚡ Axiom: working with {provider}/{display_model} (step {iteration})..."
                     );
                 }
                 AgentTransitionKind::ToolStarted { request, .. } => {
-                    println!("Axiom Tool: running {}...", request.skill_id)
+                    println!("  ⚙ Axiom Tool: executing {}...", request.skill_id)
                 }
                 AgentTransitionKind::ToolCompleted { event, .. } => {
-                    println!("Axiom Tool: executed {}", event.request.skill_id)
+                    println!("  ✔ Axiom Tool: completed {}", event.request.skill_id)
                 }
                 AgentTransitionKind::ReflectQueued { .. } => {
-                    println!("Axiom: verifying tool results...")
+                    println!("  🔍 Axiom: verifying workspace changes...")
                 }
                 _ => {}
             }
@@ -2191,6 +2226,40 @@ async fn handle_chat_command(session: &mut ChatSession, input: &str) -> Result<C
             }
             Ok(CommandResult::Continue)
         }
+        "!tier" => {
+            let active_tier = &session.config.llm.tier;
+            let provider = session.active_provider().unwrap_or("unknown");
+            println!("Active Tier: {active_tier}");
+            if let Some(tiers) = session.config.llm.tier_models.get(provider) {
+                println!("Configured models for provider '{provider}':");
+                for t in &["light", "medium", "high"] {
+                    let marker = if *t == active_tier { "*" } else { " " };
+                    let m = tiers.get(*t).map(String::as_str).unwrap_or("not configured");
+                    println!("  {marker} {t:7} -> {m}");
+                }
+            }
+            println!("Use `!tier <light|medium|high>` or `/tier <light|medium|high>` to switch.");
+            Ok(CommandResult::Continue)
+        }
+        _ if input.starts_with("!tier ") || input.starts_with("!model tier ") => {
+            let target = if let Some(t) = input.strip_prefix("!tier ") {
+                t.trim()
+            } else if let Some(t) = input.strip_prefix("!model tier ") {
+                t.trim()
+            } else {
+                ""
+            };
+            match session.set_tier(target) {
+                Ok(new_tier) => {
+                    println!(
+                        "Switched to tier '{new_tier}' (model: {}).",
+                        session.active_model().unwrap_or("not configured")
+                    );
+                }
+                Err(error) => println!("{error}"),
+            }
+            Ok(CommandResult::Continue)
+        }
         "!model current" => {
             println!(
                 "Current model: {}",
@@ -2260,8 +2329,9 @@ async fn handle_chat_command(session: &mut ChatSession, input: &str) -> Result<C
                 ui.dashboard_banner(
                     session.active_provider().unwrap_or("not configured"),
                     session.active_model().unwrap_or("not configured"),
+                    &session.config.llm.tier,
                     &session.workspace_path().display().to_string(),
-                    session.session_id()
+                    session.session_id(),
                 )
             );
             println!("Conversation cleared.");
@@ -2422,6 +2492,7 @@ fn print_help() {
     println!("!model current");
     println!("!model list [FILTER]  Fetch a bounded catalog view; no inference request");
     println!("!model use <model>");
+    println!("!tier [light|medium|high]  View or switch active model tier");
     println!("!provider current");
     println!("!provider list");
     println!("!provider use <name>");

@@ -30,6 +30,12 @@ pub fn chat_request_body(request: &ChatRequest) -> Value {
         body.insert("max_tokens".to_string(), json!(max_tokens));
     }
 
+    if let Some(options) = request.provider_options.as_ref() {
+        for (key, val) in options {
+            body.insert(key.clone(), val.clone());
+        }
+    }
+
     if !request.tools.is_empty() {
         body.insert(
             "tools".to_string(),

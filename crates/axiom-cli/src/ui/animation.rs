@@ -15,23 +15,27 @@ const SPINNER_FRAMES: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦
 pub(crate) struct Spinner {
     handle: Option<JoinHandle<()>>,
     running: Arc<AtomicBool>,
+    message: Arc<std::sync::RwLock<String>>,
     enabled: bool,
 }
 
 impl Spinner {
     pub(crate) fn start(message: impl Into<String>, color: Color) -> Self {
         let enabled = io::stdout().is_terminal() && std::env::var_os("NO_COLOR").is_none();
+        let message_str = message.into();
+        let message_arc = Arc::new(std::sync::RwLock::new(message_str));
         if !enabled {
             return Self {
                 handle: None,
                 running: Arc::new(AtomicBool::new(false)),
+                message: message_arc,
                 enabled: false,
             };
         }
 
-        let message = message.into();
         let running = Arc::new(AtomicBool::new(true));
         let is_running = Arc::clone(&running);
+        let msg_clone = Arc::clone(&message_arc);
 
         let handle = tokio::spawn(async move {
             let mut index = 0;
@@ -40,7 +44,13 @@ impl Spinner {
                 let frame = SPINNER_FRAMES[index % SPINNER_FRAMES.len()];
                 let elapsed = start_time.elapsed().as_secs_f32();
                 let styled_frame = Style::new().fg(color).bold().paint(frame);
-                let styled_msg = Style::new().fg(Color::Fixed(245)).paint(&message);
+
+                let mut current_msg = msg_clone.read().map(|g| g.clone()).unwrap_or_default();
+                if current_msg == "Thinking..." && elapsed > 2.5 {
+                    current_msg = "Buffering response...".to_string();
+                }
+
+                let styled_msg = Style::new().fg(Color::Fixed(245)).paint(&current_msg);
                 let timer = Style::new()
                     .fg(Color::Fixed(240))
                     .paint(format!("({elapsed:.1}s)"));
@@ -56,7 +66,21 @@ impl Spinner {
         Self {
             handle: Some(handle),
             running,
+            message: message_arc,
             enabled: true,
+        }
+    }
+
+    pub(crate) fn set_message(&self, message: impl Into<String>) {
+        if let Ok(mut guard) = self.message.write() {
+            *guard = message.into();
+        }
+    }
+
+    pub(crate) fn clear_line() {
+        if io::stdout().is_terminal() {
+            print!("\r\x1B[2K");
+            let _ = io::stdout().flush();
         }
     }
 
@@ -68,8 +92,7 @@ impl Spinner {
         if let Some(handle) = self.handle.take() {
             handle.abort();
         }
-        print!("\r\x1B[2K");
-        let _ = io::stdout().flush();
+        Self::clear_line();
     }
 }
 

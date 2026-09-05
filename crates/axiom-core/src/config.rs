@@ -79,6 +79,18 @@ pub struct LlmConfig {
     #[serde(default)]
     pub provider_models: BTreeMap<String, String>,
     pub stream: bool,
+    #[serde(default = "default_tier")]
+    pub tier: String,
+    #[serde(default = "default_tier_models")]
+    pub tier_models: BTreeMap<String, BTreeMap<String, String>>,
+}
+
+impl LlmConfig {
+    pub fn model_for_tier(&self, provider: &str, tier: &str) -> Option<&str> {
+        self.tier_models
+            .get(provider)
+            .and_then(|tiers| tiers.get(tier).map(String::as_str))
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -336,6 +348,8 @@ impl Default for AxiomConfig {
                     ("mock".to_string(), "mock-model".to_string()),
                 ]),
                 stream: true,
+                tier: default_tier(),
+                tier_models: default_tier_models(),
             },
             providers,
             skills: SkillsConfig {
@@ -461,12 +475,75 @@ fn default_update_verify_checksums() -> bool {
     true
 }
 
+fn default_tier() -> String {
+    "medium".to_string()
+}
+
+fn default_tier_models() -> BTreeMap<String, BTreeMap<String, String>> {
+    BTreeMap::from([
+        (
+            "nvidia".to_string(),
+            BTreeMap::from([
+                ("light".to_string(), "meta/llama-3.1-8b-instruct".to_string()),
+                (
+                    "medium".to_string(),
+                    "nvidia/nemotron-3.5-lightning-30b-a3b".to_string(),
+                ),
+                ("high".to_string(), "deepseek-ai/deepseek-r1".to_string()),
+            ]),
+        ),
+        (
+            "groq".to_string(),
+            BTreeMap::from([
+                ("light".to_string(), "llama-3.1-8b-instant".to_string()),
+                ("medium".to_string(), "llama-3.3-70b-versatile".to_string()),
+                (
+                    "high".to_string(),
+                    "deepseek-r1-distill-llama-70b".to_string(),
+                ),
+            ]),
+        ),
+        (
+            "openai".to_string(),
+            BTreeMap::from([
+                ("light".to_string(), "gpt-4o-mini".to_string()),
+                ("medium".to_string(), "gpt-4o".to_string()),
+                ("high".to_string(), "o3-mini".to_string()),
+            ]),
+        ),
+        (
+            "anthropic".to_string(),
+            BTreeMap::from([
+                ("light".to_string(), "claude-3-5-haiku-latest".to_string()),
+                ("medium".to_string(), "claude-3-7-sonnet-latest".to_string()),
+                ("high".to_string(), "claude-3-7-sonnet-latest".to_string()),
+            ]),
+        ),
+        (
+            "cloudflare".to_string(),
+            BTreeMap::from([
+                ("light".to_string(), "openai/gpt-4o-mini".to_string()),
+                ("medium".to_string(), "openai/gpt-4o".to_string()),
+                ("high".to_string(), "openai/o3-mini".to_string()),
+            ]),
+        ),
+        (
+            "mock".to_string(),
+            BTreeMap::from([
+                ("light".to_string(), "mock-model".to_string()),
+                ("medium".to_string(), "mock-model".to_string()),
+                ("high".to_string(), "mock-model".to_string()),
+            ]),
+        ),
+    ])
+}
+
 fn default_coder_auto_route_from_chat() -> bool {
     true
 }
 
 fn default_coder_auto_route_mode() -> String {
-    "ask".to_string()
+    "off".to_string()
 }
 
 fn default_coder_approval_mode() -> String {
@@ -911,7 +988,7 @@ format = "json"
         .expect("parse old config");
 
         assert!(config.coder.auto_route_from_chat);
-        assert_eq!(config.coder.auto_route_mode, "ask");
+        assert_eq!(config.coder.auto_route_mode, "off");
         assert_eq!(config.proof.default_format, "json");
         assert_eq!(config.coder.max_correction_attempts, 2);
         assert!(config.proof.trace_json);

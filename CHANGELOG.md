@@ -4,6 +4,54 @@ All notable changes to Axiom are documented here. Versions follow semantic
 versioning. Stable releases document user-visible changes, configuration or
 proof migrations, security fixes, and upgrade actions.
 
+## 1.0.2
+
+This release brings an autonomous harness overhaul inspired by Hermes Agent and OpenCode,
+intelligent web research and search capabilities, model tiers with reasoning effort support,
+and an executive terminal UI.
+
+Install it:
+
+```bash
+npm install -g axiom-agent@1.0.2
+```
+
+### Added
+
+- **Intelligent Web Fetch & Search Engine Routing**:
+  - Safe redirect following: `web.fetch` now follows up to 5 HTTP redirects while enforcing
+    HTTPS-only security, private-network SSRF protections, and pinned DNS resolutions at every hop.
+  - Realistic browser headers: Configured modern `User-Agent` and `Accept` headers so public
+    developer documentation, Modrinth, and technical sites return valid content rather than 403 Forbidden.
+  - Automatic search engine query rewriting: Search queries and search engine targets (Google or DuckDuckGo)
+    are transparently routed to server-side DuckDuckGo HTML rendering for instant, JS-free search results.
+  - Direct `query` parameter support in `web.fetch`.
+  - Expanded intent matching for "research", "lookup", "browse", "docs", "documentation", and "online".
+  - Core workspace tool availability: `web.fetch` is now unconditionally retained alongside `file.read`,
+    `file.write`, and `project.scan` so agents are never starved of reference capabilities.
+- **Hermes Agent & OpenCode Autonomous Harness Alignment**:
+  - High Agency identity: System prompt updated with "Think -> Look -> Act -> Verify" execution loop.
+    Strictly forbids lazy placeholders (`// TODO`) and unprompted raw code dumping in chat.
+  - Multi-syntax tool call parser: Hardened engine extraction to support ````axiom-tool`, ````axiom_tool`,
+    ````tool-call`, ````tool`, and ````json` blocks.
+  - Modal-free autonomy: Defaulted `auto_route_mode` to `"off"` to eliminate disruptive modals during
+    autonomous runs.
+- **Model Tiers & Reasoning Effort**:
+  - Model tier presets (`light`, `medium`, `high`) configured across NVIDIA, Groq, OpenAI, Anthropic,
+    and Cloudflare.
+  - New chat commands `/tier <tier>` and `!tier <tier>` to switch reasoning models on the fly.
+  - Configured `reasoning_effort` pass-through for providers supporting advanced reasoning budgets.
+- **Executive Terminal UI**:
+  - Modern dashboard banner with clean borders, active tier indicators, workspace status, and shortcut tips.
+  - Dynamic spinner progression (`Thinking...` -> `Buffering response...`) with atomic line clearing
+    to prevent terminal text collisions.
+  - Modernized status indicators: `⚡ Axiom:`, `⚙ Axiom Tool:`, `✔ Axiom Tool: completed`, `🔍 Axiom: verifying`.
+
+### Fixed
+
+- **Stream connection timeouts**: Raised HTTP client timeout to 300s, added 15s TCP keepalive,
+  and enabled gzip response decompression on reqwest.
+
 ## 1.0.1
 
 This release delivers battle-tested stability and UX refinements based on real-world

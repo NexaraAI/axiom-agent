@@ -72,24 +72,31 @@ impl Renderer {
         &self,
         provider: &str,
         model: &str,
+        tier: &str,
         workspace: &str,
         session_id: &str,
     ) -> String {
+        let tier_val = if tier.is_empty() { "medium" } else { tier };
+        let border = "────────────────────────────────────────────────────────────";
         format!(
-            "{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}",
-            self.red("─── NEXARA AI / AXIOM (Autonomous Agent Harness) ───"),
-            self.bone(
-                "The coding agent built to prove and execute every action in your workspace."
-            ),
-            self.smoke("────────────────────────────────────────────────────────"),
-            self.header("provider", provider),
-            self.header("model", model),
-            self.header("workspace", workspace),
-            self.header("session", session_id),
-            self.smoke(
-                "Type /help or !help for commands · /clear to reset screen · /exit to leave"
-            ),
-            self.smoke("© 2026 DemonZDevelopment")
+            "{}\n  {}  {}\n{}\n  {}  {}\n  {}  {} {}\n  {}  {}\n  {}  {}\n{}\n  {}\n  {}\n{}",
+            self.smoke(&format!("╭─{border}")),
+            self.red("◆ AXIOM AGENT"),
+            self.smoke("v1.0.2 · Autonomous Workspace Harness"),
+            self.smoke(&format!("├─{border}")),
+            self.smoke("Provider: "),
+            self.bone(provider),
+            self.smoke("Model:    "),
+            self.bone(model),
+            self.red(&format!("[tier: {tier_val}]")),
+            self.smoke("Workspace:"),
+            self.bone(workspace),
+            self.smoke("Session:  "),
+            self.smoke(session_id),
+            self.smoke(&format!("├─{border}")),
+            self.smoke("Commands: /tier · /model · /skills · /clear · /help · /exit"),
+            self.smoke("© 2026 DemonZDevelopment"),
+            self.smoke(&format!("╰─{border}")),
         )
     }
 
@@ -106,28 +113,23 @@ impl Renderer {
     }
 
     pub(crate) fn lens_notice(&self, message: &str) -> String {
-        self.smoke(&format!("Axiom Lens: {message}"))
+        format!("{} {}", self.smoke("◈ Axiom Lens:"), self.bone(message))
     }
 
     pub(crate) fn tool_notice(&self, skill_id: &str, high_risk: bool) -> String {
-        let text = if high_risk {
-            format!("[!] Axiom Tool: executed {skill_id}")
-        } else {
-            format!("Axiom Tool: executed {skill_id}")
-        };
         if high_risk {
-            self.ember(&text)
+            format!("  {} {}", self.ember("▲ [HIGH RISK] Axiom Tool:"), self.bone(&format!("executed {skill_id}")))
         } else {
-            self.smoke(&text)
+            format!("  {} {}", self.green("✔ Axiom Tool:"), self.bone(&format!("executed {skill_id}")))
         }
     }
 
     pub(crate) fn assistant(&self, content: &str) -> String {
-        format!("{} {}", self.red("Axiom:"), self.ash(content))
+        format!("{} {}", self.red("◆ Axiom:"), self.ash(content))
     }
 
     pub(crate) fn assistant_prefix(&self) -> String {
-        format!("{} ", self.red("Axiom:"))
+        format!("{} ", self.red("◆ Axiom:"))
     }
 
     pub(crate) fn assistant_delta(&self, content: &str) -> String {
@@ -135,19 +137,19 @@ impl Renderer {
     }
 
     pub(crate) fn error(&self, error: impl std::fmt::Display) -> String {
-        self.ember(&format!("Error: {error}"))
+        format!("  {} {}", self.ember("✖ Error:"), self.bone(&error.to_string()))
     }
 
     pub(crate) fn success(&self, message: &str) -> String {
-        self.green(message)
+        format!("  {} {}", self.green("✔"), self.bone(message))
     }
 
     pub(crate) fn warning(&self, message: &str) -> String {
-        self.ember(message)
+        format!("  {} {}", self.ember("▲ Warning:"), self.bone(message))
     }
 
     pub(crate) fn status_line(&self, message: &str) -> String {
-        self.smoke(&format!("  {message}"))
+        self.smoke(&format!("  ✦ {message}"))
     }
 
     pub(crate) fn plain(&self, message: &str) -> String {

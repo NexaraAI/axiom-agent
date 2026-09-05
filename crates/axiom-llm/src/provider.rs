@@ -85,8 +85,10 @@ pub(crate) fn build_provider_http_client() -> std::result::Result<reqwest::Clien
 
 fn configure_provider_http_client(builder: reqwest::ClientBuilder) -> reqwest::ClientBuilder {
     builder
-        .connect_timeout(Duration::from_secs(10))
-        .timeout(Duration::from_secs(60))
+        .connect_timeout(Duration::from_secs(15))
+        .timeout(Duration::from_secs(300))
+        .tcp_keepalive(Duration::from_secs(15))
+        .gzip(true)
         .redirect(reqwest::redirect::Policy::none())
         .no_proxy()
 }
@@ -116,7 +118,13 @@ pub(crate) async fn read_response_body_limited(
     let mut body = Vec::with_capacity(capacity);
     while let Some(chunk) = response.chunk().await.map_err(|error| LlmError::Http {
         provider: provider.to_string(),
-        message: error.to_string(),
+        message: if error.is_timeout() {
+            format!("connection timed out after 300s: {error}")
+        } else if error.is_decode() {
+            format!("stream decoding interrupted (connection closed or truncated by server): {error}")
+        } else {
+            error.to_string()
+        },
     })? {
         crate::limits::ensure_additional_bytes(provider, resource, body.len(), chunk.len(), limit)?;
         body.extend_from_slice(&chunk);

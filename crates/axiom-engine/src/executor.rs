@@ -565,12 +565,34 @@ pub enum SkillExecutionError {
 }
 
 pub fn extract_tool_request(text: &str) -> Result<ToolRequest, SkillExecutionError> {
-    let markers = &["```axiom-tool", "```tool-call", "```tool"];
+    let markers = &[
+        "```axiom-tool",
+        "```axiom_tool",
+        "```tool-call",
+        "```tool_call",
+        "```tool",
+    ];
     let mut found = None;
     for marker in markers {
         if let Some(pos) = text.find(marker) {
             found = Some((pos, marker.len()));
             break;
+        }
+    }
+    if found.is_none() {
+        if let Some(pos) = text.find("```json") {
+            let json_start = pos + "```json".len();
+            if let Some(end) = text[json_start..].find("```") {
+                let candidate = &text[json_start..json_start + end];
+                if candidate.contains("\"skill_id\"")
+                    || (candidate.contains("\"name\"")
+                        && (candidate.contains("file.")
+                            || candidate.contains("project.")
+                            || candidate.contains("axiom_")))
+                {
+                    found = Some((pos, "```json".len()));
+                }
+            }
         }
     }
     let (start, marker_len) = found.ok_or(SkillExecutionError::MissingToolBlock)?;
@@ -581,7 +603,49 @@ pub fn extract_tool_request(text: &str) -> Result<ToolRequest, SkillExecutionErr
         .ok_or(SkillExecutionError::MissingToolBlock)?;
     let json_text = after_start[..end].trim();
 
-    Ok(serde_json::from_str(json_text)?)
+    let raw: serde_json::Value = serde_json::from_str(json_text)?;
+    normalize_tool_request_value(raw)
+}
+
+fn normalize_tool_request_value(
+    raw: serde_json::Value,
+) -> Result<ToolRequest, SkillExecutionError> {
+    if let serde_json::Value::Object(map) = raw {
+        let skill_id = if let Some(id) = map.get("skill_id").and_then(serde_json::Value::as_str) {
+            id.to_string()
+        } else if let Some(name) = map.get("name").and_then(serde_json::Value::as_str) {
+            name.strip_prefix("axiom_")
+                .unwrap_or(name)
+                .replace('_', ".")
+        } else if let Some(tool) = map.get("tool").and_then(serde_json::Value::as_str) {
+            tool.to_string()
+        } else {
+            return Err(SkillExecutionError::ExecutionPayloadMalformed {
+                skill_id: "unknown".to_string(),
+                message: "missing skill_id or name in tool request".to_string(),
+            });
+        };
+
+        let arguments = if let Some(args) = map.get("arguments") {
+            args.clone()
+        } else if let Some(params) = map.get("parameters") {
+            params.clone()
+        } else if let Some(args) = map.get("args") {
+            args.clone()
+        } else {
+            serde_json::json!({})
+        };
+
+        Ok(ToolRequest {
+            skill_id,
+            arguments,
+        })
+    } else {
+        Err(SkillExecutionError::ExecutionPayloadMalformed {
+            skill_id: "unknown".to_string(),
+            message: "expected json object for tool request".to_string(),
+        })
+    }
 }
 
 pub async fn execute_installed_tool(
@@ -794,48 +858,124 @@ async fn web_fetch(
     request: &ToolRequest,
     context: &SkillExecutionContext,
 ) -> Result<Value, SkillExecutionError> {
-    let url = string_arg(request, "url")?;
-    let parsed = validate_web_url(&url, context)?;
-    let host = parsed
-        .host_str()
-        .ok_or_else(|| SkillExecutionError::InvalidUrl("URL host is required".to_string()))?;
-    if is_private_network_host(host) {
-        return Err(SkillExecutionError::PrivateNetworkUrl(host.to_string()));
-    }
-    let port = parsed.port_or_known_default().ok_or_else(|| {
-        SkillExecutionError::InvalidUrl("URL port could not be determined".to_string())
-    })?;
-    let resolved_addresses = tokio::net::lookup_host((host, port))
-        .await
-        .map_err(|error| SkillExecutionError::Network(format!("DNS resolution failed: {error}")))?
-        .collect::<Vec<_>>();
-    if resolved_addresses.is_empty() {
-        return Err(SkillExecutionError::Network(
-            "DNS resolution returned no addresses".to_string(),
-        ));
-    }
-    if resolved_addresses
-        .iter()
-        .any(|address| is_private_network_address(address.ip()))
-    {
-        return Err(SkillExecutionError::PrivateNetworkUrl(host.to_string()));
+    let raw_url = if let Ok(url) = string_arg(request, "url") {
+        url
+    } else if let Ok(query) = string_arg(request, "query") {
+        let mut ddg = reqwest::Url::parse("https://html.duckduckgo.com/html/")
+            .map_err(|e| SkillExecutionError::InvalidUrl(e.to_string()))?;
+        ddg.query_pairs_mut().append_pair("q", &query);
+        ddg.to_string()
+    } else {
+        return Err(SkillExecutionError::MissingArgument("url".to_string()));
+    };
+
+    let mut current_url = validate_web_url(&raw_url, context)?;
+
+    if let Some(host) = current_url.host_str() {
+        let host_lower = host.to_ascii_lowercase();
+        if (host_lower == "google.com" || host_lower.ends_with(".google.com"))
+            && (current_url.path() == "/search" || current_url.path() == "/search/")
+        {
+            if let Some((_, query_val)) = current_url.query_pairs().find(|(k, _)| k == "q") {
+                let mut ddg_url = reqwest::Url::parse("https://html.duckduckgo.com/html/")
+                    .map_err(|e| SkillExecutionError::InvalidUrl(e.to_string()))?;
+                ddg_url.query_pairs_mut().append_pair("q", &query_val);
+                current_url = validate_web_url(ddg_url.as_str(), context)?;
+            }
+        } else if (host_lower == "duckduckgo.com" || host_lower == "www.duckduckgo.com")
+            && (current_url.path() == "/" || current_url.path() == "")
+        {
+            if let Some((_, query_val)) = current_url.query_pairs().find(|(k, _)| k == "q") {
+                let mut ddg_url = reqwest::Url::parse("https://html.duckduckgo.com/html/")
+                    .map_err(|e| SkillExecutionError::InvalidUrl(e.to_string()))?;
+                ddg_url.query_pairs_mut().append_pair("q", &query_val);
+                current_url = validate_web_url(ddg_url.as_str(), context)?;
+            }
+        }
     }
 
-    let mut client_builder = reqwest::Client::builder()
-        .timeout(Duration::from_secs(context.web_timeout_secs))
-        .redirect(reqwest::redirect::Policy::none())
-        .resolve_to_addrs(host, &resolved_addresses);
-    if !context.web_fetch_use_system_proxy {
-        client_builder = client_builder.no_proxy();
+    const MAX_WEB_REDIRECTS: usize = 5;
+    const DEFAULT_USER_AGENT: &str =
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36 (Axiom-Agent)";
+
+    let mut final_response = None;
+
+    for redirect_count in 0..=MAX_WEB_REDIRECTS {
+        let host = current_url
+            .host_str()
+            .ok_or_else(|| SkillExecutionError::InvalidUrl("URL host is required".to_string()))?;
+        if is_private_network_host(host) {
+            return Err(SkillExecutionError::PrivateNetworkUrl(host.to_string()));
+        }
+        let port = current_url.port_or_known_default().ok_or_else(|| {
+            SkillExecutionError::InvalidUrl("URL port could not be determined".to_string())
+        })?;
+        let resolved_addresses = tokio::net::lookup_host((host, port))
+            .await
+            .map_err(|error| SkillExecutionError::Network(format!("DNS resolution failed: {error}")))?
+            .collect::<Vec<_>>();
+        if resolved_addresses.is_empty() {
+            return Err(SkillExecutionError::Network(
+                "DNS resolution returned no addresses".to_string(),
+            ));
+        }
+        if resolved_addresses
+            .iter()
+            .any(|address| is_private_network_address(address.ip()))
+        {
+            return Err(SkillExecutionError::PrivateNetworkUrl(host.to_string()));
+        }
+
+        let mut client_builder = reqwest::Client::builder()
+            .timeout(Duration::from_secs(context.web_timeout_secs))
+            .redirect(reqwest::redirect::Policy::none())
+            .resolve_to_addrs(host, &resolved_addresses);
+        if !context.web_fetch_use_system_proxy {
+            client_builder = client_builder.no_proxy();
+        }
+        let client = client_builder
+            .build()
+            .map_err(|error| SkillExecutionError::Network(error.to_string()))?;
+
+        let response = client
+            .get(current_url.clone())
+            .header(reqwest::header::USER_AGENT, DEFAULT_USER_AGENT)
+            .header(
+                reqwest::header::ACCEPT,
+                "text/html,application/xhtml+xml,application/xml;q=0.9,application/json;q=0.8,*/*;q=0.7",
+            )
+            .header(reqwest::header::ACCEPT_LANGUAGE, "en-US,en;q=0.9")
+            .send()
+            .await
+            .map_err(|error| SkillExecutionError::Network(error.to_string()))?;
+
+        if response.status().is_redirection() {
+            if redirect_count == MAX_WEB_REDIRECTS {
+                return Err(SkillExecutionError::Network(format!(
+                    "exceeded maximum redirects ({MAX_WEB_REDIRECTS})"
+                )));
+            }
+            if let Some(location) = response.headers().get(reqwest::header::LOCATION) {
+                let location_str = location.to_str().map_err(|_| {
+                    SkillExecutionError::Network(
+                        "redirect Location header is not valid UTF-8".to_string(),
+                    )
+                })?;
+                let next_url = current_url.join(location_str).map_err(|error| {
+                    SkillExecutionError::InvalidUrl(format!("invalid redirect target: {error}"))
+                })?;
+                current_url = validate_web_url(next_url.as_str(), context)?;
+                continue;
+            }
+        }
+
+        final_response = Some(response);
+        break;
     }
-    let client = client_builder
-        .build()
-        .map_err(|error| SkillExecutionError::Network(error.to_string()))?;
-    let mut response = client
-        .get(parsed)
-        .send()
-        .await
-        .map_err(|error| SkillExecutionError::Network(error.to_string()))?;
+
+    let mut response = final_response.ok_or_else(|| {
+        SkillExecutionError::Network("failed to receive HTTP response".to_string())
+    })?;
     let status = response.status().as_u16();
     let content_type = response
         .headers()
@@ -1022,7 +1162,13 @@ fn validated_web_target(
     request: &ToolRequest,
     context: &SkillExecutionContext,
 ) -> Result<String, SkillExecutionError> {
-    let url = string_arg(request, "url")?;
+    let url = if let Ok(u) = string_arg(request, "url") {
+        u
+    } else if let Ok(q) = string_arg(request, "query") {
+        format!("https://html.duckduckgo.com/html/?q={q}")
+    } else {
+        return Err(SkillExecutionError::MissingArgument("url".to_string()));
+    };
     let mut parsed = validate_web_url(&url, context)?;
 
     parsed.set_query(None);
@@ -2010,6 +2156,20 @@ mod tests {
             .expect_err("plain HTTP should be denied by the default context");
 
         assert!(matches!(error, SkillExecutionError::InvalidUrl(_)));
+    }
+
+    #[test]
+    fn web_fetch_supports_query_argument() {
+        let root = unique_temp_dir();
+        let request = ToolRequest {
+            skill_id: "web.fetch".to_string(),
+            arguments: json!({"query": "minecraft plugins"}),
+        };
+
+        let target = validated_web_target(&request, &context(&root))
+            .expect("query should map to duckduckgo html target");
+
+        assert_eq!(target, "https://html.duckduckgo.com/html/");
     }
 
     #[test]

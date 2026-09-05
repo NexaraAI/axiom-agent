@@ -2,7 +2,7 @@ schema_version = "1.0"
 id = "web.fetch"
 name = "Fetch Web Text"
 version = "0.1.0"
-description = "Fetches URL text with timeout and response size limits."
+description = "Fetches public URL text or searches online documentation and topics."
 category = "web"
 skill_type = "tool"
 risk_level = "medium"
@@ -14,8 +14,8 @@ license = "MIT"
 min_axiom_version = "0.1.0"
 
 [llm_card]
-summary = "Fetch text from a specific URL when web content is needed (not a search engine)."
-when_to_use = ["User gives a URL", "User asks to fetch website text"]
-input_contract = "url, timeout_ms, max_bytes"
+summary = "Fetch text from a specific URL or search the web for documentation, libraries, or topics."
+when_to_use = ["User gives a URL", "User asks to fetch website text", "User asks to search or research a topic on the web"]
+input_contract = "url, query, timeout_ms, max_bytes"
 output_contract = "status, text, content_type"
 token_budget = 220

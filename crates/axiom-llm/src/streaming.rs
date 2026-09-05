@@ -404,7 +404,15 @@ impl HttpChatStream {
                 .await
                 .map_err(|error| LlmError::Http {
                     provider: self.provider.clone(),
-                    message: error.to_string(),
+                    message: if error.is_timeout() {
+                        format!("connection timed out after 300s: {error}")
+                    } else if error.is_decode() {
+                        format!(
+                            "stream decoding interrupted (connection closed or truncated by server): {error}"
+                        )
+                    } else {
+                        error.to_string()
+                    },
                 })? {
                 Some(bytes) => {
                     ensure_additional_bytes(
