@@ -581,10 +581,6 @@ fn default_variant() -> String {
     "Default".to_string()
 }
 
-fn default_tier() -> String {
-    default_variant()
-}
-
 fn default_variant_models() -> BTreeMap<String, BTreeMap<String, String>> {
     BTreeMap::from([
         (
@@ -663,10 +659,6 @@ fn default_variant_models() -> BTreeMap<String, BTreeMap<String, String>> {
             ]),
         ),
     ])
-}
-
-fn default_tier_models() -> BTreeMap<String, BTreeMap<String, String>> {
-    default_variant_models()
 }
 
 fn default_coder_auto_route_from_chat() -> bool {
