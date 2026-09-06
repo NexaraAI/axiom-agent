@@ -660,9 +660,9 @@ impl SkillExecutor for TestRunExecutor {
                 "type": "object",
                 "required": ["status", "passed", "framework", "command", "output", "summary"]
             }),
-            permissions: vec![Permission::ShellExecution, Permission::FileSystemRead],
+            permissions: vec![Permission::ShellRun, Permission::FileSystemRead],
             side_effects: vec![
-                SideEffectClass::ProcessSpawn,
+                SideEffectClass::Process,
                 SideEffectClass::FilesystemRead,
             ],
             deterministic_fixture: json!({"path": "."}),
@@ -698,7 +698,7 @@ impl SkillExecutor for TestRunExecutor {
                 self.id(),
                 "test.run",
                 [
-                    SideEffectClass::ProcessSpawn,
+                    SideEffectClass::Process,
                     SideEffectClass::FilesystemRead,
                 ],
                 Some(target_dir),
