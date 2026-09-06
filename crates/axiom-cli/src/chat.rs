@@ -4162,8 +4162,23 @@ async fn handle_chat_command(session: &mut ChatSession, input: &str) -> Result<C
             } else {
                 input.trim_start_matches("/provider new ").trim()
             };
-            if let Some(preset) = crate::onboarding::provider_preset(target) {
-                match crate::onboarding::prompt_preset_setup(preset.id).await {
+            let parts: Vec<&str> = target.split_whitespace().collect();
+            let preset_name = parts.first().copied().unwrap_or(target);
+            let inline_key = parts.get(1).copied();
+            if let Some(preset) = crate::onboarding::provider_preset(preset_name) {
+                let setup_result = if let Some(key) = inline_key {
+                    let _ = crate::credentials::store_credential(preset.api_key_env, key);
+                    Ok(crate::onboarding::ProviderSetup::OpenAiCompatible {
+                        provider_name: preset.id.to_string(),
+                        base_url: preset.base_url.to_string(),
+                        api_key_env: Some(preset.api_key_env.to_string()),
+                        models_url: None,
+                        default_model: preset.default_model.to_string(),
+                    })
+                } else {
+                    crate::onboarding::prompt_preset_setup(preset.id).await
+                };
+                match setup_result {
                     Ok(setup) => {
                         crate::onboarding::apply_provider_setup(&mut session.config, &setup);
                         session.save_config()?;
@@ -4173,7 +4188,7 @@ async fn handle_chat_command(session: &mut ChatSession, input: &str) -> Result<C
                     Err(error) => println!("Failed to set up provider: {error}"),
                 }
             } else {
-                println!("Unknown preset '{target}'. Supported: groq, openrouter, gemini, github-models, opencode, gmicloud, nvidia, openai, ollama, lm-studio");
+                println!("Unknown preset '{preset_name}'. Supported: groq, openrouter, gemini, github-models, opencode, gmicloud, nvidia, openai, ollama, lm-studio");
             }
             Ok(CommandResult::Continue)
         }
@@ -5279,7 +5294,7 @@ mod tests {
 
         assert!(!session.config.providers.contains_key("opencode"));
 
-        handle_chat_command(&mut session, "/provider add opencode")
+        handle_chat_command(&mut session, "/provider add opencode test-zen-key")
             .await
             .expect("add opencode");
 
