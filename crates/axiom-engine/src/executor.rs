@@ -2623,9 +2623,7 @@ mod tests {
             assert!(descriptor.is_complete(), "incomplete: {}", descriptor.id);
             assert!(descriptor.input_schema.is_object());
             assert!(descriptor.output_schema.is_object());
-            assert!(
-                !descriptor.side_effects.is_empty() || descriptor.id == "question.ask"
-            );
+            assert!(!descriptor.side_effects.is_empty() || descriptor.id == "question.ask");
             assert!(descriptor.deterministic_fixture.is_object());
             validate_schema_value(&descriptor.deterministic_fixture, &descriptor.input_schema)
                 .unwrap_or_else(|error| panic!("invalid fixture for {}: {error}", descriptor.id));

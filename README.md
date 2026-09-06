@@ -14,7 +14,7 @@ Proof Mode records what happened during each session: what you asked, which skil
 
 ## Current Status
 
-This repository contains Axiom `1.0.5`, a stable release with autonomous harness execution, intelligent web research, model tiers, and executive TUI:
+This repository contains Axiom `1.0.6`, a stable release with executive TUI redesign, interactive MCQ question prompts, reasoning effort tiers, and enhanced gateway runtime:
 
 ```bash
 npm install -g axiom-agent
