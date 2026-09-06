@@ -5294,14 +5294,14 @@ mod tests {
         config.save_to_path(&config_path).expect("save config");
         let mut session = ChatSession::load(&config_path).expect("load session");
 
-        assert!(!session.config.providers.contains_key("opencode"));
+        assert!(!session.config.providers.contains_key("ollama"));
 
-        handle_chat_command(&mut session, "/provider add opencode test-zen-key")
+        handle_chat_command(&mut session, "/provider add ollama")
             .await
-            .expect("add opencode");
+            .expect("add ollama");
 
         let reloaded = AxiomConfig::load_from_path(&config_path).expect("load saved");
-        assert!(reloaded.providers.contains_key("opencode"));
+        assert!(reloaded.providers.contains_key("ollama"));
 
         let _ = fs::remove_dir_all(dir);
     }

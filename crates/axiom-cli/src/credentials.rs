@@ -474,6 +474,11 @@ mod tests {
         let _guard_gmi_cloud = EnvGuard::remove("GMI_CLOUD_API_KEY");
         let _guard_gmi = EnvGuard::remove("GMI_API_KEY");
 
+        let _ = forget_credential("OPENCODE_API_KEY");
+        let _ = forget_credential("OPENCODE_ZEN_API_KEY");
+        let _ = forget_credential("GMI_CLOUD_API_KEY");
+        let _ = forget_credential("GMI_API_KEY");
+
         assert_eq!(
             resolve_with_store("OPENCODE_API_KEY", &store).expect("resolve"),
             None
@@ -490,5 +495,10 @@ mod tests {
             resolve_with_store("GMI_CLOUD_API_KEY", &store).expect("resolve via gmi alias"),
             Some("gmi-secret-456".to_string())
         );
+
+        let _ = forget_credential("OPENCODE_API_KEY");
+        let _ = forget_credential("OPENCODE_ZEN_API_KEY");
+        let _ = forget_credential("GMI_CLOUD_API_KEY");
+        let _ = forget_credential("GMI_API_KEY");
     }
 }
