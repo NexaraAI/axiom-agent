@@ -237,6 +237,7 @@ dependencies = [
  "clap",
  "futures-util",
  "keyring",
+ "libc",
  "nu-ansi-term",
  "reqwest",
  "rpassword",
