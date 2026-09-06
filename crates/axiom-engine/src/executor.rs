@@ -2260,6 +2260,7 @@ impl Drop for ChildProcessGuard {
     }
 }
 
+#[allow(clippy::zombie_processes)]
 fn shell_run(
     skill_id: &str,
     request: &ToolRequest,
@@ -2330,7 +2331,7 @@ fn shell_run(
             .map_err(|e| SkillExecutionError::CommandFailed(e.to_string()))?
         {
             Some(status) => {
-                let _ = guard.disown();
+                let _ = guard.as_mut().wait();
                 let out_str = String::from_utf8_lossy(&stdout_buf.lock().unwrap()).to_string();
                 let err_str = String::from_utf8_lossy(&stderr_buf.lock().unwrap()).to_string();
                 Ok(json!({
@@ -2392,7 +2393,7 @@ fn shell_run(
 
         match exit_status {
             Some(status) => {
-                let _ = guard.disown();
+                let _ = guard.as_mut().wait();
                 std::thread::sleep(Duration::from_millis(50));
                 let out_str = String::from_utf8_lossy(&stdout_buf.lock().unwrap()).to_string();
                 let err_str = String::from_utf8_lossy(&stderr_buf.lock().unwrap()).to_string();
@@ -2403,8 +2404,8 @@ fn shell_run(
                 }))
             }
             None => {
-                let mut child = guard.disown();
-                let _ = child.kill();
+                let _ = guard.as_mut().kill();
+                let _ = guard.as_mut().wait();
                 let out_str = String::from_utf8_lossy(&stdout_buf.lock().unwrap()).to_string();
                 let err_str = String::from_utf8_lossy(&stderr_buf.lock().unwrap()).to_string();
                 Ok(json!({
@@ -2417,6 +2418,7 @@ fn shell_run(
     }
 }
 
+#[allow(clippy::zombie_processes)]
 fn execute_test_command(
     cwd: &Path,
     cmd_str: &str,
@@ -2460,7 +2462,7 @@ fn execute_test_command(
 
     match exit_status {
         Some(status) => {
-            let _ = guard.disown();
+            let _ = guard.as_mut().wait();
             std::thread::sleep(Duration::from_millis(30));
             let out_str = String::from_utf8_lossy(&stdout_buf.lock().unwrap()).to_string();
             let err_str = String::from_utf8_lossy(&stderr_buf.lock().unwrap()).to_string();
@@ -2475,8 +2477,8 @@ fn execute_test_command(
             Ok((status.success(), code, combined))
         }
         None => {
-            let mut child = guard.disown();
-            let _ = child.kill();
+            let _ = guard.as_mut().kill();
+            let _ = guard.as_mut().wait();
             let out_str = String::from_utf8_lossy(&stdout_buf.lock().unwrap()).to_string();
             let err_str = String::from_utf8_lossy(&stderr_buf.lock().unwrap()).to_string();
             Ok((
@@ -2502,10 +2504,12 @@ fn dir_contains_extension(dir: &Path, ext: &str, max_depth: usize) -> bool {
             } else if path.is_dir() {
                 let file_name = entry.file_name();
                 let name = file_name.to_string_lossy();
-                if !name.starts_with('.') && name != "node_modules" && name != "target" {
-                    if dir_contains_extension(&path, ext, max_depth - 1) {
-                        return true;
-                    }
+                if !name.starts_with('.')
+                    && name != "node_modules"
+                    && name != "target"
+                    && dir_contains_extension(&path, ext, max_depth - 1)
+                {
+                    return true;
                 }
             }
         }
