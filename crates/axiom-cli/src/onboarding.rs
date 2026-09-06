@@ -1,6 +1,6 @@
 use std::{
     fs,
-    io::{self, Write},
+    io::{self, IsTerminal, Write},
     path::{Path, PathBuf},
 };
 
@@ -934,6 +934,14 @@ fn choose_model_from_catalog(
     println!("Available models: {}", models.len());
     print_model_matches(models);
     let fallback = suggested_model.or_else(|| models.first().map(|model| model.id.as_str()));
+    if !io::stdin().is_terminal() {
+        if let Some(target) = fallback {
+            return Ok(target.to_string());
+        }
+        if let Some(first) = models.first() {
+            return Ok(first.id.clone());
+        }
+    }
     loop {
         let value = match fallback {
             Some(default) => prompt_with_default("Model ID or search text", default)?,
@@ -1177,16 +1185,16 @@ pub(crate) async fn prompt_gateway_setup(config_path: &Path, ui: &Renderer) -> R
 }
 
 pub(crate) fn prompt_with_default(label: &str, default: &str) -> Result<String> {
-    let value = prompt(&format!("{label} [{default}]"))?;
-    if value.trim().is_empty() {
-        Ok(default.to_string())
-    } else {
-        Ok(value)
+    if !io::stdin().is_terminal() {
+        return Ok(default.to_string());
+    }
+    match prompt(&format!("{label} [{default}]")) {
+        Ok(value) if !value.trim().is_empty() => Ok(value),
+        _ => Ok(default.to_string()),
     }
 }
 
 fn confirm(label: &str, default: bool) -> Result<bool> {
-    use std::io::IsTerminal;
     let hint = if default { "Y/n" } else { "y/N" };
     loop {
         let value = match prompt(&format!("{label} [{hint}]")) {

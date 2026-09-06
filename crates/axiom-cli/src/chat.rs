@@ -4177,6 +4177,14 @@ async fn handle_chat_command(session: &mut ChatSession, input: &str) -> Result<C
                         models_url: preset.models_url.map(ToString::to_string),
                         default_model: preset.default_model.unwrap_or("default").to_string(),
                     })
+                } else if preset.api_key_env.is_none() && (!io::stdin().is_terminal() || !io::stdout().is_terminal()) {
+                    Ok(crate::onboarding::ProviderSetup::OpenAiCompatible {
+                        provider_name: preset.id.to_string(),
+                        base_url: preset.base_url.to_string(),
+                        api_key_env: None,
+                        models_url: preset.models_url.map(ToString::to_string),
+                        default_model: preset.default_model.unwrap_or("default").to_string(),
+                    })
                 } else {
                     crate::onboarding::prompt_preset_setup(preset.id).await
                 };
