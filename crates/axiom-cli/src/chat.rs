@@ -28,9 +28,7 @@ use axiom_engine::{
     RecordingSideEffectAuditSink, SideEffectPolicy, SkillApproval, SkillAutoUpdatePolicy,
     SkillCard, SkillExecutionContext, SkillExecutionError, SkillExecutionResult,
 };
-use axiom_lens::{
-    auto_route_action, build_skill_context_message, select_relevant_skills, AutoRouteAction,
-};
+use axiom_lens::select_relevant_skills;
 use axiom_llm::{
     ChatMessage, ChatRequest, ChatResponse, ChatStreamUpdate, CloudflareAiGatewayProvider,
     LlmProvider, MockProvider, ModelInfo, OpenAiCompatibleProvider,
@@ -291,10 +289,6 @@ impl ChatSession {
     pub(crate) fn clear_history(&mut self) {
         self.history.clear();
         self.todo = TodoList::default();
-    }
-
-    pub(crate) fn set_lens_enabled(&mut self, enabled: bool) {
-        self.lens_enabled = enabled;
     }
 
     #[cfg(test)]
