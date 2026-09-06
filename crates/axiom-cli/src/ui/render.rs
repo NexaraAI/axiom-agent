@@ -76,7 +76,7 @@ impl Renderer {
         model: &str,
         effort: &str,
         workspace: &str,
-        _session_id: &str,
+        session_id: &str,
     ) -> String {
         let effort_val = if effort.is_empty() { "medium" } else { effort };
         let version = env!("CARGO_PKG_VERSION");
@@ -139,6 +139,15 @@ impl Renderer {
         out.push(pad_card_line(&self.border("│"), &status_content, 58));
 
         out.push(self.border(&card_empty));
+
+        // Session line
+        if !session_id.is_empty() {
+            let session_label = self.smoke("session:");
+            let session_val = self.smoke(session_id);
+            let session_content = format!("{session_label} {session_val}");
+            out.push(pad_card_line(&self.border("│"), &session_content, 58));
+            out.push(self.border(&card_empty));
+        }
 
         // Keybindings hints
         let kb_tab = self.smoke("tab");

@@ -3291,23 +3291,7 @@ async fn handle_chat_command(session: &mut ChatSession, input: &str) -> Result<C
     }
 }
 
-fn print_command_suggestions() {
-    println!("╭─── Suggested Commands ───────────────────────────────────────────");
-    println!("│  /effort [none|low|medium|high|max]  Configure reasoning effort");
-    println!("│  /model [name]                       Switch or view active LLM model");
-    println!("│  /undo                               Restore latest workspace checkpoint");
-    println!("│  /skills                             List active and installed skills");
-    println!("│  /clear                              Clear session message history");
-    println!("│  /checkpoints                        List workspace recovery snapshots");
-    println!("│  /restore <id>                       Restore a recovery snapshot");
-    println!("│  /provider [name]                    View or switch inference provider");
-    println!("│  /lens [on|off]                      Toggle dynamic skill routing");
-    println!("│  /proof [on|off|status|latest]       Audit and execution provenance");
-    println!("│  /multi                              Enter multiline input mode");
-    println!("│  /help                               Show detailed command help");
-    println!("│  /exit                               Exit Axiom session");
-    println!("╰──────────────────────────────────────────────────────────────────");
-}
+
 
 fn print_help() {
     println!("Commands (prefix with either '/' or '!'):");
