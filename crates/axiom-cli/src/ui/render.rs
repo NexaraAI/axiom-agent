@@ -144,9 +144,9 @@ impl Renderer {
         // Mode & Session line
         let mode_norm = if mode.is_empty() { "velocity" } else { mode };
         let mode_styled = match mode_norm {
-            "full_machine" => self.paint(self.palette.error, "full_machine"),
-            "strict" => self.paint(self.palette.warning, "strict"),
-            _ => self.paint(self.palette.success, "velocity"),
+            "full_machine" => self.red("full_machine"),
+            "strict" => self.ember("strict"),
+            _ => self.green("velocity"),
         };
         let mode_label = self.smoke("mode:");
         let session_line_content = if !session_id.is_empty() {
