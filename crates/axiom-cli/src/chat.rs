@@ -355,10 +355,6 @@ impl ChatSession {
         self.config.llm.active_variant()
     }
 
-    pub(crate) fn active_effort(&self) -> &str {
-        self.active_variant()
-    }
-
     pub(crate) fn set_variant(&mut self, variant: &str) -> Result<String> {
         let trimmed = variant.trim();
         let normalized = trimmed.to_ascii_lowercase();
@@ -379,10 +375,6 @@ impl ChatSession {
         Ok(canonical.to_string())
     }
 
-    pub(crate) fn set_effort(&mut self, effort: &str) -> Result<String> {
-        self.set_variant(effort)
-    }
-
     pub(crate) fn provider_options(&self) -> Option<std::collections::BTreeMap<String, Value>> {
         let variant = self.active_variant();
         let normalized = variant.to_ascii_lowercase();
@@ -393,10 +385,6 @@ impl ChatSession {
             opts.insert("reasoning_effort".to_string(), Value::String(normalized));
             Some(opts)
         }
-    }
-
-    pub(crate) fn set_tier(&mut self, tier: &str) -> Result<String> {
-        self.set_variant(tier)
     }
 
     pub(crate) fn permission_mode(&self) -> PermissionMode {
@@ -3060,9 +3048,7 @@ pub(crate) fn extract_mcq_from_text(text: &str) -> Option<ParsedMcq> {
 }
 
 fn is_mcq_option_line(line: &str, current_count: usize) -> bool {
-    let stripped = line
-        .trim_start_matches(|c: char| c == '*' || c == '-' || c == ' ')
-        .trim();
+    let stripped = line.trim_start_matches(['*', '-', ' ']).trim();
     let expected_letter = (b'A' + current_count as u8) as char;
     let expected_num = format!("{}.", current_count + 1);
     let expected_num_paren = format!("{})", current_count + 1);

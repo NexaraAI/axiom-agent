@@ -68,13 +68,6 @@ pub(crate) async fn run(command: CodeCommand) -> Result<()> {
     }
 }
 
-pub(crate) async fn run_task_from_chat(task: String) -> Result<()> {
-    ensure_onboarding_completed().await?;
-    let mut session = CoderSession::load_default()?;
-    session.auto_routed_to_coder = true;
-    session.run_task_plan(&task, false).await
-}
-
 async fn ensure_onboarding_completed() -> Result<()> {
     let config_path = AxiomConfig::default_config_path()?;
     if startup::route_for_config_path(&config_path)? == startup::StartupRoute::Onboarding {

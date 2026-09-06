@@ -334,10 +334,6 @@ impl Renderer {
         format!("{} {}", self.primary("⟡ Orchestrator:"), self.bone(message))
     }
 
-    pub(crate) fn lens_notice(&self, message: &str) -> String {
-        self.orchestrator_notice(message)
-    }
-
     pub(crate) fn update_notification_card(&self, current: &str, latest: &str) -> Vec<String> {
         let border_top = "  ┌───────────────────── Update Available ──────────────────────┐";
         let border_bottom = "  └─────────────────────────────────────────────────────────────┘";
