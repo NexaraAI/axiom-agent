@@ -3248,11 +3248,11 @@ fn spawn_turn_cancellation_listener(
                 let ret = unsafe { libc::poll(&mut pollfd, 1, 40) };
                 if ret > 0 && (pollfd.revents & libc::POLLIN) != 0 {
                     let mut buf = [0u8; 1];
-                    if unsafe { libc::read(0, buf.as_mut_ptr() as *mut _, 1) } > 0 {
-                        if buf[0] == 27 || buf[0] == 3 {
-                            esc_token.cancel();
-                            break;
-                        }
+                    if unsafe { libc::read(0, buf.as_mut_ptr() as *mut _, 1) } > 0
+                        && (buf[0] == 27 || buf[0] == 3)
+                    {
+                        esc_token.cancel();
+                        break;
                     }
                 }
             }
