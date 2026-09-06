@@ -228,13 +228,14 @@ pub fn read_secret_env(env: &str) -> Result<String> {
         env: env.to_string(),
     })?;
 
-    if value.trim().is_empty() {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
         return Err(LlmError::EmptyApiKeyEnv {
             env: env.to_string(),
         });
     }
 
-    Ok(value)
+    Ok(trimmed.to_string())
 }
 
 #[derive(Debug, Deserialize)]

@@ -247,6 +247,7 @@ pub(crate) fn prompt_for_credential(environment_variable: &str) -> Result<bool> 
 /// local file. Pasted keys are never silently dropped.
 pub(crate) fn store_credential(environment_variable: &str, secret: &str) -> Result<bool> {
     axiom_llm::validate_credential_env_name(environment_variable)?;
+    let secret = secret.trim();
     match OsCredentialStore.set(environment_variable, secret) {
         Ok(()) => Ok(true),
         Err(_) => {

@@ -107,7 +107,8 @@ impl OpenAiCompatibleProvider {
 
     fn authenticate(&self, builder: RequestBuilder) -> Result<RequestBuilder> {
         if let Some(api_key) = self.api_key.as_ref() {
-            if api_key.expose().trim().is_empty() {
+            let key = api_key.expose().trim();
+            if key.is_empty() {
                 return Err(LlmError::EmptyApiKeyEnv {
                     env: self
                         .api_key_env
@@ -115,7 +116,7 @@ impl OpenAiCompatibleProvider {
                         .unwrap_or_else(|| "direct provider credential".to_string()),
                 });
             }
-            return Ok(builder.bearer_auth(api_key.expose()));
+            return Ok(builder.bearer_auth(key));
         }
         match self.api_key_env.as_deref() {
             Some(api_key_env) => Ok(builder.bearer_auth(read_secret_env(api_key_env)?)),
