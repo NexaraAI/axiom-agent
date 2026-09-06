@@ -4135,8 +4135,14 @@ async fn handle_chat_command(session: &mut ChatSession, input: &str) -> Result<C
                             &format!("{}_API_KEY", name.to_ascii_uppercase().replace('-', "_")),
                         )?;
                         crate::credentials::prompt_for_credential(&api_key_env)?;
-                        let default_model =
-                            crate::onboarding::prompt_required("Default model name")?;
+                        let default_model = crate::onboarding::discover_and_choose_model(
+                            &name,
+                            &base_url,
+                            Some(api_key_env.clone()),
+                            None,
+                            None,
+                        )
+                        .await?;
                         let setup = crate::onboarding::ProviderSetup::OpenAiCompatible {
                             provider_name: name.clone(),
                             base_url,

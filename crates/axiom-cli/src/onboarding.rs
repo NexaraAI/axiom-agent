@@ -881,7 +881,7 @@ pub(crate) async fn prompt_preset_setup(provider: &str) -> Result<ProviderSetup>
     provider_setup_from_preset(provider, Some(default_model))
 }
 
-async fn discover_and_choose_model(
+pub(crate) async fn discover_and_choose_model(
     provider_name: &str,
     base_url: &str,
     api_key_env: Option<String>,
