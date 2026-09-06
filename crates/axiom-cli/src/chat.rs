@@ -58,8 +58,8 @@ use crate::{
 };
 
 pub(crate) struct ChatSession {
-    config_path: PathBuf,
-    config: AxiomConfig,
+    pub(crate) config_path: PathBuf,
+    pub(crate) config: AxiomConfig,
     identity_system_message: String,
     history: Vec<ChatMessage>,
     lens_enabled: bool,
@@ -67,7 +67,7 @@ pub(crate) struct ChatSession {
     todo: TodoList,
     session_id: SessionId,
     session_created_at_unix_ms: u128,
-    workspace_path: PathBuf,
+    pub(crate) workspace_path: PathBuf,
     credential_env_names: Vec<String>,
     pub(crate) prompt_queue: VecDeque<String>,
 }
@@ -1225,7 +1225,7 @@ impl ChatSession {
         Ok(())
     }
 
-    fn persist_session(&self) -> Result<PathBuf> {
+    pub(crate) fn persist_session(&self) -> Result<PathBuf> {
         let store = session_store_for_config(&self.config_path);
         let checkpoint = store
             .load(&self.session_id)
@@ -2172,7 +2172,7 @@ async fn run_terminal_session(mut session: ChatSession) -> Result<()> {
                                 first_test.command
                             ))
                         );
-                        match run_debugger_check(session.workspace_path(), &first_test.command)
+                        match run_debugger_check(&session.workspace_path(), &first_test.command)
                             .await
                         {
                             Ok(true) => {
@@ -2956,7 +2956,10 @@ async fn run_debugger_check(workspace: &Path, command_str: &str) -> Result<bool,
     }
     let program = parts[0];
     let args = &parts[1..];
-    match axiom_core::run_command_bounded(program, args, workspace, 30_000).await {
+    let mut cmd = std::process::Command::new(program);
+    cmd.args(args);
+    cmd.current_dir(workspace);
+    match axiom_core::run_command_bounded(&mut cmd, 64 * 1024, 64 * 1024) {
         Ok(output) => {
             if output.status.success() {
                 Ok(true)
@@ -2982,9 +2985,9 @@ async fn check_for_startup_update(config: &AxiomConfig) -> Option<(String, Strin
             let current = env!("CARGO_PKG_VERSION");
             let tag = latest.tag_name.trim_start_matches('v');
             if let (Ok(curr_ver), Ok(latest_ver)) =
-                (semver::Version::parse(current), semver::Version::parse(tag))
+                (axiom_upd::parse_version(current), axiom_upd::parse_version(tag))
             {
-                if latest_ver > curr_ver {
+                if axiom_upd::is_newer_version(&curr_ver, &latest_ver) {
                     return Some((current.to_string(), tag.to_string()));
                 }
             }

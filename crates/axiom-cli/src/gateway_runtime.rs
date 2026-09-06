@@ -148,9 +148,9 @@ pub(crate) async fn respond_with_session(session: &mut ChatSession, text: &str) 
                     let current = env!("CARGO_PKG_VERSION");
                     let tag = latest.tag_name.trim_start_matches('v');
                     if let (Ok(curr_ver), Ok(latest_ver)) =
-                        (semver::Version::parse(current), semver::Version::parse(tag))
+                        (axiom_upd::parse_version(current), axiom_upd::parse_version(tag))
                     {
-                        if latest_ver > curr_ver {
+                        if axiom_upd::is_newer_version(&curr_ver, &latest_ver) {
                             return format!(
                                 "Update available: v{curr_ver} -> v{tag}\nRun `axiom update` or `npm i -g @nexara/axiom` to update."
                             );
