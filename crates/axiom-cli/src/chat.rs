@@ -4102,8 +4102,7 @@ mod tests {
         assert_eq!(clean_pasted_input(approval_raw).trim(), "y");
     }
 
-    static UNIQUE_DIR_COUNTER: std::sync::atomic::AtomicU64 =
-        std::sync::atomic::AtomicU64::new(0);
+    static UNIQUE_DIR_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
     fn unique_temp_dir() -> PathBuf {
         let count = UNIQUE_DIR_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
