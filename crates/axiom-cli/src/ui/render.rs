@@ -107,6 +107,7 @@ impl Renderer {
         )
     }
 
+    #[allow(dead_code)]
     pub(crate) fn mcq_card(
         &self,
         question: &str,
