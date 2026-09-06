@@ -1555,31 +1555,36 @@ impl Hinter for AxiomCommandHelper {
         let rest = &line[1..];
         if let Some(sub) = rest.strip_prefix("effort ") {
             for eff in &["none", "low", "medium", "high", "max"] {
-                if eff.starts_with(sub) && *eff != sub {
-                    return Some(AxiomHint(eff[sub.len()..].to_string()));
+                if let Some(suffix) = eff.strip_prefix(sub) {
+                    if !suffix.is_empty() {
+                        return Some(AxiomHint(suffix.to_string()));
+                    }
                 }
             }
             return None;
         }
         if let Some(sub) = rest.strip_prefix("tier ") {
             for eff in &["none", "low", "medium", "high", "max"] {
-                if eff.starts_with(sub) && *eff != sub {
-                    return Some(AxiomHint(eff[sub.len()..].to_string()));
+                if let Some(suffix) = eff.strip_prefix(sub) {
+                    if !suffix.is_empty() {
+                        return Some(AxiomHint(suffix.to_string()));
+                    }
                 }
             }
             return None;
         }
         if let Some(sub) = rest.strip_prefix("lens ") {
             for opt in &["on", "off"] {
-                if opt.starts_with(sub) && *opt != sub {
-                    return Some(AxiomHint(opt[sub.len()..].to_string()));
+                if let Some(suffix) = opt.strip_prefix(sub) {
+                    if !suffix.is_empty() {
+                        return Some(AxiomHint(suffix.to_string()));
+                    }
                 }
             }
             return None;
         }
         for (cmd, desc) in COMMAND_HINTS {
-            if cmd.starts_with(rest) {
-                let suffix = &cmd[rest.len()..];
+            if let Some(suffix) = cmd.strip_prefix(rest) {
                 return Some(AxiomHint(format!("{suffix}{desc}")));
             }
         }
