@@ -1298,11 +1298,26 @@ format = "json"
 
     #[test]
     fn permission_mode_parsing_and_validation() {
-        assert_eq!(PermissionMode::parse("full_machine"), Some(PermissionMode::FullMachine));
-        assert_eq!(PermissionMode::parse("unrestricted"), Some(PermissionMode::FullMachine));
-        assert_eq!(PermissionMode::parse("velocity"), Some(PermissionMode::Velocity));
-        assert_eq!(PermissionMode::parse("fast"), Some(PermissionMode::Velocity));
-        assert_eq!(PermissionMode::parse("strict"), Some(PermissionMode::Strict));
+        assert_eq!(
+            PermissionMode::parse("full_machine"),
+            Some(PermissionMode::FullMachine)
+        );
+        assert_eq!(
+            PermissionMode::parse("unrestricted"),
+            Some(PermissionMode::FullMachine)
+        );
+        assert_eq!(
+            PermissionMode::parse("velocity"),
+            Some(PermissionMode::Velocity)
+        );
+        assert_eq!(
+            PermissionMode::parse("fast"),
+            Some(PermissionMode::Velocity)
+        );
+        assert_eq!(
+            PermissionMode::parse("strict"),
+            Some(PermissionMode::Strict)
+        );
         assert_eq!(PermissionMode::parse("safe"), Some(PermissionMode::Strict));
         assert_eq!(PermissionMode::parse("unknown_mode"), None);
 

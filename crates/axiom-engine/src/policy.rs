@@ -341,19 +341,40 @@ mod tests {
     #[test]
     fn permission_mode_presets_evaluate_expected_actions() {
         let full = SideEffectPolicy::full_machine();
-        assert_eq!(full.action_for(SideEffectClass::FilesystemWrite), PolicyAction::Allow);
-        assert_eq!(full.action_for(SideEffectClass::Process), PolicyAction::Allow);
+        assert_eq!(
+            full.action_for(SideEffectClass::FilesystemWrite),
+            PolicyAction::Allow
+        );
+        assert_eq!(
+            full.action_for(SideEffectClass::Process),
+            PolicyAction::Allow
+        );
         assert_eq!(full.action_for(SideEffectClass::Git), PolicyAction::Allow);
 
         let velocity = SideEffectPolicy::velocity();
-        assert_eq!(velocity.action_for(SideEffectClass::FilesystemWrite), PolicyAction::Allow);
-        assert_eq!(velocity.action_for(SideEffectClass::Process), PolicyAction::Allow);
+        assert_eq!(
+            velocity.action_for(SideEffectClass::FilesystemWrite),
+            PolicyAction::Allow
+        );
+        assert_eq!(
+            velocity.action_for(SideEffectClass::Process),
+            PolicyAction::Allow
+        );
         assert_eq!(velocity.action_for(SideEffectClass::Git), PolicyAction::Ask);
 
         let strict = SideEffectPolicy::strict();
-        assert_eq!(strict.action_for(SideEffectClass::FilesystemRead), PolicyAction::Allow);
-        assert_eq!(strict.action_for(SideEffectClass::FilesystemWrite), PolicyAction::Ask);
-        assert_eq!(strict.action_for(SideEffectClass::Process), PolicyAction::Ask);
+        assert_eq!(
+            strict.action_for(SideEffectClass::FilesystemRead),
+            PolicyAction::Allow
+        );
+        assert_eq!(
+            strict.action_for(SideEffectClass::FilesystemWrite),
+            PolicyAction::Ask
+        );
+        assert_eq!(
+            strict.action_for(SideEffectClass::Process),
+            PolicyAction::Ask
+        );
         assert_eq!(strict.action_for(SideEffectClass::Git), PolicyAction::Ask);
     }
 }
