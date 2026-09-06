@@ -4167,13 +4167,18 @@ async fn handle_chat_command(session: &mut ChatSession, input: &str) -> Result<C
             let inline_key = parts.get(1).copied();
             if let Some(preset) = crate::onboarding::provider_preset(preset_name) {
                 let setup_result = if let Some(key) = inline_key {
-                    let _ = crate::credentials::store_credential(preset.api_key_env, key);
+                    if let Some(env_name) = preset.api_key_env {
+                        let _ = crate::credentials::store_credential(env_name, key);
+                    }
                     Ok(crate::onboarding::ProviderSetup::OpenAiCompatible {
                         provider_name: preset.id.to_string(),
                         base_url: preset.base_url.to_string(),
-                        api_key_env: Some(preset.api_key_env.to_string()),
-                        models_url: None,
-                        default_model: preset.default_model.to_string(),
+                        api_key_env: preset.api_key_env.map(ToString::to_string),
+                        models_url: preset.models_url.map(ToString::to_string),
+                        default_model: preset
+                            .default_model
+                            .unwrap_or("default")
+                            .to_string(),
                     })
                 } else {
                     crate::onboarding::prompt_preset_setup(preset.id).await
