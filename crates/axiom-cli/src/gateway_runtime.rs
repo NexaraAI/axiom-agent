@@ -353,7 +353,10 @@ impl SkillApproval for BotApprover {
         options: &[String],
         _allow_custom: bool,
     ) -> Result<axiom_engine::QuestionAnswer, String> {
-        let default_choice = options.first().cloned().unwrap_or_else(|| question.to_string());
+        let default_choice = options
+            .first()
+            .cloned()
+            .unwrap_or_else(|| question.to_string());
         Ok(axiom_engine::QuestionAnswer {
             selected: default_choice,
             index: Some(1),

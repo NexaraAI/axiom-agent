@@ -72,7 +72,10 @@ pub trait SkillApproval {
         options: &[String],
         _allow_custom: bool,
     ) -> Result<QuestionAnswer, String> {
-        let default_choice = options.first().cloned().unwrap_or_else(|| question.to_string());
+        let default_choice = options
+            .first()
+            .cloned()
+            .unwrap_or_else(|| question.to_string());
         Ok(QuestionAnswer {
             selected: default_choice,
             index: Some(1),
@@ -795,9 +798,10 @@ impl SkillExecutor for QuestionAskExecutor {
                 .map(ToString::to_string)
                 .collect::<Vec<_>>(),
             _ => {
-                return Err(SkillExecutionError::InvalidArguments(
-                    "expected 'options' array of strings".to_string(),
-                ))
+                return Err(SkillExecutionError::MissingArgument {
+                    skill_id: self.id().to_string(),
+                    argument: "options",
+                });
             }
         };
         let allow_custom = request
@@ -808,7 +812,10 @@ impl SkillExecutor for QuestionAskExecutor {
 
         let answer = approval
             .ask_question(&question, &options, allow_custom)
-            .map_err(|e| SkillExecutionError::ExecutionFailed(format!("failed to ask question: {e}")))?;
+            .map_err(|e| SkillExecutionError::ExecutionFailed {
+                skill_id: self.id().to_string(),
+                message: format!("failed to ask question: {e}"),
+            })?;
 
         Ok(json!({
             "selected": answer.selected,
@@ -3331,7 +3338,9 @@ min_axiom_version = "0.1.0"
     #[tokio::test]
     async fn question_ask_executor_selects_option_or_default() {
         let registry = ExecutorRegistry::with_builtin_executors();
-        let executor = registry.get("question.ask").expect("question.ask registered");
+        let executor = registry
+            .get("question.ask")
+            .expect("question.ask registered");
         let context = SkillExecutionContext {
             workspace_root: PathBuf::from("."),
             max_file_read_bytes: 1024,

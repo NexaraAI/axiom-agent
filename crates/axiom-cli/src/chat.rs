@@ -2658,7 +2658,11 @@ pub(crate) fn render_interactive_mcq(
     }
     println!("\x1b[38;5;240m╰─{border}\x1b[0m");
 
-    let num_choices = if allow_custom { options.len() + 1 } else { options.len() };
+    let num_choices = if allow_custom {
+        options.len() + 1
+    } else {
+        options.len()
+    };
     print!("\x1b[38;5;196maxiom ❯\x1b[0m \x1b[38;5;244mSelect [1-{num_choices}] or type custom reply:\x1b[0m ");
     let _ = io::stdout().flush();
 
@@ -2667,7 +2671,10 @@ pub(crate) fn render_interactive_mcq(
     let trimmed = input.trim();
 
     if trimmed.is_empty() {
-        let first = options.first().cloned().unwrap_or_else(|| question.to_string());
+        let first = options
+            .first()
+            .cloned()
+            .unwrap_or_else(|| question.to_string());
         println!("  \x1b[38;5;113m✔ Selected default:\x1b[0m \x1b[1;38;5;255m{first}\x1b[0m\n");
         return Ok(QuestionAnswer {
             selected: first,
@@ -2693,7 +2700,10 @@ pub(crate) fn render_interactive_mcq(
             let _ = io::stdin().read_line(&mut custom_input);
             let custom_trimmed = custom_input.trim().to_string();
             let final_ans = if custom_trimmed.is_empty() {
-                options.first().cloned().unwrap_or_else(|| question.to_string())
+                options
+                    .first()
+                    .cloned()
+                    .unwrap_or_else(|| question.to_string())
             } else {
                 custom_trimmed
             };
