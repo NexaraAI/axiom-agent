@@ -156,7 +156,9 @@ impl Renderer {
         out.push(self.border(border_bottom));
 
         // Footer line
-        let total_chars = ws_display.len().saturating_add(version.len().saturating_add(1));
+        let total_chars = ws_display
+            .len()
+            .saturating_add(version.len().saturating_add(1));
         let footer_spaces = " ".repeat(63_usize.saturating_sub(total_chars));
         out.push(format!(
             "  {}{footer_spaces}{}",
@@ -613,14 +615,17 @@ mod tests {
         let mut config = AxiomConfig::default();
         config.ui.color = false;
         let renderer = Renderer::from_config_with_terminal(&config, true);
-        let card = renderer.mcq_card(
-            "Which of the following statements about the DemonZ-Development Geo-Restrict plugin is false?",
-            &[
-                "It can block or allow players based on their country (ISO-2 code).".to_string(),
-                "It supports ASN (Autonomous System Number) filtering to block entire ISPs.".to_string(),
-            ],
-            true,
+        let q = concat!(
+            "Which of the following statements about ",
+            "the DemonZ-Development Geo-Restrict plugin is false?"
         );
+        let opt1 = "It can block or allow players based on country.".to_string();
+        let opt2 = concat!(
+            "It supports ASN (Autonomous System Number) filtering ",
+            "to block entire ISPs."
+        )
+        .to_string();
+        let card = renderer.mcq_card(q, &[opt1, opt2], true);
 
         for line in card.lines() {
             assert_eq!(

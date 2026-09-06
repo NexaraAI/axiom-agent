@@ -231,7 +231,11 @@ impl ChatSession {
             );
         } else {
             let border = "─────────────────────────────────────────────────────────────";
-            let suffix = if self.prompt_queue.len() == 1 { "" } else { "s" };
+            let suffix = if self.prompt_queue.len() == 1 {
+                ""
+            } else {
+                "s"
+            };
             println!("  \x1b[38;5;240m┌{border}┐\x1b[0m");
             println!(
                 "  \x1b[38;5;240m│\x1b[0m  \x1b[1;38;5;255mPending Task Queue ({} task{suffix} pending)\x1b[0m",
@@ -2763,7 +2767,10 @@ pub(crate) fn render_interactive_mcq(
             .first()
             .cloned()
             .unwrap_or_else(|| question.to_string());
-        println!("{}\n", renderer.success(&format!("Selected default: {first}")));
+        println!(
+            "{}\n",
+            renderer.success(&format!("Selected default: {first}"))
+        );
         return Ok(QuestionAnswer {
             selected: first,
             index: Some(1),
@@ -2799,7 +2806,10 @@ pub(crate) fn render_interactive_mcq(
             } else {
                 custom_trimmed
             };
-            println!("{}\n", renderer.success(&format!("Custom reply: {final_ans}")));
+            println!(
+                "{}\n",
+                renderer.success(&format!("Custom reply: {final_ans}"))
+            );
             return Ok(QuestionAnswer {
                 selected: final_ans,
                 index: None,
@@ -2808,7 +2818,10 @@ pub(crate) fn render_interactive_mcq(
         }
     }
 
-    println!("{}\n", renderer.success(&format!("Custom reply: {trimmed}")));
+    println!(
+        "{}\n",
+        renderer.success(&format!("Custom reply: {trimmed}"))
+    );
     Ok(QuestionAnswer {
         selected: trimmed.to_string(),
         index: None,
@@ -2925,7 +2938,10 @@ async fn handle_chat_command(session: &mut ChatSession, input: &str) -> Result<C
             } else if let Some(prompt) = rest.strip_prefix("add ") {
                 let task = prompt.trim();
                 if task.is_empty() {
-                    println!("{}", ui.warning("Provide a task to enqueue: /queue add <task>"));
+                    println!(
+                        "{}",
+                        ui.warning("Provide a task to enqueue: /queue add <task>")
+                    );
                 } else {
                     session.prompt_queue.push_back(task.to_string());
                     println!(
