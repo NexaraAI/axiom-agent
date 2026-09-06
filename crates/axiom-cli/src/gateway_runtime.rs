@@ -92,10 +92,18 @@ pub(crate) async fn respond_with_session(session: &mut ChatSession, text: &str) 
     match parse_bot_command(text) {
         BotCommand::Start | BotCommand::Help => HELP_TEXT.to_string(),
         BotCommand::Status => format!(
-            "provider: {}\nmodel: {}",
+            "provider: {}\nmodel: {}\neffort: {}",
             session.active_provider().unwrap_or("not configured"),
             session.active_model().unwrap_or("not configured"),
+            session.active_effort(),
         ),
+        BotCommand::Effort { level } => match level {
+            Some(effort) => match session.set_effort(&effort) {
+                Ok(eff) => format!("Reasoning effort switched to {eff}."),
+                Err(error) => format!("Effort switch failed: {error:#}"),
+            },
+            None => format!("Current reasoning effort: {}", session.active_effort()),
+        },
         BotCommand::Models { filter } => list_models_reply(session, filter.as_deref()).await,
         BotCommand::Model { id } => switch_model_reply(session, &id).await,
         BotCommand::Provider { name } => match session.set_provider(name.clone()) {
@@ -247,6 +255,7 @@ pub(crate) enum BotCommand {
     Start,
     Help,
     Status,
+    Effort { level: Option<String> },
     Models { filter: Option<String> },
     Model { id: String },
     Provider { name: String },
@@ -270,6 +279,9 @@ pub(crate) fn parse_bot_command(text: &str) -> BotCommand {
         "start" => BotCommand::Start,
         "help" => BotCommand::Help,
         "status" => BotCommand::Status,
+        "effort" | "tier" => BotCommand::Effort {
+            level: (!args.is_empty()).then(|| args.to_string()),
+        },
         "models" => BotCommand::Models {
             filter: (!args.is_empty()).then(|| args.to_string()),
         },
@@ -321,7 +333,8 @@ pub(crate) fn split_message_text(text: &str, limit: usize) -> Vec<String> {
 
 const HELP_TEXT: &str = "Axiom gateway bot.\n\
     Just write normally to chat.\n\
-    /status — active provider and model\n\
+    /status — active provider, model, and effort\n\
+    /effort [none|low|medium|high|max] — reasoning effort (also /tier)\n\
     /models [filter] — live catalog search\n\
     /model <exact-id> — switch model\n\
     /provider <name> — switch provider\n\
@@ -332,6 +345,20 @@ pub(crate) struct BotApprover;
 impl SkillApproval for BotApprover {
     fn approve(&mut self, _request: &ApprovalRequest) -> bool {
         false
+    }
+
+    fn ask_question(
+        &mut self,
+        question: &str,
+        options: &[String],
+        _allow_custom: bool,
+    ) -> Result<axiom_engine::QuestionAnswer, String> {
+        let default_choice = options.first().cloned().unwrap_or_else(|| question.to_string());
+        Ok(axiom_engine::QuestionAnswer {
+            selected: default_choice,
+            index: Some(1),
+            is_custom: false,
+        })
     }
 }
 
@@ -509,6 +536,22 @@ mod tests {
             BotCommand::Chat {
                 text: "/unknown thing".to_string()
             }
+        );
+        assert_eq!(
+            parse_bot_command("/effort high"),
+            BotCommand::Effort {
+                level: Some("high".to_string())
+            }
+        );
+        assert_eq!(
+            parse_bot_command("/tier low"),
+            BotCommand::Effort {
+                level: Some("low".to_string())
+            }
+        );
+        assert_eq!(
+            parse_bot_command("/effort"),
+            BotCommand::Effort { level: None }
         );
     }
 

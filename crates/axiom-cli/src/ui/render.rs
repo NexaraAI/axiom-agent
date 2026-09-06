@@ -16,6 +16,8 @@ struct Palette {
     text: Color,
     muted: Color,
     success: Color,
+    accent: Color,
+    border: Color,
 }
 
 impl Renderer {
@@ -79,28 +81,59 @@ impl Renderer {
         let effort_val = if effort.is_empty() { "medium" } else { effort };
         let border = "────────────────────────────────────────────────────────────";
         format!(
-            "{}\n  {}  {}\n{}\n  {} {}\n  {} {} {}\n  {} {}\n  {} {}\n{}\n  {}\n  {}\n{}",
-            self.smoke(&format!("╭─{border}")),
+            "{}\n  {}  {}\n{}\n  {} {}\n  {} {}\n  {} {}\n  {} {}\n  {} {}\n{}\n  {}\n  {}\n  {}\n{}",
+            self.border(&format!("╭─{border}")),
             self.red("◆ AXIOM AGENT"),
             self.smoke(&format!(
                 "v{} · Autonomous Workspace Harness",
                 env!("CARGO_PKG_VERSION")
             )),
-            self.smoke(&format!("├─{border}")),
-            self.smoke("provider:"),
+            self.border(&format!("├─{border}")),
+            self.smoke("⚡ provider: "),
             self.bone(provider),
-            self.smoke("model:"),
-            self.bone(model),
-            self.red(&format!("[effort: {effort_val}]")),
-            self.smoke("workspace:"),
+            self.smoke("🧠 model:    "),
+            self.bone(&format!("{model}  {}", self.red(&format!("[effort: {effort_val}]")))),
+            self.smoke("🔥 effort:   "),
+            self.red(effort_val),
+            self.smoke("📁 workspace:"),
             self.bone(workspace),
-            self.smoke("session:"),
+            self.smoke("🔑 session:  "),
             self.smoke(session_id),
-            self.smoke(&format!("├─{border}")),
-            self.smoke("Commands: /effort · /model · /skills · /clear · /help · /exit (type / for suggestions)"),
+            self.border(&format!("├─{border}")),
+            self.smoke("✦ Commands:    /effort · /model · /skills · /clear · /help · /exit"),
+            self.smoke("✦ Suggestions: Type / or ! to autocomplete commands"),
             self.smoke("© 2026 DemonZDevelopment"),
-            self.smoke(&format!("╰─{border}")),
+            self.border(&format!("╰─{border}")),
         )
+    }
+
+    pub(crate) fn mcq_card(
+        &self,
+        question: &str,
+        options: &[String],
+        allow_custom: bool,
+    ) -> String {
+        let border = "────────────────────────────────────────────────────────────";
+        let mut lines = Vec::new();
+        lines.push(self.border(&format!("╭─{border}")));
+        lines.push(format!("  {}  {}", self.cyan("?"), self.bone(question)));
+        lines.push(self.border(&format!("├─{border}")));
+        for (i, opt) in options.iter().enumerate() {
+            lines.push(format!(
+                "  {} {}",
+                self.red(&format!("[{}]", i + 1)),
+                self.bone(opt)
+            ));
+        }
+        if allow_custom {
+            lines.push(format!(
+                "  {} {}",
+                self.smoke(&format!("[{}]", options.len() + 1)),
+                self.smoke("Type custom answer...")
+            ));
+        }
+        lines.push(self.border(&format!("╰─{border}")));
+        lines.join("\n")
     }
 
     pub(crate) fn header(&self, label: &str, value: impl std::fmt::Display) -> String {
@@ -116,7 +149,7 @@ impl Renderer {
     }
 
     pub(crate) fn lens_notice(&self, message: &str) -> String {
-        format!("{} {}", self.smoke("◈ Axiom Lens:"), self.bone(message))
+        format!("{} {}", self.cyan("◈ Axiom Lens:"), self.bone(message))
     }
 
     #[allow(dead_code)]
@@ -209,6 +242,14 @@ impl Renderer {
         self.bone(message)
     }
 
+    pub(crate) fn cyan(&self, text: &str) -> String {
+        self.paint(self.palette.accent, text)
+    }
+
+    pub(crate) fn border(&self, text: &str) -> String {
+        self.paint(self.palette.border, text)
+    }
+
     fn red(&self, text: &str) -> String {
         self.paint(self.palette.primary, text)
     }
@@ -250,6 +291,8 @@ fn palette_for(theme: &str) -> Palette {
             text: Color::Fixed(255),
             muted: Color::Fixed(248),
             success: Color::Fixed(151),
+            accent: Color::Fixed(117),
+            border: Color::Fixed(240),
         },
         "high_contrast" => Palette {
             primary: Color::Fixed(15),
@@ -257,6 +300,8 @@ fn palette_for(theme: &str) -> Palette {
             text: Color::Fixed(15),
             muted: Color::Fixed(15),
             success: Color::Fixed(10),
+            accent: Color::Fixed(14),
+            border: Color::Fixed(15),
         },
         _ => Palette {
             primary: Color::Fixed(196),
@@ -264,6 +309,8 @@ fn palette_for(theme: &str) -> Palette {
             text: Color::Fixed(254),
             muted: Color::Fixed(245),
             success: Color::Fixed(113),
+            accent: Color::Fixed(39),
+            border: Color::Fixed(240),
         },
     }
 }

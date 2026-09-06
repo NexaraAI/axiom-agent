@@ -23,7 +23,7 @@ use axiom_engine::{
     check_skill_update_statuses, current_axiom_version, execute_installed_tool_with_policy,
     extract_tool_request, load_installed_skills, load_registry_from_path,
     record_skill_execution_failure, record_skill_execution_success, registry_cache_dir,
-    registry_cache_registry_path, ApprovalRequest, Platform, PolicyAction,
+    registry_cache_registry_path, ApprovalRequest, Platform, PolicyAction, QuestionAnswer,
     RecordingSideEffectAuditSink, SideEffectPolicy, SkillApproval, SkillAutoUpdatePolicy,
     SkillCard, SkillExecutionContext, SkillExecutionError, SkillExecutionResult,
 };
@@ -296,6 +296,7 @@ impl ChatSession {
             "file.write",
             "web.fetch",
             "skill.create",
+            "question.ask",
             platform_shell,
         ] {
             if !cards.iter().any(|c| c.id == *core_id) {
@@ -2313,6 +2314,17 @@ impl TransitionObserver for DurableTransitionWriter {
                             .get("url")
                             .and_then(Value::as_str)
                             .map(|u| format!(" `{u}`")),
+                        "question.ask" => request
+                            .arguments
+                            .get("question")
+                            .and_then(Value::as_str)
+                            .map(|q| {
+                                if q.len() > 40 {
+                                    format!(" `{}...`", &q[..37])
+                                } else {
+                                    format!(" `{q}`")
+                                }
+                            }),
                         _ => None,
                     }
                     .unwrap_or_default();
@@ -2429,6 +2441,21 @@ pub(crate) fn format_tool_result_summary(skill_id: &str, output: &serde_json::Va
             let url = output.get("url").and_then(Value::as_str).unwrap_or("url");
             let bytes = output.get("bytes").and_then(Value::as_u64).unwrap_or(0);
             format!("fetched `{url}` ({bytes} bytes)")
+        }
+        "question.ask" => {
+            let selected = output
+                .get("selected")
+                .and_then(Value::as_str)
+                .unwrap_or("answered");
+            let is_custom = output
+                .get("is_custom")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            if is_custom {
+                format!("user replied: \"{selected}\"")
+            } else {
+                format!("user selected: \"{selected}\"")
+            }
         }
         _ => "completed".to_string(),
     }
@@ -2594,6 +2621,99 @@ pub(crate) struct ChatTurnResult {
     pub runtime: Option<ChatRuntimeStats>,
 }
 
+pub(crate) fn render_interactive_mcq(
+    question: &str,
+    options: &[String],
+    allow_custom: bool,
+) -> Result<QuestionAnswer, String> {
+    Spinner::clear_line();
+    let is_terminal = io::stdin().is_terminal() && io::stdout().is_terminal();
+
+    if !is_terminal || options.is_empty() {
+        let default_choice = options.first().cloned().unwrap_or_else(|| question.to_string());
+        return Ok(QuestionAnswer {
+            selected: default_choice,
+            index: Some(1),
+            is_custom: false,
+        });
+    }
+
+    let border = "────────────────────────────────────────────────────────────";
+    println!();
+    println!("\x1b[38;5;240m╭─{border}\x1b[0m");
+    println!("  \x1b[38;5;39m?\x1b[0m  \x1b[1;38;5;255m{question}\x1b[0m");
+    println!("\x1b[38;5;240m├─{border}\x1b[0m");
+    for (i, opt) in options.iter().enumerate() {
+        println!(
+            "  \x1b[38;5;196m[{}]\x1b[0m \x1b[38;5;254m{}\x1b[0m",
+            i + 1,
+            opt
+        );
+    }
+    if allow_custom {
+        println!(
+            "  \x1b[38;5;244m[{}]\x1b[0m \x1b[38;5;244mType custom answer...\x1b[0m",
+            options.len() + 1
+        );
+    }
+    println!("\x1b[38;5;240m╰─{border}\x1b[0m");
+
+    let num_choices = if allow_custom { options.len() + 1 } else { options.len() };
+    print!("\x1b[38;5;196maxiom ❯\x1b[0m \x1b[38;5;244mSelect [1-{num_choices}] or type custom reply:\x1b[0m ");
+    let _ = io::stdout().flush();
+
+    let mut input = String::new();
+    let _ = io::stdin().read_line(&mut input);
+    let trimmed = input.trim();
+
+    if trimmed.is_empty() {
+        let first = options.first().cloned().unwrap_or_else(|| question.to_string());
+        println!("  \x1b[38;5;113m✔ Selected default:\x1b[0m \x1b[1;38;5;255m{first}\x1b[0m\n");
+        return Ok(QuestionAnswer {
+            selected: first,
+            index: Some(1),
+            is_custom: false,
+        });
+    }
+
+    if let Ok(num) = trimmed.parse::<usize>() {
+        if num >= 1 && num <= options.len() {
+            let choice = options[num - 1].clone();
+            println!("  \x1b[38;5;113m✔ Selected:\x1b[0m \x1b[1;38;5;255m{choice}\x1b[0m\n");
+            return Ok(QuestionAnswer {
+                selected: choice,
+                index: Some(num),
+                is_custom: false,
+            });
+        }
+        if allow_custom && num == options.len() + 1 {
+            print!("\x1b[38;5;196maxiom ❯\x1b[0m \x1b[38;5;244mEnter your custom reply:\x1b[0m ");
+            let _ = io::stdout().flush();
+            let mut custom_input = String::new();
+            let _ = io::stdin().read_line(&mut custom_input);
+            let custom_trimmed = custom_input.trim().to_string();
+            let final_ans = if custom_trimmed.is_empty() {
+                options.first().cloned().unwrap_or_else(|| question.to_string())
+            } else {
+                custom_trimmed
+            };
+            println!("  \x1b[38;5;113m✔ Custom reply:\x1b[0m \x1b[1;38;5;255m{final_ans}\x1b[0m\n");
+            return Ok(QuestionAnswer {
+                selected: final_ans,
+                index: None,
+                is_custom: true,
+            });
+        }
+    }
+
+    println!("  \x1b[38;5;113m✔ Custom reply:\x1b[0m \x1b[1;38;5;255m{trimmed}\x1b[0m\n");
+    Ok(QuestionAnswer {
+        selected: trimmed.to_string(),
+        index: None,
+        is_custom: true,
+    })
+}
+
 struct TerminalApprover;
 
 impl SkillApproval for TerminalApprover {
@@ -2603,6 +2723,15 @@ impl SkillApproval for TerminalApprover {
             request.risk_level, request.message
         );
         confirm("Approve skill execution?", false).unwrap_or(false)
+    }
+
+    fn ask_question(
+        &mut self,
+        question: &str,
+        options: &[String],
+        allow_custom: bool,
+    ) -> Result<QuestionAnswer, String> {
+        render_interactive_mcq(question, options, allow_custom)
     }
 }
 
@@ -2636,6 +2765,22 @@ impl SkillApproval for RecordingApprover<'_, '_> {
             approved,
         });
         approved
+    }
+
+    fn ask_question(
+        &mut self,
+        question: &str,
+        options: &[String],
+        allow_custom: bool,
+    ) -> Result<QuestionAnswer, String> {
+        let answer = self.inner.ask_question(question, options, allow_custom)?;
+        self.approvals.borrow_mut().push(SessionApproval {
+            skill_id: "question.ask".to_string(),
+            risk_level: "low".to_string(),
+            message: format!("{}: answered '{}'", question, answer.selected),
+            approved: true,
+        });
+        Ok(answer)
     }
 }
 

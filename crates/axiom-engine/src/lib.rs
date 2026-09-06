@@ -10,8 +10,8 @@ pub mod updater;
 pub use executor::{
     authorize_side_effect, builtin_installed_skill, execute_installed_tool,
     execute_installed_tool_with_policy, extract_tool_request, AllowAllApprover, ApprovalRequest,
-    DenyAllApprover, ExecutorDescriptor, ExecutorRegistry, SkillApproval, SkillExecutionContext,
-    SkillExecutionError, SkillExecutionResult, SkillExecutor, ToolRequest,
+    DenyAllApprover, ExecutorDescriptor, ExecutorRegistry, QuestionAnswer, SkillApproval,
+    SkillExecutionContext, SkillExecutionError, SkillExecutionResult, SkillExecutor, ToolRequest,
 };
 pub use installed::{
     create_personalized_skill, disable_skill, enable_skill, install_bundle_from_local_registry,

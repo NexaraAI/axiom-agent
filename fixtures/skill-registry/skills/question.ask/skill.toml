@@ -1,0 +1,21 @@
+﻿schema_version = "1.0"
+id = "question.ask"
+name = "Ask User Question"
+version = "0.1.0"
+description = "Prompts the user with an interactive multiple-choice question form or custom write-in reply."
+category = "interaction"
+skill_type = "tool"
+risk_level = "low"
+permissions = []
+platforms = ["windows", "linux", "macos"]
+entrypoint = "builtin:question.ask"
+author = "Axiom Agent"
+license = "MIT"
+min_axiom_version = "0.1.0"
+
+[llm_card]
+summary = "Ask structured clarification or decision questions with multiple choice options and custom write-in fallback."
+when_to_use = ["When instructions are ambiguous", "When architectural tradeoffs require user decisions", "When multiple options exist for libraries, frameworks, or design"]
+input_contract = "question, options, allow_custom"
+output_contract = "selected, index, is_custom"
+token_budget = 150

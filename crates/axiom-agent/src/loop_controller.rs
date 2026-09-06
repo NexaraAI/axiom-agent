@@ -865,6 +865,7 @@ impl<'a> AgentLoop<'a> {
             "git.status",
             "git.diff",
             "skill.create",
+            "question.ask",
         ];
         CORE_BUILTIN_IDS.iter().copied().find(|builtin| {
             *builtin == cleaned

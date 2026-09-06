@@ -54,8 +54,31 @@ pub struct ApprovalRequest {
     pub risk_level: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct QuestionAnswer {
+    pub selected: String,
+    #[serde(default)]
+    pub index: Option<usize>,
+    #[serde(default)]
+    pub is_custom: bool,
+}
+
 pub trait SkillApproval {
     fn approve(&mut self, request: &ApprovalRequest) -> bool;
+
+    fn ask_question(
+        &mut self,
+        question: &str,
+        options: &[String],
+        _allow_custom: bool,
+    ) -> Result<QuestionAnswer, String> {
+        let default_choice = options.first().cloned().unwrap_or_else(|| question.to_string());
+        Ok(QuestionAnswer {
+            selected: default_choice,
+            index: Some(1),
+            is_custom: false,
+        })
+    }
 }
 
 #[async_trait(?Send)]
@@ -132,6 +155,7 @@ impl ExecutorRegistry {
         registry.register(Box::new(ShellExecutor::python_run()));
         registry.register(Box::new(ShellExecutor::generic_run()));
         registry.register(Box::new(SkillCreateExecutor));
+        registry.register(Box::new(QuestionAskExecutor));
         registry
     }
 
@@ -158,6 +182,7 @@ impl ExecutorRegistry {
 struct FileReadExecutor;
 struct FileWriteExecutor;
 struct SkillCreateExecutor;
+struct QuestionAskExecutor;
 struct ProjectScanExecutor;
 struct WebFetchExecutor;
 struct GitStatusExecutor;
@@ -701,6 +726,98 @@ impl SkillExecutor for ShellExecutor {
     }
 }
 
+#[async_trait(?Send)]
+impl SkillExecutor for QuestionAskExecutor {
+    fn id(&self) -> &'static str {
+        "question.ask"
+    }
+
+    fn descriptor(&self) -> ExecutorDescriptor {
+        ExecutorDescriptor {
+            id: self.id().to_string(),
+            input_schema: json!({
+                "type": "object",
+                "required": ["question", "options"],
+                "properties": {
+                    "question": {
+                        "type": "string",
+                        "description": "The clarification or decision question to ask the user."
+                    },
+                    "options": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                        "description": "2 to 5 distinct multiple-choice options for the user to choose from."
+                    },
+                    "allow_custom": {
+                        "type": "boolean",
+                        "description": "Whether the user can write a custom reply. Defaults to true."
+                    }
+                }
+            }),
+            output_schema: json!({
+                "type": "object",
+                "required": ["selected", "is_custom"],
+                "properties": {
+                    "selected": {
+                        "type": "string",
+                        "description": "The selected option string or user custom response."
+                    },
+                    "index": {
+                        "type": ["integer", "null"],
+                        "description": "1-based index if an option was chosen, or null for custom."
+                    },
+                    "is_custom": {
+                        "type": "boolean",
+                        "description": "Whether the response was custom typed by the user."
+                    }
+                }
+            }),
+            permissions: Vec::new(),
+            side_effects: Vec::new(),
+            deterministic_fixture: json!({
+                "question": "Which framework would you like?",
+                "options": ["React", "Vanilla JS"]
+            }),
+        }
+    }
+
+    async fn execute(
+        &self,
+        request: &ToolRequest,
+        _context: &SkillExecutionContext,
+        approval: &mut dyn SkillApproval,
+    ) -> Result<Value, SkillExecutionError> {
+        let question = string_arg(request, "question")?;
+        let options = match request.arguments.get("options") {
+            Some(Value::Array(items)) => items
+                .iter()
+                .filter_map(Value::as_str)
+                .map(ToString::to_string)
+                .collect::<Vec<_>>(),
+            _ => {
+                return Err(SkillExecutionError::InvalidArguments(
+                    "expected 'options' array of strings".to_string(),
+                ))
+            }
+        };
+        let allow_custom = request
+            .arguments
+            .get("allow_custom")
+            .and_then(Value::as_bool)
+            .unwrap_or(true);
+
+        let answer = approval
+            .ask_question(&question, &options, allow_custom)
+            .map_err(|e| SkillExecutionError::ExecutionFailed(format!("failed to ask question: {e}")))?;
+
+        Ok(json!({
+            "selected": answer.selected,
+            "index": answer.index,
+            "is_custom": answer.is_custom
+        }))
+    }
+}
+
 #[derive(Debug, Default)]
 pub struct AllowAllApprover;
 
@@ -951,6 +1068,12 @@ pub fn builtin_installed_skill(skill_id: &str) -> Option<InstalledSkill> {
             "Runs python scripts inside the active workspace",
             SkillType::Tool,
             RiskLevel::Medium,
+        ),
+        "question.ask" => (
+            "Ask User Question",
+            "Prompts user with an interactive multiple-choice question form",
+            SkillType::Tool,
+            RiskLevel::Low,
         ),
         _ => return None,
     };
@@ -3196,12 +3319,55 @@ min_axiom_version = "0.1.0"
             "shell.powershell.safe",
             "shell.bash.safe",
             "python.run",
+            "question.ask",
         ] {
             let skill = builtin_installed_skill(builtin_id).expect("builtin skill found");
             assert_eq!(skill.manifest.id, *builtin_id);
             assert!(skill.record.is_executable());
             assert_eq!(skill.manifest.skill_type, SkillType::Tool);
         }
+    }
+
+    #[tokio::test]
+    async fn question_ask_executor_selects_option_or_default() {
+        let registry = ExecutorRegistry::with_builtin_executors();
+        let executor = registry.get("question.ask").expect("question.ask registered");
+        let context = SkillExecutionContext {
+            workspace_root: PathBuf::from("."),
+            max_file_read_bytes: 1024,
+            web_timeout_secs: 10,
+            max_web_response_bytes: 1024,
+            web_fetch_https_only: true,
+            web_fetch_allowed_hosts: vec![],
+            web_fetch_denied_hosts: vec![],
+            web_fetch_use_system_proxy: false,
+            auto_approve_medium_risk: true,
+            credential_env_names: vec![],
+            skills_dir: None,
+        };
+
+        let request = ToolRequest {
+            skill_id: "question.ask".to_string(),
+            arguments: json!({
+                "question": "Which styling framework?",
+                "options": ["Tailwind CSS", "Bootstrap", "Vanilla CSS"]
+            }),
+        };
+
+        let mut approval = AllowAllApprover;
+        let result = executor
+            .execute(&request, &context, &mut approval)
+            .await
+            .expect("execute");
+        assert_eq!(
+            result.get("selected").and_then(Value::as_str),
+            Some("Tailwind CSS")
+        );
+        assert_eq!(result.get("index").and_then(Value::as_u64), Some(1));
+        assert_eq!(
+            result.get("is_custom").and_then(Value::as_bool),
+            Some(false)
+        );
     }
 
     fn unique_temp_dir() -> PathBuf {

@@ -4,6 +4,35 @@ All notable changes to Axiom are documented here. Versions follow semantic
 versioning. Stable releases document user-visible changes, configuration or
 proof migrations, security fixes, and upgrade actions.
 
+## 1.0.6
+
+This release brings a complete TUI redesign, interactive Multiple-Choice Questions (MCQ form) for agent clarification, dynamic reasoning effort (`/effort` & `/tier`), anti-freeze tool argument streaming, and Telegram/Discord gateway enhancements.
+
+Install it:
+
+```bash
+npm install -g axiom-agent@1.0.6
+```
+
+### New Features & Improvements
+
+- **Interactive Multiple-Choice Questions (MCQ Form)**:
+  - Added built-in `question.ask` skill enabling models to present structured clarification questions with 2-5 distinct options and write-in fallback.
+  - Sleek interactive terminal MCQ card with numeric option selection (`[1-N]`) and custom reply support.
+  - Updated system identity principles: models proactively use `question.ask` when encountering ambiguity, architectural trade-offs, or library choices instead of guessing broadly.
+- **TUI Redesign & Modern Developer Aesthetics**:
+  - Redesigned banner with slate borders, high-contrast labels, and visual badges for provider (`⚡`), model (`🧠`), reasoning effort (`🔥`), workspace (`📁`), and session (`🔑`).
+  - Polished terminal notices: cyan-accented `◈ Lens:`, emerald `✔` tool completions, and crisp ash thinking deltas.
+- **Dynamic Reasoning Effort (`/effort` & `/tier`)**:
+  - Replaced legacy tier strings with dynamic reasoning effort: `none`, `low`, `medium`, `high`, `max`.
+  - Automatic HTTP 400 fallback gracefully retries without reasoning effort if an upstream provider or model rejects it.
+- **Anti-Freeze Tool Streaming**:
+  - Real-time terminal spinner displays live composed tool arguments (`Composing arguments for file.write (1.2 KB)...`), preventing apparent terminal freezes during tool call emission.
+- **Telegram & Discord Gateway Maintenance**:
+  - Added `/effort` and `/tier` slash commands in both Telegram and Discord gateways.
+  - Gateway `/status` reports active provider, model, and reasoning effort.
+  - Bot approver smoothly integrates with `question.ask` and all synthetic builtins.
+
 ## 1.0.5
 
 This release enables autonomous shell command execution, local dev server hosting (e.g. `python -m http.server`, `vite`, `npm run dev`), terminal safe pasting, and accurate tool failure status reporting.
