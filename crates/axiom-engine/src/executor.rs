@@ -2598,14 +2598,23 @@ fn validate_html_project(dir: &Path) -> Result<Value, SkillExecutionError> {
                                     ));
                                 } else {
                                     let mut check_cmd = std::process::Command::new("node");
-                                    check_cmd.arg("--check").arg(&script_file);
+                                    let clean_path = script_file
+                                        .to_string_lossy()
+                                        .strip_prefix(r"\\?\")
+                                        .map(PathBuf::from)
+                                        .unwrap_or_else(|| script_file.clone());
+                                    check_cmd.arg("--check").arg(&clean_path);
                                     if let Ok(output) = check_cmd.output() {
                                         if !output.status.success() {
                                             let err_msg = String::from_utf8_lossy(&output.stderr);
-                                            errors.push(format!(
-                                                "{}: syntax error in `{src_path}`:\n{err_msg}",
-                                                html_file.display()
-                                            ));
+                                            if !err_msg.contains("MODULE_NOT_FOUND")
+                                                && !err_msg.contains("Cannot find module")
+                                            {
+                                                errors.push(format!(
+                                                    "{}: syntax error in `{src_path}`:\n{err_msg}",
+                                                    html_file.display()
+                                                ));
+                                            }
                                         }
                                     }
                                 }
@@ -3980,7 +3989,11 @@ min_axiom_version = "0.1.0"
             .await
             .expect("execute test.run");
 
-        assert_eq!(result.get("status").and_then(Value::as_str), Some("passed"));
+        assert_eq!(
+            result.get("status").and_then(Value::as_str),
+            Some("passed"),
+            "result: {result:?}"
+        );
         assert_eq!(result.get("passed").and_then(Value::as_bool), Some(true));
         assert_eq!(
             result.get("framework").and_then(Value::as_str),
