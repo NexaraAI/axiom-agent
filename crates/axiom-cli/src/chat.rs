@@ -4175,10 +4175,7 @@ async fn handle_chat_command(session: &mut ChatSession, input: &str) -> Result<C
                         base_url: preset.base_url.to_string(),
                         api_key_env: preset.api_key_env.map(ToString::to_string),
                         models_url: preset.models_url.map(ToString::to_string),
-                        default_model: preset
-                            .default_model
-                            .unwrap_or("default")
-                            .to_string(),
+                        default_model: preset.default_model.unwrap_or("default").to_string(),
                     })
                 } else {
                     crate::onboarding::prompt_preset_setup(preset.id).await
