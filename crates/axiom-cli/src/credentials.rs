@@ -256,7 +256,15 @@ pub(crate) fn store_credential(environment_variable: &str, secret: &str) -> Resu
     }
 }
 
-fn resolve_with_store(
+fn credential_aliases(environment_variable: &str) -> &'static [&'static str] {
+    match environment_variable {
+        "OPENCODE_API_KEY" => &["OPENCODE_ZEN_API_KEY", "ZEN_API_KEY"],
+        "GMI_CLOUD_API_KEY" => &["GMI_API_KEY"],
+        _ => &[],
+    }
+}
+
+fn resolve_single_with_store(
     environment_variable: &str,
     store: &dyn CredentialStore,
 ) -> Result<Option<String>> {
@@ -274,6 +282,21 @@ fn resolve_with_store(
             None => Err(keyring_error),
         },
     }
+}
+
+fn resolve_with_store(
+    environment_variable: &str,
+    store: &dyn CredentialStore,
+) -> Result<Option<String>> {
+    if let Some(secret) = resolve_single_with_store(environment_variable, store)? {
+        return Ok(Some(secret));
+    }
+    for alias in credential_aliases(environment_variable) {
+        if let Some(secret) = resolve_single_with_store(alias, store)? {
+            return Ok(Some(secret));
+        }
+    }
+    Ok(None)
 }
 
 fn keyring_entry(environment_variable: &str) -> Result<keyring::Entry> {
@@ -436,5 +459,36 @@ mod tests {
                 std::env::remove_var(self.key);
             }
         }
+    }
+
+    #[test]
+    fn credential_aliases_fallback_resolves_alternative_environment_names() {
+        let store = FakeStore {
+            value: None,
+            fail: false,
+            reads: Cell::new(0),
+        };
+
+        let _guard_opencode = EnvGuard::remove("OPENCODE_API_KEY");
+        let _guard_zen = EnvGuard::remove("OPENCODE_ZEN_API_KEY");
+        let _guard_gmi_cloud = EnvGuard::remove("GMI_CLOUD_API_KEY");
+        let _guard_gmi = EnvGuard::remove("GMI_API_KEY");
+
+        assert_eq!(
+            resolve_with_store("OPENCODE_API_KEY", &store).expect("resolve"),
+            None
+        );
+
+        std::env::set_var("OPENCODE_ZEN_API_KEY", "zen-secret-123");
+        assert_eq!(
+            resolve_with_store("OPENCODE_API_KEY", &store).expect("resolve via zen alias"),
+            Some("zen-secret-123".to_string())
+        );
+
+        std::env::set_var("GMI_API_KEY", "gmi-secret-456");
+        assert_eq!(
+            resolve_with_store("GMI_CLOUD_API_KEY", &store).expect("resolve via gmi alias"),
+            Some("gmi-secret-456".to_string())
+        );
     }
 }

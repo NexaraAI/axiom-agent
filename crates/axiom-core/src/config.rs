@@ -83,6 +83,8 @@ pub struct LlmConfig {
     pub variant: String,
     #[serde(default = "default_variant_models", alias = "tier_models")]
     pub variant_models: BTreeMap<String, BTreeMap<String, String>>,
+    #[serde(default)]
+    pub thinking: Option<bool>,
 }
 
 impl LlmConfig {
@@ -96,6 +98,18 @@ impl LlmConfig {
 
     pub fn active_effort(&self) -> &str {
         self.active_variant()
+    }
+
+    pub fn thinking_display(&self) -> &'static str {
+        match self.thinking {
+            Some(true) => "on",
+            Some(false) => "off",
+            None => "auto",
+        }
+    }
+
+    pub fn is_thinking_enabled(&self) -> bool {
+        self.thinking.unwrap_or(true)
     }
 
     pub fn model_for_variant(&self, provider: &str, variant: &str) -> Option<&str> {
@@ -448,6 +462,7 @@ impl Default for AxiomConfig {
                 stream: true,
                 variant: default_variant(),
                 variant_models: default_variant_models(),
+                thinking: None,
             },
             providers,
             skills: SkillsConfig {
@@ -646,6 +661,76 @@ fn default_variant_models() -> BTreeMap<String, BTreeMap<String, String>> {
                 ("light".to_string(), "openai/gpt-4o-mini".to_string()),
                 ("medium".to_string(), "openai/gpt-4o".to_string()),
                 ("high".to_string(), "openai/o3-mini".to_string()),
+            ]),
+        ),
+        (
+            "opencode".to_string(),
+            BTreeMap::from([
+                ("default".to_string(), "claude-3-7-sonnet".to_string()),
+                ("low".to_string(), "deepseek-v4-flash-free".to_string()),
+                ("light".to_string(), "deepseek-v4-flash-free".to_string()),
+                ("medium".to_string(), "big-pickle".to_string()),
+                ("high".to_string(), "claude-3-7-sonnet".to_string()),
+            ]),
+        ),
+        (
+            "zen".to_string(),
+            BTreeMap::from([
+                ("default".to_string(), "claude-3-7-sonnet".to_string()),
+                ("low".to_string(), "deepseek-v4-flash-free".to_string()),
+                ("light".to_string(), "deepseek-v4-flash-free".to_string()),
+                ("medium".to_string(), "big-pickle".to_string()),
+                ("high".to_string(), "claude-3-7-sonnet".to_string()),
+            ]),
+        ),
+        (
+            "gmicloud".to_string(),
+            BTreeMap::from([
+                (
+                    "default".to_string(),
+                    "deepseek-ai/DeepSeek-V4-Pro".to_string(),
+                ),
+                (
+                    "low".to_string(),
+                    "meta-llama/Llama-3.1-8B-Instruct".to_string(),
+                ),
+                (
+                    "light".to_string(),
+                    "meta-llama/Llama-3.1-8B-Instruct".to_string(),
+                ),
+                (
+                    "medium".to_string(),
+                    "meta-llama/Llama-3.3-70B-Instruct".to_string(),
+                ),
+                (
+                    "high".to_string(),
+                    "deepseek-ai/DeepSeek-V4-Pro".to_string(),
+                ),
+            ]),
+        ),
+        (
+            "gmi".to_string(),
+            BTreeMap::from([
+                (
+                    "default".to_string(),
+                    "deepseek-ai/DeepSeek-V4-Pro".to_string(),
+                ),
+                (
+                    "low".to_string(),
+                    "meta-llama/Llama-3.1-8B-Instruct".to_string(),
+                ),
+                (
+                    "light".to_string(),
+                    "meta-llama/Llama-3.1-8B-Instruct".to_string(),
+                ),
+                (
+                    "medium".to_string(),
+                    "meta-llama/Llama-3.3-70B-Instruct".to_string(),
+                ),
+                (
+                    "high".to_string(),
+                    "deepseek-ai/DeepSeek-V4-Pro".to_string(),
+                ),
             ]),
         ),
         (
@@ -1377,6 +1462,38 @@ format = "json"
         assert_eq!(config.policy.permission_mode(), PermissionMode::Velocity);
         config.policy.mode = "invalid".to_string();
         assert!(config.ensure_valid().is_err());
+    }
+
+    #[test]
+    fn thinking_mode_and_new_providers_configuration() {
+        let mut config = AxiomConfig::default();
+        assert_eq!(config.llm.thinking_display(), "auto");
+        assert!(config.llm.is_thinking_enabled());
+
+        config.llm.thinking = Some(true);
+        assert_eq!(config.llm.thinking_display(), "on");
+        assert!(config.llm.is_thinking_enabled());
+
+        config.llm.thinking = Some(false);
+        assert_eq!(config.llm.thinking_display(), "off");
+        assert!(!config.llm.is_thinking_enabled());
+
+        assert_eq!(
+            config.llm.model_for_variant("opencode", "default"),
+            Some("claude-3-7-sonnet")
+        );
+        assert_eq!(
+            config.llm.model_for_variant("zen", "medium"),
+            Some("big-pickle")
+        );
+        assert_eq!(
+            config.llm.model_for_variant("gmicloud", "default"),
+            Some("deepseek-ai/DeepSeek-V4-Pro")
+        );
+        assert_eq!(
+            config.llm.model_for_variant("gmi", "medium"),
+            Some("meta-llama/Llama-3.3-70B-Instruct")
+        );
     }
 
     fn unique_temp_dir() -> PathBuf {

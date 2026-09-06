@@ -92,13 +92,37 @@ pub(crate) async fn respond_with_session(session: &mut ChatSession, text: &str) 
     match parse_bot_command(text) {
         BotCommand::Start | BotCommand::Help => HELP_TEXT.to_string(),
         BotCommand::Status => format!(
-            "provider: {}\nmodel: {}\nvariant: {}\npermission: {}\ntheme: {}",
+            "provider: {}\nmodel: {}\nvariant: {}\nthinking: {}\npermission: {}\ntheme: {}",
             session.active_provider().unwrap_or("not configured"),
             session.active_model().unwrap_or("not configured"),
             session.active_variant(),
+            session.thinking_display(),
             session.active_permission_mode(),
             session.config.ui.theme,
         ),
+        BotCommand::Thinking { state } => match state {
+            Some(s) => match s.to_ascii_lowercase().as_str() {
+                "on" | "enable" | "enabled" | "true" => {
+                    let _ = session.set_thinking(Some(true));
+                    "Thinking mode enabled (thinking tokens active).".to_string()
+                }
+                "off" | "disable" | "disabled" | "false" => {
+                    let _ = session.set_thinking(Some(false));
+                    "Thinking mode disabled (fast response, thinking tokens stripped).".to_string()
+                }
+                "auto" | "default" | "reset" => {
+                    let _ = session.set_thinking(None);
+                    "Thinking mode set to auto (follows model/variant defaults).".to_string()
+                }
+                _ => format!(
+                    "Unknown state '{s}'. Use `/thinking on`, `/thinking off`, or `/thinking auto`."
+                ),
+            },
+            None => format!(
+                "Thinking mode: {}\nUse `/thinking on`, `/thinking off`, or `/thinking auto` to change.",
+                session.thinking_display()
+            ),
+        },
         BotCommand::Variant { name } => match name {
             Some(variant) => match session.set_variant(&variant) {
                 Ok(v) => format!("Variant switched to {v}."),
@@ -312,6 +336,7 @@ pub(crate) enum BotCommand {
     Start,
     Help,
     Status,
+    Thinking { state: Option<String> },
     Variant { name: Option<String> },
     Permission { mode: Option<String> },
     Theme { name: Option<String> },
@@ -339,6 +364,9 @@ pub(crate) fn parse_bot_command(text: &str) -> BotCommand {
         "start" => BotCommand::Start,
         "help" => BotCommand::Help,
         "status" => BotCommand::Status,
+        "thinking" | "reasoning" => BotCommand::Thinking {
+            state: (!args.is_empty()).then(|| args.to_string()),
+        },
         "variant" | "variants" | "effort" | "tier" => BotCommand::Variant {
             name: (!args.is_empty()).then(|| args.to_string()),
         },
@@ -400,7 +428,8 @@ pub(crate) fn split_message_text(text: &str, limit: usize) -> Vec<String> {
 
 const HELP_TEXT: &str = "Axiom gateway bot.\n\
     Just write normally to chat.\n\
-    /status — active provider, model, variant, and permission\n\
+    /status — active provider, model, variant, thinking, and permission\n\
+    /thinking [on|off|auto] — toggle thinking/reasoning tokens\n\
     /variant [Default|low|medium|high] — select model variant\n\
     /permission [velocity|full_machine|strict] — switch permission mode\n\
     /theme [axiom|blood_red|ash|high_contrast] — switch visual color theme\n\
@@ -609,6 +638,22 @@ mod tests {
             BotCommand::Chat {
                 text: "/unknown thing".to_string()
             }
+        );
+        assert_eq!(
+            parse_bot_command("/thinking on"),
+            BotCommand::Thinking {
+                state: Some("on".to_string())
+            }
+        );
+        assert_eq!(
+            parse_bot_command("/reasoning off"),
+            BotCommand::Thinking {
+                state: Some("off".to_string())
+            }
+        );
+        assert_eq!(
+            parse_bot_command("/thinking"),
+            BotCommand::Thinking { state: None }
         );
         assert_eq!(
             parse_bot_command("/variant high"),

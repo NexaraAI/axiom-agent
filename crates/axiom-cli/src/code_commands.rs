@@ -1042,15 +1042,39 @@ impl CoderSession {
     }
 
     fn provider_options(&self) -> Option<std::collections::BTreeMap<String, serde_json::Value>> {
-        let effort = self.config.llm.active_effort();
-        if effort == "none" {
+        let mut opts = std::collections::BTreeMap::new();
+        match self.config.llm.thinking {
+            Some(false) => {
+                opts.insert(
+                    "thinking".to_string(),
+                    serde_json::json!({ "type": "disabled" }),
+                );
+            }
+            Some(true) => {
+                let effort = self.config.llm.active_effort();
+                let effort = if effort == "none" { "medium" } else { effort };
+                opts.insert(
+                    "reasoning_effort".to_string(),
+                    serde_json::Value::String(effort.to_string()),
+                );
+                opts.insert(
+                    "thinking".to_string(),
+                    serde_json::json!({ "type": "enabled", "budget_tokens": 2048 }),
+                );
+            }
+            None => {
+                let effort = self.config.llm.active_effort();
+                if effort != "none" {
+                    opts.insert(
+                        "reasoning_effort".to_string(),
+                        serde_json::Value::String(effort.to_string()),
+                    );
+                }
+            }
+        }
+        if opts.is_empty() {
             None
         } else {
-            let mut opts = std::collections::BTreeMap::new();
-            opts.insert(
-                "reasoning_effort".to_string(),
-                serde_json::Value::String(effort.to_string()),
-            );
             Some(opts)
         }
     }

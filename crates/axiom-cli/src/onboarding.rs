@@ -149,16 +149,16 @@ static EMBEDDED_REGISTRY_FILES: &[EmbeddedRegistryFile] = &[
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct ProviderPreset {
-    id: &'static str,
-    base_url: &'static str,
-    api_key_env: Option<&'static str>,
-    models_url: Option<&'static str>,
-    default_model: Option<&'static str>,
-    setup_note: &'static str,
+pub(crate) struct ProviderPreset {
+    pub(crate) id: &'static str,
+    pub(crate) base_url: &'static str,
+    pub(crate) api_key_env: Option<&'static str>,
+    pub(crate) models_url: Option<&'static str>,
+    pub(crate) default_model: Option<&'static str>,
+    pub(crate) setup_note: &'static str,
 }
 
-const PROVIDER_PRESETS: &[ProviderPreset] = &[
+pub(crate) const PROVIDER_PRESETS: &[ProviderPreset] = &[
     ProviderPreset {
         id: "groq",
         base_url: "https://api.groq.com/openai/v1",
@@ -191,6 +191,22 @@ const PROVIDER_PRESETS: &[ProviderPreset] = &[
         models_url: Some("https://models.github.ai/catalog/models"),
         default_model: Some("openai/gpt-4.1"),
         setup_note: "Hosted preview API with included rate-limited GitHub account usage.",
+    },
+    ProviderPreset {
+        id: "opencode",
+        base_url: "https://opencode.ai/zen/v1",
+        api_key_env: Some("OPENCODE_API_KEY"),
+        models_url: None,
+        default_model: Some("claude-3-7-sonnet"),
+        setup_note: "Hosted API. OpenCode Zen AI coding gateway. Key from opencode.ai/auth.",
+    },
+    ProviderPreset {
+        id: "gmicloud",
+        base_url: "https://api.gmi-serving.com/v1",
+        api_key_env: Some("GMI_CLOUD_API_KEY"),
+        models_url: None,
+        default_model: Some("deepseek-ai/DeepSeek-V4-Pro"),
+        setup_note: "Hosted API. GMI Cloud AI inference platform. Key from console.gmicloud.ai.",
     },
     ProviderPreset {
         id: "nvidia",
@@ -636,7 +652,7 @@ fn configure_onboarding(
     config
 }
 
-fn apply_provider_setup(config: &mut AxiomConfig, provider: &ProviderSetup) {
+pub(crate) fn apply_provider_setup(config: &mut AxiomConfig, provider: &ProviderSetup) {
     match provider {
         ProviderSetup::Multiple { .. } => {}
         ProviderSetup::Mock { default_model } => {
@@ -722,22 +738,24 @@ async fn prompt_provider_setup() -> Result<ProviderSetup> {
     println!("    2) OpenRouter — free-model router ★ default, easy start");
     println!("    3) Gemini — free tier where available");
     println!("    4) GitHub Models — included quota if you have GitHub");
+    println!("    5) OpenCode Zen — opencode.ai coding API (Claude, DeepSeek, etc.)");
+    println!("    6) GMI Cloud — api.gmi-serving.com high-perf AI inference");
     println!("  Hosted (paid / advanced):");
-    println!("    5) NVIDIA NIM (hosted API)");
-    println!("    6) OpenAI (paid)");
-    println!("    7) Cloudflare AI Gateway");
+    println!("    7) NVIDIA NIM (hosted API)");
+    println!("    8) OpenAI (paid)");
+    println!("    9) Cloudflare AI Gateway");
     println!("  Local (no key, but needs lots of RAM/disk — can be slow on small machines):");
-    println!("    8) Ollama (runs on your machine)");
-    println!("    9) LM Studio (runs on your machine)");
+    println!("    10) Ollama (runs on your machine)");
+    println!("    11) LM Studio (runs on your machine)");
     println!("  Other:");
-    println!("    10) Custom OpenAI-compatible endpoint");
-    println!("    11) Skip for now (you can set up later; chat will remind you)");
+    println!("    12) Custom OpenAI-compatible endpoint");
+    println!("    13) Skip for now (you can set up later; chat will remind you)");
     println!();
-    println!("Tip: on a low-memory machine, start with 1 or 2. Local models (8/9) can use gigabytes of RAM.");
+    println!("Tip: on a low-memory machine, start with 1 or 2. Local models (10/11) can use gigabytes of RAM.");
     println!("You can pick one provider, or two comma-separated (first one is active).");
 
     loop {
-        let selection = prompt_with_default("Choose provider(s), e.g. 2  — or 1,8 for two", "2")?;
+        let selection = prompt_with_default("Choose provider(s), e.g. 2  — or 1,10 for two", "2")?;
         let mut choices = selection
             .split([',', ' '])
             .map(str::trim)
@@ -745,12 +763,12 @@ async fn prompt_provider_setup() -> Result<ProviderSetup> {
             .collect::<Vec<_>>();
         choices.dedup();
         if choices.is_empty() || choices.len() > 2 {
-            println!("Pick just one number, or two separated by comma/space (e.g. \"1,8\").");
+            println!("Pick just one number, or two separated by comma/space (e.g. \"1,10\").");
             continue;
         }
-        if choices.contains(&"11") && choices.len() > 1 {
+        if choices.contains(&"13") && choices.len() > 1 {
             println!(
-                "\"Skip for now\" can't be combined — pick either 11 alone or real provider(s)."
+                "\"Skip for now\" can't be combined — pick either 13 alone or real provider(s)."
             );
             continue;
         }
@@ -763,9 +781,11 @@ async fn prompt_provider_setup() -> Result<ProviderSetup> {
                 "2" | "openrouter" => prompt_preset_setup("openrouter").await?,
                 "3" | "gemini" => prompt_preset_setup("gemini").await?,
                 "4" | "github-models" => prompt_preset_setup("github-models").await?,
-                "5" | "nvidia" | "nvidia-nim" => prompt_preset_setup("nvidia").await?,
-                "6" | "openai" => prompt_preset_setup("openai").await?,
-                "7" | "cloudflare" => {
+                "5" | "opencode" | "zen" | "opencode-zen" => prompt_preset_setup("opencode").await?,
+                "6" | "gmicloud" | "gmi" | "gmi-cloud" => prompt_preset_setup("gmicloud").await?,
+                "7" | "nvidia" | "nvidia-nim" => prompt_preset_setup("nvidia").await?,
+                "8" | "openai" => prompt_preset_setup("openai").await?,
+                "9" | "cloudflare" => {
                     let account_id = prompt_required("Cloudflare account_id")?;
                     let gateway_id = prompt_with_default("Cloudflare gateway_id", "default")?;
                     let api_token_env = prompt_with_default(
@@ -781,9 +801,9 @@ async fn prompt_provider_setup() -> Result<ProviderSetup> {
                         default_model,
                     }
                 }
-                "8" | "ollama" => prompt_preset_setup("ollama").await?,
-                "9" | "lm-studio" => prompt_preset_setup("lm-studio").await?,
-                "10" => {
+                "10" | "ollama" => prompt_preset_setup("ollama").await?,
+                "11" | "lm-studio" => prompt_preset_setup("lm-studio").await?,
+                "12" => {
                     let provider_name = prompt_required("Provider name")?;
                     let base_url = prompt_required("Base URL")?;
                     let api_key_env =
@@ -811,9 +831,9 @@ async fn prompt_provider_setup() -> Result<ProviderSetup> {
                         default_model,
                     }
                 }
-                "11" => ProviderSetup::Skip,
+                "13" => ProviderSetup::Skip,
                 _ => {
-                    println!("Hmm, \"{choice}\" isn't 1–11. Try again (e.g. 2, or 1,8).");
+                    println!("Hmm, \"{choice}\" isn't 1–13. Try again (e.g. 2, or 1,10).");
                     invalid = true;
                     break;
                 }
@@ -831,7 +851,7 @@ async fn prompt_provider_setup() -> Result<ProviderSetup> {
     }
 }
 
-async fn prompt_preset_setup(provider: &str) -> Result<ProviderSetup> {
+pub(crate) async fn prompt_preset_setup(provider: &str) -> Result<ProviderSetup> {
     let preset = provider_preset(provider)
         .ok_or_else(|| anyhow!("provider preset is unavailable: {provider}"))?;
     println!();
@@ -967,7 +987,7 @@ fn prompt_model_without_catalog(suggested_model: Option<&str>) -> Result<String>
 fn provider_setup_from_preset(provider: &str, model: Option<String>) -> Result<ProviderSetup> {
     let preset = provider_preset(provider).ok_or_else(|| {
         anyhow!(
-            "unsupported provider: {provider}; choose mock, groq, openrouter, gemini, github-models, nvidia, ollama, lm-studio, openai, openai-compatible, or cloudflare"
+            "unsupported provider: {provider}; choose mock, groq, openrouter, gemini, github-models, opencode, gmicloud, nvidia, ollama, lm-studio, openai, openai-compatible, or cloudflare"
         )
     })?;
     let default_model = model
@@ -982,11 +1002,13 @@ fn provider_setup_from_preset(provider: &str, model: Option<String>) -> Result<P
     })
 }
 
-fn provider_preset(provider: &str) -> Option<ProviderPreset> {
+pub(crate) fn provider_preset(provider: &str) -> Option<ProviderPreset> {
     let provider = match provider {
         "openai-compatible" => "openai",
         "lmstudio" => "lm-studio",
         "nvidia-nim" => "nvidia",
+        "zen" | "opencode-zen" => "opencode",
+        "gmi" | "gmi-cloud" => "gmicloud",
         other => other,
     };
     PROVIDER_PRESETS
@@ -999,7 +1021,7 @@ fn non_empty(value: String) -> Option<String> {
     (!value.trim().is_empty()).then_some(value)
 }
 
-fn prompt_required(label: &str) -> Result<String> {
+pub(crate) fn prompt_required(label: &str) -> Result<String> {
     loop {
         let value = prompt(label)?;
         if !value.trim().is_empty() {
@@ -1152,7 +1174,7 @@ pub(crate) async fn prompt_gateway_setup(config_path: &Path, ui: &Renderer) -> R
     Ok(())
 }
 
-fn prompt_with_default(label: &str, default: &str) -> Result<String> {
+pub(crate) fn prompt_with_default(label: &str, default: &str) -> Result<String> {
     let value = prompt(&format!("{label} [{default}]"))?;
     if value.trim().is_empty() {
         Ok(default.to_string())
@@ -1870,6 +1892,50 @@ mod tests {
         assert!(error
             .to_string()
             .contains("requires an explicit --account-id"));
+    }
+
+    #[test]
+    fn opencode_and_gmicloud_presets_and_aliases() {
+        let opencode = provider_preset("opencode").expect("opencode preset exists");
+        assert_eq!(opencode.id, "opencode");
+        assert_eq!(opencode.base_url, "https://opencode.ai/zen/v1");
+        assert_eq!(opencode.api_key_env, Some("OPENCODE_API_KEY"));
+        assert_eq!(opencode.default_model, Some("claude-3-7-sonnet"));
+
+        let zen = provider_preset("zen").expect("zen alias exists");
+        assert_eq!(zen.id, "opencode");
+
+        let zen_dash = provider_preset("opencode-zen").expect("opencode-zen alias exists");
+        assert_eq!(zen_dash.id, "opencode");
+
+        let gmicloud = provider_preset("gmicloud").expect("gmicloud preset exists");
+        assert_eq!(gmicloud.id, "gmicloud");
+        assert_eq!(gmicloud.base_url, "https://api.gmi-serving.com/v1");
+        assert_eq!(gmicloud.api_key_env, Some("GMI_CLOUD_API_KEY"));
+        assert_eq!(gmicloud.default_model, Some("deepseek-ai/DeepSeek-V4-Pro"));
+
+        let gmi = provider_preset("gmi").expect("gmi alias exists");
+        assert_eq!(gmi.id, "gmicloud");
+
+        let gmi_dash = provider_preset("gmi-cloud").expect("gmi-cloud alias exists");
+        assert_eq!(gmi_dash.id, "gmicloud");
+
+        let setup = provider_setup_from_preset("opencode", None).expect("preset setup");
+        match setup {
+            ProviderSetup::OpenAiCompatible {
+                provider_name,
+                base_url,
+                api_key_env,
+                default_model,
+                ..
+            } => {
+                assert_eq!(provider_name, "opencode");
+                assert_eq!(base_url, "https://opencode.ai/zen/v1");
+                assert_eq!(api_key_env.as_deref(), Some("OPENCODE_API_KEY"));
+                assert_eq!(default_model, "claude-3-7-sonnet");
+            }
+            _ => panic!("expected openai compatible setup"),
+        }
     }
 
     fn unique_temp_dir() -> PathBuf {

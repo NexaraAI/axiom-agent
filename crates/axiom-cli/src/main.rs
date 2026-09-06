@@ -231,6 +231,23 @@ enum ProviderCommands {
         #[arg(long)]
         model: Option<String>,
     },
+
+    Add {
+        #[arg(long)]
+        name: Option<String>,
+
+        #[arg(long)]
+        model: Option<String>,
+
+        #[arg(long)]
+        api_key: Option<String>,
+
+        #[arg(long)]
+        base_url: Option<String>,
+
+        #[arg(long)]
+        activate: bool,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -387,7 +404,7 @@ async fn main() -> Result<()> {
         Some(Commands::Sessions) => chat::list_sessions(),
         Some(Commands::Cost) => cost_commands::run(),
         Some(Commands::Model { command }) => model(command).await,
-        Some(Commands::Provider { command }) => provider(command),
+        Some(Commands::Provider { command }) => provider(command).await,
         Some(Commands::Run(command)) => chat::run_one_shot(command).await,
         Some(Commands::Code(command)) => code_commands::run(command).await,
         Some(Commands::Proof { command }) => proof_commands::run(command),
@@ -564,16 +581,16 @@ fn uninstall(command: UninstallCommand) -> Result<()> {
     Ok(())
 }
 
-fn provider(command: ProviderCommands) -> Result<()> {
+async fn provider(command: ProviderCommands) -> Result<()> {
     let config_path = AxiomConfig::default_config_path()?;
-    let mut session = chat::ChatSession::load(config_path)?;
+    let mut session = chat::ChatSession::load(&config_path)?;
     match command {
         ProviderCommands::Current => println!(
             "provider: {}",
             session.active_provider().unwrap_or("not configured")
         ),
         ProviderCommands::List => {
-            let config = AxiomConfig::load_from_path(AxiomConfig::default_config_path()?)?;
+            let config = AxiomConfig::load_from_path(&config_path)?;
             for provider in config.providers.keys() {
                 let marker = if Some(provider.as_str()) == config.llm.active_provider.as_deref() {
                     "*"
@@ -598,6 +615,74 @@ fn provider(command: ProviderCommands) -> Result<()> {
                 "Provider switched to {provider} with model {}.",
                 session.active_model().unwrap_or("not configured")
             );
+        }
+        ProviderCommands::Add {
+            name,
+            model,
+            api_key,
+            base_url,
+            activate,
+        } => {
+            if let Some(provider_name) = name {
+                if let Some(preset) = onboarding::provider_preset(&provider_name) {
+                    let key_env = preset.api_key_env;
+                    if let Some(key) = api_key {
+                        if let Some(env_name) = key_env {
+                            credentials::store_credential(env_name, &key)?;
+                        }
+                    }
+                    let chosen_model = model
+                        .or_else(|| preset.default_model.map(str::to_string))
+                        .unwrap_or_else(|| "default".to_string());
+                    let setup = onboarding::ProviderSetup::OpenAiCompatible {
+                        provider_name: preset.id.to_string(),
+                        base_url: base_url.unwrap_or_else(|| preset.base_url.to_string()),
+                        api_key_env: key_env.map(str::to_string),
+                        models_url: preset.models_url.map(str::to_string),
+                        default_model: chosen_model.clone(),
+                    };
+                    let mut config = AxiomConfig::load_from_path(&config_path)?;
+                    onboarding::apply_provider_setup(&mut config, &setup);
+                    if activate {
+                        config.llm.active_provider = Some(preset.id.to_string());
+                        config.llm.active_model = Some(chosen_model);
+                    }
+                    config.save_to_path(&config_path)?;
+                    println!("Provider '{}' configured successfully!", preset.id);
+                } else {
+                    let b_url = base_url
+                        .ok_or_else(|| anyhow::anyhow!("--base-url required for custom provider"))?;
+                    let key_env = format!(
+                        "{}_API_KEY",
+                        provider_name.to_ascii_uppercase().replace('-', "_")
+                    );
+                    if let Some(key) = api_key {
+                        credentials::store_credential(&key_env, &key)?;
+                    }
+                    let chosen_model = model.unwrap_or_else(|| "default".to_string());
+                    let setup = onboarding::ProviderSetup::OpenAiCompatible {
+                        provider_name: provider_name.clone(),
+                        base_url: b_url,
+                        api_key_env: Some(key_env),
+                        models_url: None,
+                        default_model: chosen_model.clone(),
+                    };
+                    let mut config = AxiomConfig::load_from_path(&config_path)?;
+                    onboarding::apply_provider_setup(&mut config, &setup);
+                    if activate {
+                        config.llm.active_provider = Some(provider_name.clone());
+                        config.llm.active_model = Some(chosen_model);
+                    }
+                    config.save_to_path(&config_path)?;
+                    println!("Custom provider '{provider_name}' configured successfully!");
+                }
+            } else {
+                let setup = onboarding::prompt_preset_setup("openrouter").await?;
+                let mut config = AxiomConfig::load_from_path(&config_path)?;
+                onboarding::apply_provider_setup(&mut config, &setup);
+                config.save_to_path(&config_path)?;
+                println!("Provider added successfully!");
+            }
         }
     }
     Ok(())

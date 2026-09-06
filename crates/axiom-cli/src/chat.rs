@@ -374,14 +374,61 @@ impl ChatSession {
         Ok(canonical.to_string())
     }
 
+    pub(crate) fn thinking_display(&self) -> &'static str {
+        self.config.llm.thinking_display()
+    }
+
+    pub(crate) fn set_thinking(&mut self, thinking: Option<bool>) -> Result<Option<bool>> {
+        self.config.llm.thinking = thinking;
+        self.save_config()?;
+        Ok(thinking)
+    }
+
+    pub(crate) fn banner_variant_display(&self) -> String {
+        match self.config.llm.thinking {
+            Some(true) => format!("{} · thinking: on", self.active_variant()),
+            Some(false) => format!("{} · thinking: off", self.active_variant()),
+            None => self.active_variant().to_string(),
+        }
+    }
+
     pub(crate) fn provider_options(&self) -> Option<std::collections::BTreeMap<String, Value>> {
-        let variant = self.active_variant();
-        let normalized = variant.to_ascii_lowercase();
-        if normalized == "none" || normalized == "default" {
+        let mut opts = std::collections::BTreeMap::new();
+        match self.config.llm.thinking {
+            Some(false) => {
+                opts.insert(
+                    "thinking".to_string(),
+                    serde_json::json!({ "type": "disabled" }),
+                );
+            }
+            Some(true) => {
+                let variant = self.active_variant();
+                let normalized = variant.to_ascii_lowercase();
+                let effort = if normalized == "none" || normalized == "default" {
+                    "medium"
+                } else {
+                    &normalized
+                };
+                opts.insert(
+                    "reasoning_effort".to_string(),
+                    Value::String(effort.to_string()),
+                );
+                opts.insert(
+                    "thinking".to_string(),
+                    serde_json::json!({ "type": "enabled", "budget_tokens": 2048 }),
+                );
+            }
+            None => {
+                let variant = self.active_variant();
+                let normalized = variant.to_ascii_lowercase();
+                if normalized != "none" && normalized != "default" {
+                    opts.insert("reasoning_effort".to_string(), Value::String(normalized));
+                }
+            }
+        }
+        if opts.is_empty() {
             None
         } else {
-            let mut opts = std::collections::BTreeMap::new();
-            opts.insert("reasoning_effort".to_string(), Value::String(normalized));
             Some(opts)
         }
     }
@@ -801,12 +848,8 @@ impl ChatSession {
 
         let installed_skills = load_installed_skills(self.skills_dir())?;
         let cancellation = CancellationToken::new();
-        let signal_token = cancellation.clone();
-        let signal_listener = tokio::spawn(async move {
-            if tokio::signal::ctrl_c().await.is_ok() {
-                signal_token.cancel();
-            }
-        });
+        let (signal_listener, turn_guard) =
+            spawn_turn_cancellation_listener(cancellation.clone());
         let live_status = stream_observer.is_some();
         let approvals = Rc::new(RefCell::new(Vec::new()));
         let mut recording_approval = RecordingApprover {
@@ -853,6 +896,7 @@ impl ChatSession {
             agent = agent.with_stream_observer(observer);
         }
         let turn_result = agent.run_turn(user_message).await;
+        turn_guard.store(false, std::sync::atomic::Ordering::Relaxed);
         signal_listener.abort();
         drop(agent);
         drop(recording_approval);
@@ -1979,7 +2023,7 @@ async fn run_terminal_session(mut session: ChatSession) -> Result<()> {
         ui.dashboard_banner(
             session.active_provider().unwrap_or("not configured"),
             session.active_model().unwrap_or("not configured"),
-            session.active_variant(),
+            &session.banner_variant_display(),
             session.active_permission_mode(),
             &session.workspace_path().display().to_string(),
             session.session_id(),
@@ -2591,10 +2635,24 @@ impl TransitionObserver for DurableTransitionWriter {
                                     format!(" `{q}`")
                                 }
                             }),
+                        "test.run" => request
+                            .arguments
+                            .get("command")
+                            .and_then(Value::as_str)
+                            .map(|c| format!(" `{c}`")),
                         _ => None,
                     }
                     .unwrap_or_default();
                     println!("  ⚙ Axiom Tool: executing {}{target}...", request.skill_id);
+                    if request.skill_id == "file.write" {
+                        if let Some(path) = request.arguments.get("path").and_then(Value::as_str) {
+                            if let Some(content) =
+                                request.arguments.get("content").and_then(Value::as_str)
+                            {
+                                render_animated_file_write(path, content);
+                            }
+                        }
+                    }
                 }
                 AgentTransitionKind::ToolCompleted { event, .. } => match &event.status {
                     ToolExecutionStatus::Succeeded(result) => {
@@ -2723,7 +2781,169 @@ pub(crate) fn format_tool_result_summary(skill_id: &str, output: &serde_json::Va
                 format!("user selected: \"{selected}\"")
             }
         }
+        "test.run" => {
+            let framework = output
+                .get("framework")
+                .and_then(Value::as_str)
+                .unwrap_or("tests");
+            let passed = output
+                .get("passed")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            let summary = output.get("summary").and_then(Value::as_str).unwrap_or("");
+            if passed {
+                format!("{framework} tests passed: {summary}")
+            } else {
+                format!("{framework} tests failed: {summary}")
+            }
+        }
         _ => "completed".to_string(),
+    }
+}
+
+pub(crate) fn syntax_highlight_line(line: &str, path: &str) -> String {
+    let lower_path = path.to_ascii_lowercase();
+    let is_html = lower_path.ends_with(".html")
+        || lower_path.ends_with(".htm")
+        || lower_path.ends_with(".xml");
+    let is_js = lower_path.ends_with(".js")
+        || lower_path.ends_with(".ts")
+        || lower_path.ends_with(".jsx")
+        || lower_path.ends_with(".tsx");
+    let is_rs = lower_path.ends_with(".rs");
+    let is_py = lower_path.ends_with(".py");
+
+    let cyan = "\x1b[38;2;80;210;240m";
+    let yellow = "\x1b[38;2;240;210;100m";
+    let magenta = "\x1b[38;2;210;140;240m";
+    let dim = "\x1b[38;2;130;130;130m";
+    let reset = "\x1b[0m";
+
+    let trimmed = line.trim_start();
+    if trimmed.starts_with("//") || trimmed.starts_with('#') || trimmed.starts_with("<!--") {
+        return format!("{dim}{line}{reset}");
+    }
+
+    if is_html && line.contains('<') && line.contains('>') {
+        let mut res = String::new();
+        let mut in_tag = false;
+        for ch in line.chars() {
+            if ch == '<' {
+                in_tag = true;
+                res.push_str(cyan);
+                res.push('<');
+            } else if ch == '>' {
+                res.push('>');
+                res.push_str(reset);
+                in_tag = false;
+            } else if in_tag && ch == '=' {
+                res.push_str(reset);
+                res.push('=');
+                res.push_str(yellow);
+            } else {
+                res.push(ch);
+            }
+        }
+        if in_tag {
+            res.push_str(reset);
+        }
+        return res;
+    }
+
+    if is_js || is_rs || is_py {
+        let mut words = Vec::new();
+        for word in line.split_inclusive(|c: char| !c.is_alphanumeric() && c != '_') {
+            let token = word.trim_end_matches(|c: char| !c.is_alphanumeric() && c != '_');
+            let suffix = &word[token.len()..];
+            let is_kw = matches!(
+                token,
+                "fn" | "pub"
+                    | "let"
+                    | "mut"
+                    | "struct"
+                    | "enum"
+                    | "impl"
+                    | "match"
+                    | "use"
+                    | "mod"
+                    | "const"
+                    | "var"
+                    | "function"
+                    | "return"
+                    | "if"
+                    | "else"
+                    | "for"
+                    | "while"
+                    | "class"
+                    | "import"
+                    | "export"
+                    | "new"
+                    | "async"
+                    | "await"
+                    | "def"
+                    | "from"
+            );
+            if is_kw {
+                words.push(format!("{magenta}{token}{reset}{suffix}"));
+            } else if token.chars().all(|c| c.is_ascii_digit()) && !token.is_empty() {
+                words.push(format!("{yellow}{token}{reset}{suffix}"));
+            } else {
+                words.push(word.to_string());
+            }
+        }
+        return words.join("");
+    }
+
+    line.to_string()
+}
+
+pub(crate) fn render_animated_file_write(path: &str, content: &str) {
+    use std::io::Write;
+    let is_terminal = std::io::stdout().is_terminal() && std::env::var_os("NO_COLOR").is_none();
+    let lines: Vec<&str> = content.lines().collect();
+    let total_lines = lines.len();
+
+    let peach = "\x1b[38;2;255;165;110m";
+    let cyan = "\x1b[38;2;80;210;240m";
+    let green = "\x1b[38;2;120;220;140m";
+    let dim = "\x1b[38;2;130;130;130m";
+    let bold = "\x1b[1m";
+    let reset = "\x1b[0m";
+
+    if is_terminal {
+        println!("  {peach}╭── {bold}{cyan}Writing {path}{reset} {dim}({total_lines} lines){reset} {peach}──────────────────────────────╮{reset}");
+
+        let preview_limit = 35;
+        let preview_lines = if total_lines > preview_limit {
+            &lines[..preview_limit]
+        } else {
+            &lines[..]
+        };
+
+        let delay_ms = if total_lines > 40 { 4 } else { 8 };
+
+        for (idx, line) in preview_lines.iter().enumerate() {
+            let line_no = idx + 1;
+            let display_text = if line.chars().count() > 80 {
+                let truncated: String = line.chars().take(77).collect();
+                format!("{truncated}...")
+            } else {
+                line.to_string()
+            };
+            let colored = syntax_highlight_line(&display_text, path);
+            println!("  {peach}│{reset} {dim}{line_no:>3} │{reset} {colored}");
+            let _ = std::io::stdout().flush();
+            std::thread::sleep(std::time::Duration::from_millis(delay_ms));
+        }
+
+        if total_lines > preview_limit {
+            let remaining = total_lines - preview_limit;
+            println!("  {peach}│{reset} {dim}    │ ... +{remaining} more lines written to {path} ...{reset}");
+        }
+
+        println!("  {peach}╰── {green}✔ {path} written locally{reset} {peach}──────────────────────────────────╯{reset}");
+    } else {
+        println!("  Writing {path} ({total_lines} lines)...");
     }
 }
 
@@ -2979,6 +3199,69 @@ async fn check_for_startup_update(config: &AxiomConfig) -> Option<(String, Strin
         }
     }
     None
+}
+
+fn spawn_turn_cancellation_listener(
+    token: CancellationToken,
+) -> (
+    tokio::task::JoinHandle<()>,
+    std::sync::Arc<std::sync::atomic::AtomicBool>,
+) {
+    let active = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+    let active_clone = active.clone();
+    let ctrlc_token = token.clone();
+    let ctrlc_handle = tokio::spawn(async move {
+        if tokio::signal::ctrl_c().await.is_ok() {
+            ctrlc_token.cancel();
+        }
+    });
+
+    let esc_token = token;
+    let esc_active = active;
+    std::thread::spawn(move || {
+        while esc_active.load(std::sync::atomic::Ordering::Relaxed) && !esc_token.is_cancelled() {
+            #[cfg(windows)]
+            {
+                extern "C" {
+                    fn _kbhit() -> std::ffi::c_int;
+                    fn _getch() -> std::ffi::c_int;
+                }
+                unsafe {
+                    if _kbhit() != 0 {
+                        let ch = _getch();
+                        if ch == 27 || ch == 3 {
+                            esc_token.cancel();
+                            break;
+                        }
+                        if ch == 0 || ch == 224 {
+                            let _ = _getch();
+                        }
+                    }
+                }
+            }
+            #[cfg(unix)]
+            {
+                let mut pollfd = libc::pollfd {
+                    fd: 0,
+                    events: libc::POLLIN,
+                    revents: 0,
+                };
+                let ret = unsafe { libc::poll(&mut pollfd, 1, 40) };
+                if ret > 0 && (pollfd.revents & libc::POLLIN) != 0 {
+                    let mut buf = [0u8; 1];
+                    if unsafe { libc::read(0, buf.as_mut_ptr() as *mut _, 1) } > 0 {
+                        if buf[0] == 27 || buf[0] == 3 {
+                            esc_token.cancel();
+                            break;
+                        }
+                    }
+                }
+            }
+            std::thread::sleep(std::time::Duration::from_millis(40));
+        }
+    });
+
+    (ctrlc_handle, active_clone)
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -3345,6 +3628,84 @@ async fn handle_chat_command(session: &mut ChatSession, input: &str) -> Result<C
             }
             Ok(CommandResult::Continue)
         }
+        "/thinking" | "/reasoning" => {
+            if io::stdin().is_terminal() && io::stdout().is_terminal() {
+                let renderer = crate::ui::Renderer::from_config(&session.config);
+                let options = vec![
+                    "auto (model/variant default)".to_string(),
+                    "on (enable thinking / reasoning tokens)".to_string(),
+                    "off (disable thinking / fast response)".to_string(),
+                ];
+                let initial = match session.config.llm.thinking {
+                    None => 0,
+                    Some(true) => 1,
+                    Some(false) => 2,
+                };
+                let result = crate::ui::interactive_select(
+                    "Select thinking mode",
+                    &options,
+                    initial,
+                    false,
+                    &renderer,
+                );
+                if let crate::ui::SelectionResult::Selected { index, .. } = result {
+                    let new_state = match index {
+                        1 => Some(true),
+                        2 => Some(false),
+                        _ => None,
+                    };
+                    match session.set_thinking(new_state) {
+                        Ok(_) => {
+                            session.persist_session()?;
+                            println!("Thinking mode set to '{}'.", session.thinking_display());
+                        }
+                        Err(error) => println!("{error}"),
+                    }
+                }
+            } else {
+                let current = session.thinking_display();
+                println!("Current thinking mode: {current}");
+                println!("Available modes: auto, on, off");
+                println!("Use `/thinking <on|off|auto>` to switch.");
+            }
+            Ok(CommandResult::Continue)
+        }
+        _ if input.starts_with("/thinking ") || input.starts_with("/reasoning ") => {
+            let target = if let Some(t) = input.strip_prefix("/thinking ") {
+                t.trim()
+            } else if let Some(t) = input.strip_prefix("/reasoning ") {
+                t.trim()
+            } else {
+                ""
+            };
+            let normalized = target.to_ascii_lowercase();
+            match normalized.as_str() {
+                "on" | "enable" | "enabled" | "true" => {
+                    session.set_thinking(Some(true))?;
+                    session.persist_session()?;
+                    println!("Thinking mode set to 'on' (thinking tokens enabled).");
+                }
+                "off" | "disable" | "disabled" | "false" => {
+                    session.set_thinking(Some(false))?;
+                    session.persist_session()?;
+                    println!("Thinking mode set to 'off' (thinking tokens disabled).");
+                }
+                "auto" | "default" | "reset" => {
+                    session.set_thinking(None)?;
+                    session.persist_session()?;
+                    println!("Thinking mode set to 'auto' (follows model/variant defaults).");
+                }
+                "status" => {
+                    println!("Current thinking mode: {}", session.thinking_display());
+                }
+                _ => {
+                    println!(
+                        "Unknown thinking setting '{target}'. Use `/thinking on`, `/thinking off`, or `/thinking auto`."
+                    );
+                }
+            }
+            Ok(CommandResult::Continue)
+        }
         "/update" => {
             let ui = Renderer::from_config(&session.config);
             println!(
@@ -3602,7 +3963,7 @@ async fn handle_chat_command(session: &mut ChatSession, input: &str) -> Result<C
                 ui.dashboard_banner(
                     session.active_provider().unwrap_or("not configured"),
                     session.active_model().unwrap_or("not configured"),
-                    session.active_variant(),
+                    &session.banner_variant_display(),
                     session.active_permission_mode(),
                     &session.workspace_path().display().to_string(),
                     session.session_id(),
@@ -3733,6 +4094,184 @@ async fn handle_chat_command(session: &mut ChatSession, input: &str) -> Result<C
             }
             Ok(CommandResult::Continue)
         }
+        "/provider add" | "/provider new" => {
+            if io::stdin().is_terminal() && io::stdout().is_terminal() {
+                let renderer = crate::ui::Renderer::from_config(&session.config);
+                let mut options: Vec<String> = crate::onboarding::PROVIDER_PRESETS
+                    .iter()
+                    .map(|p| format!("{} ({})", p.id, p.base_url))
+                    .collect();
+                options.push("custom (Custom OpenAI-compatible API endpoint)".to_string());
+
+                let result = crate::ui::interactive_select(
+                    "Select Provider to Add",
+                    &options,
+                    0,
+                    false,
+                    &renderer,
+                );
+                if let crate::ui::SelectionResult::Selected { index, .. } = result {
+                    if index < crate::onboarding::PROVIDER_PRESETS.len() {
+                        let preset = crate::onboarding::PROVIDER_PRESETS[index];
+                        match crate::onboarding::prompt_preset_setup(preset.id).await {
+                            Ok(setup) => {
+                                crate::onboarding::apply_provider_setup(
+                                    &mut session.config,
+                                    &setup,
+                                );
+                                session.save_config()?;
+                                session.persist_session()?;
+                                println!("Provider '{}' added successfully!", preset.id);
+                            }
+                            Err(error) => println!("Failed to set up provider: {error}"),
+                        }
+                    } else {
+                        println!("Configure Custom OpenAI-Compatible Provider:");
+                        let name = crate::onboarding::prompt_required("Provider name")?;
+                        let base_url = crate::onboarding::prompt_required(
+                            "Base URL (e.g. https://api.myllm.com/v1)",
+                        )?;
+                        let api_key_env = crate::onboarding::prompt_with_default(
+                            "API key environment variable",
+                            &format!("{}_API_KEY", name.to_ascii_uppercase().replace('-', "_")),
+                        )?;
+                        crate::credentials::prompt_for_credential(&api_key_env)?;
+                        let default_model =
+                            crate::onboarding::prompt_required("Default model name")?;
+                        let setup = crate::onboarding::ProviderSetup::OpenAiCompatible {
+                            provider_name: name.clone(),
+                            base_url,
+                            api_key_env: Some(api_key_env),
+                            models_url: None,
+                            default_model,
+                        };
+                        crate::onboarding::apply_provider_setup(&mut session.config, &setup);
+                        session.save_config()?;
+                        session.persist_session()?;
+                        println!("Custom provider '{name}' added successfully!");
+                    }
+                }
+            } else {
+                println!("Usage: /provider add <provider_name>");
+                println!("Available presets: groq, openrouter, gemini, github-models, opencode, gmicloud, nvidia, openai, ollama, lm-studio");
+            }
+            Ok(CommandResult::Continue)
+        }
+        _ if input.starts_with("/provider add ") || input.starts_with("/provider new ") => {
+            let target = if let Some(t) = input.strip_prefix("/provider add ") {
+                t.trim()
+            } else {
+                input.trim_start_matches("/provider new ").trim()
+            };
+            if let Some(preset) = crate::onboarding::provider_preset(target) {
+                match crate::onboarding::prompt_preset_setup(preset.id).await {
+                    Ok(setup) => {
+                        crate::onboarding::apply_provider_setup(&mut session.config, &setup);
+                        session.save_config()?;
+                        session.persist_session()?;
+                        println!("Provider '{}' added and saved to config!", preset.id);
+                    }
+                    Err(error) => println!("Failed to set up provider: {error}"),
+                }
+            } else {
+                println!("Unknown preset '{target}'. Supported: groq, openrouter, gemini, github-models, opencode, gmicloud, nvidia, openai, ollama, lm-studio");
+            }
+            Ok(CommandResult::Continue)
+        }
+        "/test" | "/tests" => {
+            let ui = Renderer::from_config(&session.config);
+            println!(
+                "{}",
+                ui.orchestrator_notice(
+                    "Auto-detecting workspace tests and running verification..."
+                )
+            );
+            let context = session.execution_context();
+            let request = ToolRequest {
+                skill_id: "test.run".to_string(),
+                arguments: json!({}),
+            };
+            let registry = ExecutorRegistry::with_builtin_executors();
+            if let Some(executor) = registry.get("test.run") {
+                let mut approval = TerminalApprover {
+                    mode: session.permission_mode(),
+                };
+                match executor.execute(&request, &context, &mut approval).await {
+                    Ok(result) => {
+                        let passed = result
+                            .get("passed")
+                            .and_then(Value::as_bool)
+                            .unwrap_or(false);
+                        let framework = result
+                            .get("framework")
+                            .and_then(Value::as_str)
+                            .unwrap_or("tests");
+                        let summary = result.get("summary").and_then(Value::as_str).unwrap_or("");
+                        let output = result.get("output").and_then(Value::as_str).unwrap_or("");
+                        if passed {
+                            println!(
+                                "{}",
+                                ui.success(&format!("Tests Passed [{framework}]: {summary}"))
+                            );
+                        } else {
+                            println!("  ✖ Test Failure [{framework}]: {summary}");
+                            if !output.trim().is_empty() {
+                                println!("\n{output}");
+                            }
+                        }
+                    }
+                    Err(err) => {
+                        println!("  ✖ Failed to run tests: {err}");
+                    }
+                }
+            }
+            Ok(CommandResult::Continue)
+        }
+        _ if input.starts_with("/test ") || input.starts_with("/tests ") => {
+            let cmd = if let Some(t) = input.strip_prefix("/test ") {
+                t.trim()
+            } else {
+                input.trim_start_matches("/tests ").trim()
+            };
+            let ui = Renderer::from_config(&session.config);
+            println!(
+                "{}",
+                ui.orchestrator_notice(&format!("Running test command: `{cmd}`..."))
+            );
+            let context = session.execution_context();
+            let request = ToolRequest {
+                skill_id: "test.run".to_string(),
+                arguments: json!({ "command": cmd }),
+            };
+            let registry = ExecutorRegistry::with_builtin_executors();
+            if let Some(executor) = registry.get("test.run") {
+                let mut approval = TerminalApprover {
+                    mode: session.permission_mode(),
+                };
+                match executor.execute(&request, &context, &mut approval).await {
+                    Ok(result) => {
+                        let passed = result
+                            .get("passed")
+                            .and_then(Value::as_bool)
+                            .unwrap_or(false);
+                        let summary = result.get("summary").and_then(Value::as_str).unwrap_or("");
+                        let output = result.get("output").and_then(Value::as_str).unwrap_or("");
+                        if passed {
+                            println!("{}", ui.success(&format!("Tests Passed: {summary}")));
+                        } else {
+                            println!("  ✖ Test Failure: {summary}");
+                            if !output.trim().is_empty() {
+                                println!("\n{output}");
+                            }
+                        }
+                    }
+                    Err(err) => {
+                        println!("  ✖ Failed to run tests: {err}");
+                    }
+                }
+            }
+            Ok(CommandResult::Continue)
+        }
         _ if input.starts_with("/provider use ") => {
             let provider = input.trim_start_matches("/provider use ").trim();
             match session.set_provider(provider) {
@@ -3754,6 +4293,8 @@ async fn handle_chat_command(session: &mut ChatSession, input: &str) -> Result<C
 fn print_help() {
     println!("Commands (prefix with '/'):");
     println!("  /variant [Default|low|medium|high]  Configure model variant (alias: /variants)");
+    println!("  /thinking [on|off|auto]             Toggle reasoning/thinking mode (alias: /reasoning)");
+    println!("  /test [command]                     Auto-detect and run workspace tests (alias: /tests)");
     println!("  /model [name]                       Switch or view active LLM model");
     println!("  /model list [FILTER]                Fetch catalog view of available models");
     println!("  /permission [velocity|full|strict]  Switch permission mode (alias: /mode)");
@@ -3766,6 +4307,7 @@ fn print_help() {
     println!("  /skills                             List active and installed skills");
     println!("  /skills selected <message>          Simulate skill routing for a message");
     println!("  /provider current | list | use <p>  Manage LLM providers");
+    println!("  /provider add [name]                Add or configure a new provider post-onboarding");
     println!("  /clear                              Clear session history");
     println!("  /proof on | off | status | latest   Audit and execution provenance");
     println!("  /multi                              Enter multiline prompt mode (/send to run)");
@@ -4161,6 +4703,43 @@ mod tests {
             .await
             .expect("switch to Default");
         assert_eq!(session.active_variant(), "Default");
+
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn thinking_command_switches_and_persists_thinking_mode() {
+        let dir = unique_temp_dir();
+        let config_path = dir.join("config.toml");
+        let mut config = AxiomConfig::default();
+        config.agent.first_run_completed = true;
+        config.save_to_path(&config_path).expect("save config");
+        let mut session = ChatSession::load(&config_path).expect("load session");
+
+        assert_eq!(session.thinking_display(), "auto");
+        assert!(session.provider_options().is_none());
+
+        handle_chat_command(&mut session, "/thinking on")
+            .await
+            .expect("switch to on");
+        assert_eq!(session.thinking_display(), "on");
+        assert!(session.provider_options().is_some());
+        let opts = session.provider_options().unwrap();
+        assert_eq!(opts.get("reasoning_effort").unwrap(), "medium");
+        assert!(opts.contains_key("thinking"));
+
+        handle_chat_command(&mut session, "/thinking off")
+            .await
+            .expect("switch to off");
+        assert_eq!(session.thinking_display(), "off");
+        let opts = session.provider_options().unwrap();
+        assert!(!opts.contains_key("reasoning_effort"));
+        assert_eq!(opts.get("thinking").unwrap()["type"], "disabled");
+
+        handle_chat_command(&mut session, "/thinking auto")
+            .await
+            .expect("switch to auto");
+        assert_eq!(session.thinking_display(), "auto");
 
         let _ = fs::remove_dir_all(dir);
     }
@@ -4667,6 +5246,42 @@ mod tests {
 
         let approval_raw = "\x1b[200~y\r\n\x1b[201~";
         assert_eq!(clean_pasted_input(approval_raw).trim(), "y");
+    }
+
+    #[test]
+    fn syntax_highlight_line_formats_html_and_keywords() {
+        let html_sample = "<div><span>Hello</span></div>";
+        let highlighted = syntax_highlight_line(html_sample, "index.html");
+        assert!(highlighted.contains("Hello"));
+
+        let js_sample = "const answer = 42; return answer;";
+        let highlighted_js = syntax_highlight_line(js_sample, "script.js");
+        assert!(highlighted_js.contains("answer"));
+
+        let comment = "// this is a comment";
+        let highlighted_comment = syntax_highlight_line(comment, "main.rs");
+        assert!(highlighted_comment.contains("comment"));
+    }
+
+    #[tokio::test]
+    async fn provider_add_command_adds_and_persists_preset() {
+        let dir = unique_temp_dir();
+        let config_path = dir.join("config.toml");
+        let mut config = AxiomConfig::default();
+        config.agent.first_run_completed = true;
+        config.save_to_path(&config_path).expect("save config");
+        let mut session = ChatSession::load(&config_path).expect("load session");
+
+        assert!(!session.config.providers.contains_key("opencode"));
+
+        handle_chat_command(&mut session, "/provider add opencode")
+            .await
+            .expect("add opencode");
+
+        let reloaded = AxiomConfig::load_from_path(&config_path).expect("load saved");
+        assert!(reloaded.providers.contains_key("opencode"));
+
+        let _ = fs::remove_dir_all(dir);
     }
 
     static UNIQUE_DIR_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);

@@ -159,6 +159,7 @@ impl ExecutorRegistry {
         registry.register(Box::new(ShellExecutor::generic_run()));
         registry.register(Box::new(SkillCreateExecutor));
         registry.register(Box::new(QuestionAskExecutor));
+        registry.register(Box::new(TestRunExecutor));
         registry
     }
 
@@ -186,6 +187,7 @@ struct FileReadExecutor;
 struct FileWriteExecutor;
 struct SkillCreateExecutor;
 struct QuestionAskExecutor;
+struct TestRunExecutor;
 struct ProjectScanExecutor;
 struct WebFetchExecutor;
 struct GitStatusExecutor;
@@ -638,6 +640,69 @@ impl SkillExecutor for GitDiffExecutor {
 }
 
 #[async_trait(?Send)]
+impl SkillExecutor for TestRunExecutor {
+    fn id(&self) -> &'static str {
+        "test.run"
+    }
+
+    fn descriptor(&self) -> ExecutorDescriptor {
+        ExecutorDescriptor {
+            id: self.id().to_string(),
+            input_schema: json!({
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "path": {"type": "string"},
+                    "command": {"type": "string"}
+                }
+            }),
+            output_schema: json!({
+                "type": "object",
+                "required": ["status", "passed", "framework", "command", "output", "summary"]
+            }),
+            permissions: vec![Permission::ShellExecution, Permission::FileSystemRead],
+            side_effects: vec![SideEffectClass::ProcessSpawn, SideEffectClass::FilesystemRead],
+            deterministic_fixture: json!({"path": "."}),
+        }
+    }
+
+    async fn execute(
+        &self,
+        request: &ToolRequest,
+        context: &SkillExecutionContext,
+        approval: &mut dyn SkillApproval,
+    ) -> Result<Value, SkillExecutionError> {
+        let policy = SideEffectPolicy::backward_compatible(context.auto_approve_medium_risk);
+        let mut audit = crate::NoopSideEffectAuditSink;
+        self.execute_with_policy(request, context, approval, &policy, &mut audit)
+            .await
+    }
+
+    async fn execute_with_policy(
+        &self,
+        request: &ToolRequest,
+        context: &SkillExecutionContext,
+        approval: &mut dyn SkillApproval,
+        policy: &SideEffectPolicy,
+        audit: &mut dyn SideEffectAuditSink,
+    ) -> Result<Value, SkillExecutionError> {
+        let target_dir = optional_string_arg(request, "path").unwrap_or_else(|| ".".to_string());
+        authorize_side_effect(
+            policy,
+            audit,
+            approval,
+            SideEffectRequest::new(
+                self.id(),
+                "test.run",
+                [SideEffectClass::ProcessSpawn, SideEffectClass::FilesystemRead],
+                Some(target_dir),
+            ),
+        )?;
+        test_run(request, context)
+    }
+}
+
+#[async_trait(?Send)]
 impl SkillExecutor for ShellExecutor {
     fn id(&self) -> &'static str {
         self.id
@@ -1079,6 +1144,12 @@ pub fn builtin_installed_skill(skill_id: &str) -> Option<InstalledSkill> {
         "question.ask" => (
             "Ask User Question",
             "Prompts user with an interactive multiple-choice question form",
+            SkillType::Tool,
+            RiskLevel::Low,
+        ),
+        "test.run" => (
+            "Run Workspace Tests",
+            "Auto-detects and executes project tests (Cargo, NPM, Pytest, Python syntax, HTML validation)",
             SkillType::Tool,
             RiskLevel::Low,
         ),
@@ -2155,6 +2226,40 @@ fn create_shell_command(
     cmd
 }
 
+struct ChildProcessGuard {
+    child: Option<std::process::Child>,
+    disowned: bool,
+}
+
+impl ChildProcessGuard {
+    fn new(child: std::process::Child) -> Self {
+        Self {
+            child: Some(child),
+            disowned: false,
+        }
+    }
+
+    fn disown(mut self) -> std::process::Child {
+        self.disowned = true;
+        self.child.take().unwrap()
+    }
+
+    fn as_mut(&mut self) -> &mut std::process::Child {
+        self.child.as_mut().unwrap()
+    }
+}
+
+impl Drop for ChildProcessGuard {
+    fn drop(&mut self) {
+        if !self.disowned {
+            if let Some(mut child) = self.child.take() {
+                let _ = child.kill();
+                let _ = child.wait();
+            }
+        }
+    }
+}
+
 fn shell_run(
     skill_id: &str,
     request: &ToolRequest,
@@ -2202,27 +2307,30 @@ fn shell_run(
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());
 
-    let mut child = command.spawn().map_err(|err| {
+    let child = command.spawn().map_err(|err| {
         SkillExecutionError::CommandFailed(format!("failed to spawn process: {err}"))
     })?;
+    let mut guard = ChildProcessGuard::new(child);
 
     let stdout_buf = Arc::new(Mutex::new(Vec::new()));
     let stderr_buf = Arc::new(Mutex::new(Vec::new()));
 
-    if let Some(stdout) = child.stdout.take() {
+    if let Some(stdout) = guard.as_mut().stdout.take() {
         spawn_stream_reader(stdout, stdout_buf.clone(), 512 * 1024);
     }
-    if let Some(stderr) = child.stderr.take() {
+    if let Some(stderr) = guard.as_mut().stderr.take() {
         spawn_stream_reader(stderr, stderr_buf.clone(), 128 * 1024);
     }
 
     if should_background {
         std::thread::sleep(Duration::from_millis(1200));
-        match child
+        match guard
+            .as_mut()
             .try_wait()
             .map_err(|e| SkillExecutionError::CommandFailed(e.to_string()))?
         {
             Some(status) => {
+                let _ = guard.disown();
                 let out_str = String::from_utf8_lossy(&stdout_buf.lock().unwrap()).to_string();
                 let err_str = String::from_utf8_lossy(&stderr_buf.lock().unwrap()).to_string();
                 Ok(json!({
@@ -2232,10 +2340,10 @@ fn shell_run(
                 }))
             }
             None => {
-                let pid = child.id();
+                let pid = guard.as_mut().id();
                 let out_str = String::from_utf8_lossy(&stdout_buf.lock().unwrap()).to_string();
                 let err_str = String::from_utf8_lossy(&stderr_buf.lock().unwrap()).to_string();
-                register_background_process(child);
+                register_background_process(guard.disown());
                 let message = if out_str.trim().is_empty() {
                     format!("Background process started successfully (PID: {pid}).")
                 } else {
@@ -2259,7 +2367,8 @@ fn shell_run(
         let mut exit_status = None;
 
         while start.elapsed() < timeout {
-            if let Some(status) = child
+            if let Some(status) = guard
+                .as_mut()
                 .try_wait()
                 .map_err(|e| SkillExecutionError::CommandFailed(e.to_string()))?
             {
@@ -2268,8 +2377,8 @@ fn shell_run(
             }
             let current_out = String::from_utf8_lossy(&stdout_buf.lock().unwrap()).to_string();
             if is_server_listening_output(&current_out) {
-                let pid = child.id();
-                register_background_process(child);
+                let pid = guard.as_mut().id();
+                register_background_process(guard.disown());
                 return Ok(json!({
                     "exit_code": 0,
                     "stdout": format!(
@@ -2283,6 +2392,7 @@ fn shell_run(
 
         match exit_status {
             Some(status) => {
+                let _ = guard.disown();
                 std::thread::sleep(Duration::from_millis(50));
                 let out_str = String::from_utf8_lossy(&stdout_buf.lock().unwrap()).to_string();
                 let err_str = String::from_utf8_lossy(&stderr_buf.lock().unwrap()).to_string();
@@ -2293,6 +2403,7 @@ fn shell_run(
                 }))
             }
             None => {
+                let mut child = guard.disown();
                 let _ = child.kill();
                 let out_str = String::from_utf8_lossy(&stdout_buf.lock().unwrap()).to_string();
                 let err_str = String::from_utf8_lossy(&stderr_buf.lock().unwrap()).to_string();
@@ -2304,6 +2415,395 @@ fn shell_run(
             }
         }
     }
+}
+
+fn execute_test_command(
+    cwd: &Path,
+    cmd_str: &str,
+    credential_env_names: &[String],
+) -> Result<(bool, i32, String), SkillExecutionError> {
+    let mut command = create_shell_command("shell.run", cmd_str, cwd, credential_env_names);
+    command
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+
+    let child = command.spawn().map_err(|err| {
+        SkillExecutionError::CommandFailed(format!("failed to spawn test process: {err}"))
+    })?;
+    let mut guard = ChildProcessGuard::new(child);
+
+    let stdout_buf = Arc::new(Mutex::new(Vec::new()));
+    let stderr_buf = Arc::new(Mutex::new(Vec::new()));
+
+    if let Some(stdout) = guard.as_mut().stdout.take() {
+        spawn_stream_reader(stdout, stdout_buf.clone(), 256 * 1024);
+    }
+    if let Some(stderr) = guard.as_mut().stderr.take() {
+        spawn_stream_reader(stderr, stderr_buf.clone(), 256 * 1024);
+    }
+
+    let start = Instant::now();
+    let timeout = Duration::from_secs(60);
+    let mut exit_status = None;
+
+    while start.elapsed() < timeout {
+        if let Some(status) = guard
+            .as_mut()
+            .try_wait()
+            .map_err(|e| SkillExecutionError::CommandFailed(e.to_string()))?
+        {
+            exit_status = Some(status);
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+
+    match exit_status {
+        Some(status) => {
+            let _ = guard.disown();
+            std::thread::sleep(Duration::from_millis(30));
+            let out_str = String::from_utf8_lossy(&stdout_buf.lock().unwrap()).to_string();
+            let err_str = String::from_utf8_lossy(&stderr_buf.lock().unwrap()).to_string();
+            let combined = if err_str.trim().is_empty() {
+                out_str
+            } else if out_str.trim().is_empty() {
+                err_str
+            } else {
+                format!("{out_str}\n{err_str}")
+            };
+            let code = status.code().unwrap_or(0);
+            Ok((status.success(), code, combined))
+        }
+        None => {
+            let mut child = guard.disown();
+            let _ = child.kill();
+            let out_str = String::from_utf8_lossy(&stdout_buf.lock().unwrap()).to_string();
+            let err_str = String::from_utf8_lossy(&stderr_buf.lock().unwrap()).to_string();
+            Ok((
+                false,
+                124,
+                format!("Test command timed out after 60s.\n{out_str}\n{err_str}"),
+            ))
+        }
+    }
+}
+
+fn dir_contains_extension(dir: &Path, ext: &str, max_depth: usize) -> bool {
+    if max_depth == 0 {
+        return false;
+    }
+    if let Ok(entries) = fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_file() {
+                if path.extension().and_then(|e| e.to_str()) == Some(ext) {
+                    return true;
+                }
+            } else if path.is_dir() {
+                let file_name = entry.file_name();
+                let name = file_name.to_string_lossy();
+                if !name.starts_with('.') && name != "node_modules" && name != "target" {
+                    if dir_contains_extension(&path, ext, max_depth - 1) {
+                        return true;
+                    }
+                }
+            }
+        }
+    }
+    false
+}
+
+fn validate_html_project(dir: &Path) -> Result<Value, SkillExecutionError> {
+    let mut html_files = Vec::new();
+    if let Ok(entries) = fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let p = entry.path();
+            if p.is_file() && p.extension().and_then(|e| e.to_str()) == Some("html") {
+                html_files.push(p);
+            }
+        }
+    }
+
+    if html_files.is_empty() {
+        return Ok(json!({
+            "status": "no_tests_found",
+            "passed": true,
+            "framework": "none",
+            "command": "",
+            "output": "No HTML files found to validate.",
+            "summary": "No tests found."
+        }));
+    }
+
+    let mut errors = Vec::new();
+    let mut verified_count = 0;
+
+    for html_file in &html_files {
+        let content = match fs::read_to_string(html_file) {
+            Ok(c) => c,
+            Err(e) => {
+                errors.push(format!("Failed to read {}: {e}", html_file.display()));
+                continue;
+            }
+        };
+
+        let lower = content.to_ascii_lowercase();
+        if !lower.contains("<html") && !lower.contains("<!doctype") {
+            errors.push(format!("{}: missing <!DOCTYPE html> or <html> tag", html_file.display()));
+        }
+
+        for tag in &["script", "style", "div", "body", "head"] {
+            let open_tag = format!("<{tag}");
+            let close_tag = format!("</{tag}>");
+            let open_count = lower.match_indices(&open_tag).count();
+            let close_count = lower.match_indices(&close_tag).count();
+            if open_count != close_count {
+                errors.push(format!(
+                    "{}: mismatched <{tag}> tags (opened {open_count} times, closed {close_count} times)",
+                    html_file.display()
+                ));
+            }
+        }
+
+        for line in content.lines() {
+            if let Some(src_idx) = line.find("src=") {
+                let rest = &line[src_idx + 4..];
+                let quote = rest.chars().next();
+                if let Some(q) = quote {
+                    if q == '"' || q == '\'' {
+                        let path_part = &rest[1..];
+                        if let Some(end_quote) = path_part.find(q) {
+                            let src_path = &path_part[..end_quote];
+                            if !src_path.starts_with("http://")
+                                && !src_path.starts_with("https://")
+                                && !src_path.starts_with("//")
+                                && !src_path.starts_with("data:")
+                            {
+                                let script_file = if let Some(parent) = html_file.parent() {
+                                    parent.join(src_path)
+                                } else {
+                                    PathBuf::from(src_path)
+                                };
+                                if !script_file.exists() {
+                                    errors.push(format!(
+                                        "{}: referenced script `{src_path}` not found on disk",
+                                        html_file.display()
+                                    ));
+                                } else {
+                                    let mut check_cmd = std::process::Command::new("node");
+                                    check_cmd.arg("--check").arg(&script_file);
+                                    if let Ok(output) = check_cmd.output() {
+                                        if !output.status.success() {
+                                            let err_msg = String::from_utf8_lossy(&output.stderr);
+                                            errors.push(format!(
+                                                "{}: syntax error in `{src_path}`:\n{err_msg}",
+                                                html_file.display()
+                                            ));
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            if line.contains("stylesheet") {
+                if let Some(href_idx) = line.find("href=") {
+                    let rest = &line[href_idx + 5..];
+                    let quote = rest.chars().next();
+                    if let Some(q) = quote {
+                        if q == '"' || q == '\'' {
+                            let path_part = &rest[1..];
+                            if let Some(end_quote) = path_part.find(q) {
+                                let href_path = &path_part[..end_quote];
+                                if !href_path.starts_with("http://")
+                                    && !href_path.starts_with("https://")
+                                    && !href_path.starts_with("//")
+                                    && !href_path.starts_with("data:")
+                                {
+                                    let css_file = if let Some(parent) = html_file.parent() {
+                                        parent.join(href_path)
+                                    } else {
+                                        PathBuf::from(href_path)
+                                    };
+                                    if !css_file.exists() {
+                                        errors.push(format!(
+                                            "{}: referenced stylesheet `{href_path}` not found on disk",
+                                            html_file.display()
+                                        ));
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        verified_count += 1;
+    }
+
+    let passed = errors.is_empty();
+    let summary = if passed {
+        format!("Validated {verified_count} HTML/web file(s) and referenced scripts/styles with 0 errors")
+    } else {
+        format!("Found {} HTML/web error(s)", errors.len())
+    };
+    let output = if passed {
+        format!("All {verified_count} HTML entrypoints and referenced assets passed syntax and structure validation.")
+    } else {
+        errors.join("\n")
+    };
+
+    Ok(json!({
+        "status": if passed { "passed" } else { "failed" },
+        "passed": passed,
+        "framework": "html_web",
+        "command": "html-validator",
+        "output": output,
+        "summary": summary,
+    }))
+}
+
+fn test_run(
+    request: &ToolRequest,
+    context: &SkillExecutionContext,
+) -> Result<Value, SkillExecutionError> {
+    let rel_path = optional_string_arg(request, "path").unwrap_or_else(|| ".".to_string());
+    let workspace = Workspace::new(&context.workspace_root)?;
+    let root = workspace.resolve_inside(&rel_path)?;
+
+    if let Some(cmd) = request.arguments.get("command").and_then(Value::as_str) {
+        if !cmd.trim().is_empty() {
+            let (passed, code, output) =
+                execute_test_command(&root, cmd.trim(), &context.credential_env_names)?;
+            let summary = if passed {
+                format!("Custom test command `{}` passed (exit code 0)", cmd.trim())
+            } else {
+                format!(
+                    "Custom test command `{}` failed (exit code {code})",
+                    cmd.trim()
+                )
+            };
+            return Ok(json!({
+                "status": if passed { "passed" } else { "failed" },
+                "passed": passed,
+                "framework": "custom",
+                "command": cmd.trim(),
+                "output": output,
+                "summary": summary,
+            }));
+        }
+    }
+
+    // 1. Cargo
+    if root.join("Cargo.toml").exists() {
+        let cmd = "cargo test";
+        let (passed, code, output) =
+            execute_test_command(&root, cmd, &context.credential_env_names)?;
+        let summary = if passed {
+            "Cargo test suite passed successfully".to_string()
+        } else {
+            format!("Cargo test suite failed with exit code {code}")
+        };
+        return Ok(json!({
+            "status": if passed { "passed" } else { "failed" },
+            "passed": passed,
+            "framework": "cargo",
+            "command": cmd,
+            "output": output,
+            "summary": summary,
+        }));
+    }
+
+    // 2. NPM
+    let pkg_json = root.join("package.json");
+    if pkg_json.exists() {
+        if let Ok(content) = fs::read_to_string(&pkg_json) {
+            if let Ok(parsed) = serde_json::from_str::<Value>(&content) {
+                if parsed.get("scripts").and_then(|s| s.get("test")).is_some() {
+                    let cmd = "npm test";
+                    let (passed, code, output) =
+                        execute_test_command(&root, cmd, &context.credential_env_names)?;
+                    let summary = if passed {
+                        "NPM test suite passed successfully".to_string()
+                    } else {
+                        format!("NPM test suite failed with exit code {code}")
+                    };
+                    return Ok(json!({
+                        "status": if passed { "passed" } else { "failed" },
+                        "passed": passed,
+                        "framework": "npm",
+                        "command": cmd,
+                        "output": output,
+                        "summary": summary,
+                    }));
+                }
+            }
+        }
+    }
+
+    // 3. Python
+    let has_pytest_config = root.join("pytest.ini").exists()
+        || root.join("pyproject.toml").exists()
+        || root.join("setup.py").exists()
+        || root.join("tests").is_dir();
+    let has_py_files = dir_contains_extension(&root, "py", 2);
+
+    if has_pytest_config || has_py_files {
+        let cmd = if has_pytest_config {
+            "pytest"
+        } else {
+            "python -m unittest discover"
+        };
+        let (mut passed, mut code, mut output) =
+            execute_test_command(&root, cmd, &context.credential_env_names)?;
+        if !passed
+            && (output.contains("not found")
+                || output.contains("is not recognized")
+                || output.contains("No module named"))
+        {
+            let py_check = if cfg!(windows) {
+                "Get-ChildItem -Recurse -Filter *.py | ForEach-Object { python -m py_compile $_.FullName }"
+            } else {
+                "python3 -m compileall ."
+            };
+            let (syntax_passed, syntax_code, syntax_out) =
+                execute_test_command(&root, py_check, &context.credential_env_names)?;
+            passed = syntax_passed;
+            code = syntax_code;
+            output = syntax_out;
+        }
+
+        let summary = if passed {
+            "Python test/syntax check passed successfully".to_string()
+        } else {
+            format!("Python test/syntax check failed with exit code {code}")
+        };
+        return Ok(json!({
+            "status": if passed { "passed" } else { "failed" },
+            "passed": passed,
+            "framework": "python",
+            "command": cmd,
+            "output": output,
+            "summary": summary,
+        }));
+    }
+
+    // 4. HTML / Web
+    if dir_contains_extension(&root, "html", 2) {
+        return validate_html_project(&root);
+    }
+
+    // 5. None
+    Ok(json!({
+        "status": "no_tests_found",
+        "passed": true,
+        "framework": "none",
+        "command": "",
+        "output": "No test configuration (Cargo.toml, package.json test script, pytest, or HTML entrypoint) detected.",
+        "summary": "No tests configured in workspace.",
+    }))
 }
 
 fn validate_schema_value(value: &Value, schema: &Value) -> std::result::Result<(), String> {
@@ -3328,6 +3828,7 @@ min_axiom_version = "0.1.0"
             "shell.bash.safe",
             "python.run",
             "question.ask",
+            "test.run",
         ] {
             let skill = builtin_installed_skill(builtin_id).expect("builtin skill found");
             assert_eq!(skill.manifest.id, *builtin_id);
@@ -3418,5 +3919,108 @@ min_axiom_version = "0.1.0"
         assert!(!text.contains("<h1>"));
         assert!(text.contains("Welcome & Hello"));
         assert!(text.contains("This is a paragraph with a link \"quoted\"."));
+    }
+
+    #[tokio::test]
+    async fn test_run_executor_validates_html_and_assets() {
+        let dir = unique_temp_dir();
+        fs::create_dir_all(&dir).expect("create dir");
+
+        let html_content = r#"<!DOCTYPE html>
+<html>
+<head>
+    <title>Snake Game</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <canvas id="game"></canvas>
+    <script src="game.js"></script>
+</body>
+</html>"#;
+        fs::write(dir.join("index.html"), html_content).expect("write html");
+        fs::write(dir.join("style.css"), "body { background: #111; }").expect("write css");
+        fs::write(dir.join("game.js"), "const canvas = document.getElementById('game');").expect("write js");
+
+        let registry = ExecutorRegistry::with_builtin_executors();
+        let executor = registry.get("test.run").expect("test.run registered");
+        let context = SkillExecutionContext {
+            workspace_root: dir.clone(),
+            max_file_read_bytes: 1024,
+            web_timeout_secs: 10,
+            max_web_response_bytes: 1024,
+            web_fetch_https_only: true,
+            web_fetch_allowed_hosts: vec![],
+            web_fetch_denied_hosts: vec![],
+            web_fetch_use_system_proxy: false,
+            auto_approve_medium_risk: true,
+            credential_env_names: vec![],
+            skills_dir: None,
+        };
+
+        let request = ToolRequest {
+            skill_id: "test.run".to_string(),
+            arguments: json!({}),
+        };
+
+        let mut approval = AllowAllApprover;
+        let result = executor
+            .execute(&request, &context, &mut approval)
+            .await
+            .expect("execute test.run");
+
+        assert_eq!(result.get("status").and_then(Value::as_str), Some("passed"));
+        assert_eq!(result.get("passed").and_then(Value::as_bool), Some(true));
+        assert_eq!(result.get("framework").and_then(Value::as_str), Some("html_web"));
+
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn test_run_executor_catches_missing_referenced_asset() {
+        let dir = unique_temp_dir();
+        fs::create_dir_all(&dir).expect("create dir");
+
+        let html_content = r#"<!DOCTYPE html>
+<html>
+<head><title>Broken</title></head>
+<body>
+    <script src="missing_script.js"></script>
+</body>
+</html>"#;
+        fs::write(dir.join("index.html"), html_content).expect("write html");
+
+        let registry = ExecutorRegistry::with_builtin_executors();
+        let executor = registry.get("test.run").expect("test.run registered");
+        let context = SkillExecutionContext {
+            workspace_root: dir.clone(),
+            max_file_read_bytes: 1024,
+            web_timeout_secs: 10,
+            max_web_response_bytes: 1024,
+            web_fetch_https_only: true,
+            web_fetch_allowed_hosts: vec![],
+            web_fetch_denied_hosts: vec![],
+            web_fetch_use_system_proxy: false,
+            auto_approve_medium_risk: true,
+            credential_env_names: vec![],
+            skills_dir: None,
+        };
+
+        let request = ToolRequest {
+            skill_id: "test.run".to_string(),
+            arguments: json!({}),
+        };
+
+        let mut approval = AllowAllApprover;
+        let result = executor
+            .execute(&request, &context, &mut approval)
+            .await
+            .expect("execute test.run");
+
+        assert_eq!(result.get("status").and_then(Value::as_str), Some("failed"));
+        assert_eq!(result.get("passed").and_then(Value::as_bool), Some(false));
+        let output = result.get("output").and_then(Value::as_str).unwrap();
+        assert!(output.contains("missing_script.js"));
+
+        let _ = fs::remove_dir_all(dir);
     }
 }
