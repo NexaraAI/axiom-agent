@@ -39,7 +39,7 @@ impl Renderer {
         Self {
             color_enabled: std::io::stdout().is_terminal()
                 && std::env::var_os("NO_COLOR").is_none(),
-            palette: palette_for("blood_red"),
+            palette: palette_for("axiom"),
         }
     }
 
@@ -110,10 +110,22 @@ impl Renderer {
         let border_bottom = "  └─────────────────────────────────────────────────────────────┘";
         let card_empty = pad_card_line("│", "", 58);
 
+        let logo_colors = [
+            Color::Fixed(39),
+            Color::Fixed(75),
+            Color::Fixed(75),
+            Color::Fixed(81),
+            Color::Fixed(45),
+        ];
         let mut out = Vec::new();
         out.push(String::new());
-        for line in logo_lines {
-            out.push(format!("  {}", self.paint(self.palette.primary, line)));
+        for (idx, line) in logo_lines.iter().enumerate() {
+            let col = if self.palette.primary == Color::Fixed(75) {
+                logo_colors[idx % logo_colors.len()]
+            } else {
+                self.palette.primary
+            };
+            out.push(format!("  {}", self.paint(col, line)));
         }
         out.push(format!("                    {}", self.smoke(subtitle)));
         out.push(String::new());
@@ -123,7 +135,7 @@ impl Renderer {
 
         // Input prompt line
         let input_accent = self.paint(self.palette.primary, "│");
-        let input_cursor = self.bone("▌");
+        let input_cursor = self.paint(self.palette.primary, "▌");
         let input_hint = self.smoke("Ask anything... \"Fix a TODO in the codebase\"");
         let input_content = format!("{input_accent} {input_cursor} {input_hint}");
         out.push(pad_card_line(&self.border("│"), &input_content, 58));
@@ -203,6 +215,7 @@ impl Renderer {
             ("/effort", "Configure reasoning effort level", true),
             ("/model", "Configure or inspect the active model", false),
             ("/permission", "Switch execution permission mode", false),
+            ("/theme", "Switch terminal visual color theme", false),
             ("/provider", "Configure or inspect the active LLM", false),
             ("/queue", "Manage pending task queue", false),
             ("/skills", "List and manage installed skills", false),
@@ -219,7 +232,7 @@ impl Renderer {
         for (cmd, desc, active) in commands {
             if active && self.color_enabled {
                 let highlight_style = nu_ansi_term::Style::new()
-                    .on(nu_ansi_term::Color::Fixed(208))
+                    .on(nu_ansi_term::Color::Fixed(215))
                     .fg(nu_ansi_term::Color::Fixed(16))
                     .bold();
                 let raw_content = format!("  {:<13} {}", cmd, desc);
@@ -302,7 +315,7 @@ impl Renderer {
             format!(
                 "{} {} ",
                 self.paint(self.palette.primary, "│"),
-                self.paint(self.palette.text, "axiom ❯")
+                self.paint(self.palette.primary, "axiom ❯")
             )
         } else {
             "│ axiom ❯ ".to_string()
@@ -310,7 +323,7 @@ impl Renderer {
     }
 
     pub(crate) fn lens_notice(&self, message: &str) -> String {
-        format!("{} {}", self.cyan("◈ Axiom Lens:"), self.bone(message))
+        format!("{} {}", self.primary("⟡ Axiom Lens:"), self.bone(message))
     }
 
     #[allow(dead_code)]
@@ -360,7 +373,7 @@ impl Renderer {
                     return format!(
                         "{}\n{} {}",
                         self.thinking(thought),
-                        self.red("◆ Axiom:"),
+                        self.primary("◆ Axiom:"),
                         self.ash(answer)
                     );
                 } else if answer.is_empty() {
@@ -368,11 +381,11 @@ impl Renderer {
                 }
             }
         }
-        format!("{} {}", self.red("◆ Axiom:"), self.ash(content))
+        format!("{} {}", self.primary("◆ Axiom:"), self.ash(content))
     }
 
     pub(crate) fn assistant_prefix(&self) -> String {
-        format!("{} ", self.red("◆ Axiom:"))
+        format!("{} ", self.primary("◆ Axiom:"))
     }
 
     pub(crate) fn assistant_delta(&self, content: &str) -> String {
@@ -411,6 +424,14 @@ impl Renderer {
         self.paint(self.palette.border, text)
     }
 
+    pub(crate) fn primary(&self, text: &str) -> String {
+        self.paint(self.palette.primary, text)
+    }
+
+    pub(crate) fn accent(&self, text: &str) -> String {
+        self.paint(self.palette.accent, text)
+    }
+
     pub(crate) fn red(&self, text: &str) -> String {
         self.paint(self.palette.primary, text)
     }
@@ -446,6 +467,15 @@ impl Renderer {
 
 fn palette_for(theme: &str) -> Palette {
     match theme {
+        "axiom" => Palette {
+            primary: Color::Fixed(75),
+            warning: Color::Fixed(208),
+            text: Color::Fixed(255),
+            muted: Color::Fixed(243),
+            success: Color::Fixed(114),
+            accent: Color::Fixed(215),
+            border: Color::Fixed(240),
+        },
         "ash" => Palette {
             primary: Color::Fixed(252),
             warning: Color::Fixed(214),
@@ -464,13 +494,22 @@ fn palette_for(theme: &str) -> Palette {
             accent: Color::Fixed(14),
             border: Color::Fixed(15),
         },
-        _ => Palette {
+        "blood_red" => Palette {
             primary: Color::Fixed(196),
             warning: Color::Fixed(202),
             text: Color::Fixed(254),
             muted: Color::Fixed(245),
             success: Color::Fixed(113),
             accent: Color::Fixed(39),
+            border: Color::Fixed(240),
+        },
+        _ => Palette {
+            primary: Color::Fixed(75),
+            warning: Color::Fixed(208),
+            text: Color::Fixed(255),
+            muted: Color::Fixed(243),
+            success: Color::Fixed(114),
+            accent: Color::Fixed(215),
             border: Color::Fixed(240),
         },
     }
@@ -558,14 +597,26 @@ mod tests {
     use super::*;
 
     #[test]
-    fn renderer_uses_blood_red_ansi_color_when_enabled() {
+    fn renderer_uses_blood_red_ansi_color_when_configured() {
         let mut config = AxiomConfig::default();
+        config.ui.theme = "blood_red".to_string();
         config.ui.color = true;
         let _guard = EnvVarGuard::remove("NO_COLOR");
 
         assert!(Renderer::from_config_with_terminal(&config, true)
             .prompt()
             .contains("\u{1b}[38;5;196m"));
+    }
+
+    #[test]
+    fn renderer_uses_axiom_ansi_color_by_default() {
+        let mut config = AxiomConfig::default();
+        config.ui.color = true;
+        let _guard = EnvVarGuard::remove("NO_COLOR");
+
+        assert!(Renderer::from_config_with_terminal(&config, true)
+            .prompt()
+            .contains("\u{1b}[38;5;75m"));
     }
 
     #[test]

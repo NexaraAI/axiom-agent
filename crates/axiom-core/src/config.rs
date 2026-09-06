@@ -490,7 +490,7 @@ fn default_ui_color() -> bool {
 }
 
 fn default_ui_theme() -> String {
-    "blood_red".to_string()
+    "axiom".to_string()
 }
 
 fn default_policy_mode() -> String {
@@ -853,11 +853,11 @@ impl AxiomConfig {
         }
         if !matches!(
             self.ui.theme.as_str(),
-            "blood_red" | "ash" | "high_contrast" | "none"
+            "axiom" | "blood_red" | "ash" | "high_contrast" | "none"
         ) {
             return Err(AxiomError::InvalidConfig {
                 field: "ui.theme",
-                message: "expected blood_red, ash, high_contrast, or none".to_string(),
+                message: "expected axiom, blood_red, ash, high_contrast, or none".to_string(),
             });
         }
         for (field, patterns) in [
@@ -1324,6 +1324,8 @@ format = "json"
         assert_eq!(PermissionMode::parse("unknown_mode"), None);
 
         let mut config = AxiomConfig::default();
+        assert_eq!(config.ui.theme, "axiom");
+        assert!(config.ensure_valid().is_ok());
         assert_eq!(config.policy.permission_mode(), PermissionMode::Velocity);
         config.policy.mode = "invalid".to_string();
         assert!(config.ensure_valid().is_err());

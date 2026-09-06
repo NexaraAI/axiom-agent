@@ -1499,6 +1499,7 @@ const COMMAND_HINTS: &[(&str, &str)] = &[
     ("model", " [name]"),
     ("permission", " [velocity|full_machine|strict]"),
     ("mode", " [velocity|full_machine|strict]"),
+    ("theme", " [axiom|blood_red|ash|high_contrast]"),
     ("provider", " [name]"),
     ("queue", " [add <task>|list|clear]"),
     ("skills", ""),
@@ -1550,6 +1551,20 @@ impl Completer for AxiomCommandHelper {
             let start = pos - sub.len();
             let mut candidates = Vec::new();
             for opt in &["velocity", "full_machine", "strict"] {
+                if opt.starts_with(sub) {
+                    candidates.push(Pair {
+                        display: opt.to_string(),
+                        replacement: opt.to_string(),
+                    });
+                }
+            }
+            return Ok((start, candidates));
+        }
+
+        if let Some(sub) = rest.strip_prefix("theme ") {
+            let start = pos - sub.len();
+            let mut candidates = Vec::new();
+            for opt in &["axiom", "blood_red", "ash", "high_contrast"] {
                 if opt.starts_with(sub) {
                     candidates.push(Pair {
                         display: opt.to_string(),
@@ -2127,6 +2142,28 @@ async fn run_terminal_session(mut session: ChatSession) -> Result<()> {
                 }
                 if let Some(runtime) = runtime {
                     println!("{}", ui.status_line(&runtime.status_text()));
+                }
+                if !was_cancelled && tool_results.is_empty() {
+                    if let Some(mcq) = extract_mcq_from_text(&content) {
+                        let res = crate::ui::interactive_select(
+                            &mcq.question,
+                            &mcq.options,
+                            0,
+                            true,
+                            &ui,
+                        );
+                        match res {
+                            crate::ui::SelectionResult::Selected { text, .. } => {
+                                println!("{}\n", ui.success(&format!("Selected: {text}")));
+                                session.prompt_queue.push_front(text);
+                            }
+                            crate::ui::SelectionResult::Custom(reply) => {
+                                println!("{}\n", ui.success(&format!("Custom reply: {reply}")));
+                                session.prompt_queue.push_front(reply);
+                            }
+                            crate::ui::SelectionResult::Cancelled => {}
+                        }
+                    }
                 }
             }
             Err(error) => {
@@ -2804,19 +2841,95 @@ pub(crate) struct ChatTurnResult {
     pub runtime: Option<ChatRuntimeStats>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ParsedMcq {
+    pub question: String,
+    pub options: Vec<String>,
+}
+
+pub(crate) fn extract_mcq_from_text(text: &str) -> Option<ParsedMcq> {
+    let mut clean_lines = Vec::new();
+    let mut in_code_block = false;
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("```") {
+            in_code_block = !in_code_block;
+            continue;
+        }
+        if !in_code_block {
+            clean_lines.push(trimmed);
+        }
+    }
+
+    let mut options = Vec::new();
+    let mut question_lines = Vec::new();
+    let mut found_first_opt = false;
+
+    for line in clean_lines {
+        if line.is_empty() {
+            continue;
+        }
+        if is_mcq_option_line(line, options.len()) {
+            found_first_opt = true;
+            options.push(line.to_string());
+        } else if !found_first_opt {
+            question_lines.push(line);
+        }
+    }
+
+    if options.len() >= 2 {
+        let filtered_q = question_lines
+            .into_iter()
+            .filter(|l| {
+                !l.starts_with("**Multiple-Choice")
+                    && !l.starts_with("#")
+                    && !l.starts_with("---")
+            })
+            .collect::<Vec<_>>()
+            .join(" ");
+        let question = if filtered_q.trim().is_empty() {
+            "Multiple-Choice Question".to_string()
+        } else {
+            filtered_q.trim().to_string()
+        };
+        Some(ParsedMcq { question, options })
+    } else {
+        None
+    }
+}
+
+fn is_mcq_option_line(line: &str, current_count: usize) -> bool {
+    let stripped = line
+        .trim_start_matches(|c: char| c == '*' || c == '-' || c == ' ')
+        .trim();
+    let expected_letter = (b'A' + current_count as u8) as char;
+    let expected_num = format!("{}.", current_count + 1);
+    let expected_num_paren = format!("{})", current_count + 1);
+    let expected_num_bracket = format!("[{}]", current_count + 1);
+
+    if stripped.starts_with(&format!("{expected_letter}."))
+        || stripped.starts_with(&format!("{expected_letter})"))
+        || stripped.starts_with(&format!("[{expected_letter}]"))
+        || stripped.starts_with(&format!("**{expected_letter}.**"))
+        || stripped.starts_with(&format!("**{expected_letter})**"))
+        || stripped.starts_with(&expected_num)
+        || stripped.starts_with(&expected_num_paren)
+        || stripped.starts_with(&expected_num_bracket)
+    {
+        return true;
+    }
+    false
+}
+
 pub(crate) fn render_interactive_mcq(
     question: &str,
     options: &[String],
     allow_custom: bool,
 ) -> Result<QuestionAnswer, String> {
     Spinner::clear_line();
-    let is_terminal = io::stdin().is_terminal() && io::stdout().is_terminal();
 
-    if !is_terminal || options.is_empty() {
-        let default_choice = options
-            .first()
-            .cloned()
-            .unwrap_or_else(|| question.to_string());
+    if options.is_empty() {
+        let default_choice = question.to_string();
         return Ok(QuestionAnswer {
             selected: default_choice,
             index: Some(1),
@@ -2828,89 +2941,47 @@ pub(crate) fn render_interactive_mcq(
     let renderer = crate::ui::Renderer::from_config(&config);
 
     println!();
-    println!("{}", renderer.mcq_card(question, options, allow_custom));
-
-    let num_choices = if allow_custom {
-        options.len() + 1
-    } else {
-        options.len()
-    };
-    print!(
-        "{}{} ",
-        renderer.prompt(),
-        renderer.plain(&format!("Select [1-{num_choices}] or type custom reply:"))
+    let result = crate::ui::interactive_select(
+        question,
+        options,
+        0,
+        allow_custom,
+        &renderer,
     );
-    let _ = io::stdout().flush();
 
-    let mut input = String::new();
-    let _ = io::stdin().read_line(&mut input);
-    let trimmed = input.trim();
-
-    if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("esc") {
-        let first = options
-            .first()
-            .cloned()
-            .unwrap_or_else(|| question.to_string());
-        println!(
-            "{}\n",
-            renderer.success(&format!("Selected default: {first}"))
-        );
-        return Ok(QuestionAnswer {
-            selected: first,
-            index: Some(1),
-            is_custom: false,
-        });
-    }
-
-    if let Ok(num) = trimmed.parse::<usize>() {
-        if num >= 1 && num <= options.len() {
-            let choice = options[num - 1].clone();
-            println!("{}\n", renderer.success(&format!("Selected: {choice}")));
-            return Ok(QuestionAnswer {
-                selected: choice,
-                index: Some(num),
+    match result {
+        crate::ui::SelectionResult::Selected { index, text } => {
+            println!("{}\n", renderer.success(&format!("Selected: {text}")));
+            Ok(QuestionAnswer {
+                selected: text,
+                index: Some(index + 1),
                 is_custom: false,
-            });
+            })
         }
-        if allow_custom && num == options.len() + 1 {
-            print!(
-                "{}{} ",
-                renderer.prompt(),
-                renderer.plain("Enter your custom reply:")
-            );
-            let _ = io::stdout().flush();
-            let mut custom_input = String::new();
-            let _ = io::stdin().read_line(&mut custom_input);
-            let custom_trimmed = custom_input.trim().to_string();
-            let final_ans = if custom_trimmed.is_empty() {
-                options
-                    .first()
-                    .cloned()
-                    .unwrap_or_else(|| question.to_string())
-            } else {
-                custom_trimmed
-            };
+        crate::ui::SelectionResult::Custom(custom) => {
+            println!("{}\n", renderer.success(&format!("Custom reply: {custom}")));
+            Ok(QuestionAnswer {
+                selected: custom,
+                index: Some(options.len() + 1),
+                is_custom: true,
+            })
+        }
+        crate::ui::SelectionResult::Cancelled => {
+            let first = options
+                .first()
+                .cloned()
+                .unwrap_or_else(|| question.to_string());
             println!(
                 "{}\n",
-                renderer.success(&format!("Custom reply: {final_ans}"))
+                renderer.success(&format!("Selected default: {first}"))
             );
-            return Ok(QuestionAnswer {
-                selected: final_ans,
-                index: None,
-                is_custom: true,
-            });
+            Ok(QuestionAnswer {
+                selected: first,
+                index: Some(1),
+                is_custom: false,
+            })
         }
     }
-
-    println!(
-        "{}\n",
-        renderer.success(&format!("Custom reply: {trimmed}"))
-    );
-    Ok(QuestionAnswer {
-        selected: trimmed.to_string(),
-        index: None,
-        is_custom: true,
-    })
 }
 
 struct TerminalApprover {
@@ -3078,11 +3149,52 @@ async fn handle_chat_command(session: &mut ChatSession, input: &str) -> Result<C
             }
             Ok(CommandResult::Continue)
         }
-        "!effort" | "!reasoning" => {
-            let active_effort = session.active_effort();
-            println!("Active Reasoning Effort: {active_effort}");
-            println!("Available efforts: none, low, medium, high, max");
-            println!("Use `/effort <none|low|medium|high|max>` to switch.");
+        "!effort" | "!reasoning" | "!tier" => {
+            if io::stdin().is_terminal() && io::stdout().is_terminal() {
+                let renderer = crate::ui::Renderer::from_config(&session.config);
+                let options = vec![
+                    "Default (medium)".to_string(),
+                    "none".to_string(),
+                    "low".to_string(),
+                    "medium".to_string(),
+                    "high".to_string(),
+                    "max".to_string(),
+                ];
+                let initial = match session.active_effort() {
+                    "none" => 1,
+                    "low" => 2,
+                    "medium" => 3,
+                    "high" => 4,
+                    "max" => 5,
+                    _ => 0,
+                };
+                let result = crate::ui::interactive_select(
+                    "Select variant",
+                    &options,
+                    initial,
+                    false,
+                    &renderer,
+                );
+                if let crate::ui::SelectionResult::Selected { text, .. } = result {
+                    let chosen = if text.starts_with("Default") {
+                        "medium"
+                    } else {
+                        text.as_str()
+                    };
+                    match session.set_effort(chosen) {
+                        Ok(new_effort) => {
+                            session.persist_session()?;
+                            println!("Switched reasoning effort to '{new_effort}'.");
+                        }
+                        Err(error) => println!("{error}"),
+                    }
+                }
+            } else {
+                let active_effort = session.active_effort();
+                println!("Active Reasoning Effort: {active_effort}");
+                println!("Available efforts: none, low, medium, high, max");
+                println!("Use `/effort <none|low|medium|high|max>` to switch.");
+            }
             Ok(CommandResult::Continue)
         }
         _ if input.starts_with("!effort ") || input.starts_with("!reasoning ") => {
@@ -3102,16 +3214,57 @@ async fn handle_chat_command(session: &mut ChatSession, input: &str) -> Result<C
             Ok(CommandResult::Continue)
         }
         "!permission" | "!permissions" | "!mode" => {
-            let mode = session.permission_mode();
-            println!("Active Permission Mode: {}", mode.as_str());
-            println!("Description: {}", mode.description());
-            println!("\nAvailable permission modes:");
-            println!("  - velocity:     Balanced agentic speed; auto-approves workspace edits & safe commands, asks on git/destructive actions (recommended)");
-            println!("  - full_machine: Unrestricted access; auto-approves all filesystem, process, network, and git actions without prompting");
-            println!("  - strict:       Zero-trust security; requires explicit confirmation for all writes, execution, and external requests");
-            println!(
-                "\nUse `/permission <velocity|full_machine|strict>` (alias: `/mode`) to switch."
-            );
+            if io::stdin().is_terminal() && io::stdout().is_terminal() {
+                let renderer = crate::ui::Renderer::from_config(&session.config);
+                let options = vec![
+                    "velocity (Balanced agentic speed, recommended)".to_string(),
+                    "full_machine (Unrestricted access without prompts)".to_string(),
+                    "strict (Zero-trust isolation, confirms every mutation)".to_string(),
+                ];
+                let initial = match session.permission_mode() {
+                    PermissionMode::Velocity => 0,
+                    PermissionMode::FullMachine => 1,
+                    PermissionMode::Strict => 2,
+                };
+                let result = crate::ui::interactive_select(
+                    "Select Permission Mode",
+                    &options,
+                    initial,
+                    false,
+                    &renderer,
+                );
+                if let crate::ui::SelectionResult::Selected { text, .. } = result {
+                    let target = if text.starts_with("velocity") {
+                        "velocity"
+                    } else if text.starts_with("full_machine") {
+                        "full_machine"
+                    } else {
+                        "strict"
+                    };
+                    match session.set_permission_mode(target) {
+                        Ok(new_mode) => {
+                            let desc = new_mode.description();
+                            println!(
+                                "Switched permission mode to '{}' ({}).",
+                                new_mode.as_str(),
+                                desc
+                            );
+                        }
+                        Err(error) => println!("{error}"),
+                    }
+                }
+            } else {
+                let mode = session.permission_mode();
+                println!("Active Permission Mode: {}", mode.as_str());
+                println!("Description: {}", mode.description());
+                println!("\nAvailable permission modes:");
+                println!("  - velocity:     Balanced agentic speed; auto-approves workspace edits & safe commands, asks on git/destructive actions (recommended)");
+                println!("  - full_machine: Unrestricted access; auto-approves all filesystem, process, network, and git actions without prompting");
+                println!("  - strict:       Zero-trust security; requires explicit confirmation for all writes, execution, and external requests");
+                println!(
+                    "\nUse `/permission <velocity|full_machine|strict>` (alias: `/mode`) to switch."
+                );
+            }
             Ok(CommandResult::Continue)
         }
         _ if input.starts_with("!permission ")
@@ -3137,6 +3290,70 @@ async fn handle_chat_command(session: &mut ChatSession, input: &str) -> Result<C
                     );
                 }
                 Err(error) => println!("{error}"),
+            }
+            Ok(CommandResult::Continue)
+        }
+        "!theme" | "!themes" => {
+            if io::stdin().is_terminal() && io::stdout().is_terminal() {
+                let renderer = crate::ui::Renderer::from_config(&session.config);
+                let options = vec![
+                    "axiom (Signature electric cyan & sunset amber)".to_string(),
+                    "blood_red (Classic blood red & bone)".to_string(),
+                    "ash (Minimal monochrome)".to_string(),
+                    "high_contrast (Accessible high contrast)".to_string(),
+                ];
+                let initial = match session.config.ui.theme.as_str() {
+                    "axiom" => 0,
+                    "blood_red" => 1,
+                    "ash" => 2,
+                    "high_contrast" => 3,
+                    _ => 0,
+                };
+                let result = crate::ui::interactive_select(
+                    "Select Theme",
+                    &options,
+                    initial,
+                    false,
+                    &renderer,
+                );
+                if let crate::ui::SelectionResult::Selected { text, .. } = result {
+                    let target = if text.starts_with("axiom") {
+                        "axiom"
+                    } else if text.starts_with("blood_red") {
+                        "blood_red"
+                    } else if text.starts_with("ash") {
+                        "ash"
+                    } else {
+                        "high_contrast"
+                    };
+                    session.config.ui.theme = target.to_string();
+                    session.persist_session()?;
+                    println!("Switched theme to '{target}'.");
+                }
+            } else {
+                println!("Active Theme: {}", session.config.ui.theme);
+                println!("Available themes: axiom, blood_red, ash, high_contrast");
+                println!("Use `/theme <axiom|blood_red|ash|high_contrast>` to switch.");
+            }
+            Ok(CommandResult::Continue)
+        }
+        _ if input.starts_with("!theme ") || input.starts_with("!themes ") => {
+            let target = if let Some(t) = input.strip_prefix("!theme ") {
+                t.trim()
+            } else if let Some(t) = input.strip_prefix("!themes ") {
+                t.trim()
+            } else {
+                ""
+            };
+            let normalized = target.to_ascii_lowercase();
+            if ["axiom", "blood_red", "ash", "high_contrast"].contains(&normalized.as_str()) {
+                session.config.ui.theme = normalized.clone();
+                session.persist_session()?;
+                println!("Switched theme to '{normalized}'.");
+            } else {
+                println!(
+                    "Invalid theme '{target}'. Available: axiom, blood_red, ash, high_contrast"
+                );
             }
             Ok(CommandResult::Continue)
         }
@@ -3426,6 +3643,7 @@ fn print_help() {
     println!("  /model [name]                       Switch or view active LLM model");
     println!("  /model list [FILTER]                Fetch catalog view of available models");
     println!("  /permission [velocity|full|strict]  Switch permission mode (alias: /mode)");
+    println!("  /theme [axiom|blood|ash|high]       Switch visual color theme (alias: /themes)");
     println!("  /queue [add <task>|list|clear]      Manage sequential background task queue");
     println!("  /undo                               Restore latest workspace checkpoint");
     println!("  /checkpoints                        List recovery snapshots");
@@ -3801,6 +4019,45 @@ mod tests {
             .expect("clear command");
 
         assert_eq!(session.history_len(), 0);
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn extract_mcq_from_text_parses_assistant_questions() {
+        let sample = "**Multiple-Choice Question**\n\nWhich of the following statements about the **DemonZ-Development Geo-Restrict** plugin is **false**?\n\nA. It can block or allow players based on their country (ISO-2 code).\nB. It supports ASN (Autonomous System Number) filtering to block entire ISPs.\nC. It includes built-in VPN/proxy detection using GeoIP and known proxy databases.\nD. It requires a paid \"Pro\" license to function on Paper 1.20.2 servers.\n\n*Pick the letter of the statement you think is false.*";
+        let parsed = extract_mcq_from_text(sample).expect("parsed mcq");
+        assert!(parsed.question.contains("DemonZ-Development Geo-Restrict"));
+        assert_eq!(parsed.options.len(), 4);
+        assert!(parsed.options[0].starts_with("A."));
+        assert!(parsed.options[3].starts_with("D."));
+    }
+
+    #[tokio::test]
+    async fn theme_command_switches_and_persists_theme() {
+        let dir = unique_temp_dir();
+        let config_path = dir.join("config.toml");
+        let mut config = AxiomConfig::default();
+        config.agent.first_run_completed = true;
+        config.save_to_path(&config_path).expect("save config");
+        let mut session = ChatSession::load(&config_path).expect("load session");
+
+        assert_eq!(session.config.ui.theme, "axiom");
+
+        handle_chat_command(&mut session, "/theme blood_red")
+            .await
+            .expect("switch to blood_red");
+        assert_eq!(session.config.ui.theme, "blood_red");
+
+        handle_chat_command(&mut session, "/theme ash")
+            .await
+            .expect("switch to ash");
+        assert_eq!(session.config.ui.theme, "ash");
+
+        handle_chat_command(&mut session, "/theme axiom")
+            .await
+            .expect("switch to axiom");
+        assert_eq!(session.config.ui.theme, "axiom");
+
         let _ = fs::remove_dir_all(dir);
     }
 
