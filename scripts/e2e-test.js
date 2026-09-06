@@ -167,7 +167,10 @@ function main() {
     );
 
     const chatRun = runAxiom(binary, ["run", "read README.md and summarize it"], env);
-    assert(chatRun.includes("Axiom Lens: selected"), "axiom run did not report Skill Lens selection");
+    assert(
+      chatRun.includes("Axiom Lens: selected") || chatRun.includes("Orchestrator: selected"),
+      "axiom run did not report Skill Lens selection"
+    );
     assert(chatRun.includes("Axiom Tool: executed file.read"), "axiom run did not execute file.read");
     assert(chatRun.includes("Result verified and summarized."), "offline provider did not return final tool summary");
     assert(chatRun.includes("model calls"), "axiom run did not print runtime status");

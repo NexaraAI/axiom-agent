@@ -2252,17 +2252,14 @@ pub(crate) async fn run_one_shot(command: RunCommand) -> Result<()> {
 
     let skill_cards = session.select_skill_cards(&command.message, 5)?;
     if skill_cards.is_empty() {
-        println!("{}", ui.orchestrator_notice("selected no skills."));
+        println!("Axiom Lens: selected no skills.");
     } else {
         let selected = skill_cards
             .iter()
             .map(|card| card.id.as_str())
             .collect::<Vec<_>>()
             .join(", ");
-        println!(
-            "{}",
-            ui.orchestrator_notice(&format!("selected {selected}"))
-        );
+        println!("Axiom Lens: selected {selected}");
     }
 
     let mut approval = NonInteractiveApprover;
