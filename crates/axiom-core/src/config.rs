@@ -1023,16 +1023,8 @@ format = "json"
 
     #[test]
     fn config_llm_effort_and_tier_compatibility() {
-        let legacy_config: AxiomConfig = toml::from_str(
+        let legacy_config: LlmConfig = toml::from_str(
             r#"
-[agent]
-name = "Axiom Agent"
-channel = "stable"
-first_run_completed = true
-default_workspace = "~/Axiom"
-auto_update_policy = "notify"
-
-[llm]
 active_provider = "nvidia"
 active_model = "nvidia/nemotron-3.5-lightning-30b-a3b"
 stream = true
@@ -1041,18 +1033,10 @@ tier = "high"
         )
         .expect("parse legacy config with tier");
 
-        assert_eq!(legacy_config.llm.active_effort(), "high");
+        assert_eq!(legacy_config.active_effort(), "high");
 
-        let modern_config: AxiomConfig = toml::from_str(
+        let modern_config: LlmConfig = toml::from_str(
             r#"
-[agent]
-name = "Axiom Agent"
-channel = "stable"
-first_run_completed = true
-default_workspace = "~/Axiom"
-auto_update_policy = "notify"
-
-[llm]
 active_provider = "nvidia"
 active_model = "nvidia/nemotron-3.5-lightning-30b-a3b"
 stream = true
@@ -1061,7 +1045,7 @@ effort = "max"
         )
         .expect("parse modern config with effort");
 
-        assert_eq!(modern_config.llm.active_effort(), "max");
+        assert_eq!(modern_config.active_effort(), "max");
     }
 
     #[test]

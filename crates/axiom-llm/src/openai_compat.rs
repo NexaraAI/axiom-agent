@@ -207,7 +207,7 @@ impl OpenAiCompatibleProvider {
                 && request
                     .provider_options
                     .as_ref()
-                    .map_or(false, |opts| opts.contains_key("reasoning_effort"))
+                    .is_some_and(|opts| opts.contains_key("reasoning_effort"))
             {
                 let mut fallback = request.clone();
                 if let Some(opts) = fallback.provider_options.as_mut() {
@@ -257,7 +257,7 @@ impl OpenAiCompatibleProvider {
                 && request
                     .provider_options
                     .as_ref()
-                    .map_or(false, |opts| opts.contains_key("reasoning_effort"))
+                    .is_some_and(|opts| opts.contains_key("reasoning_effort"))
             {
                 let mut fallback = request.clone();
                 if let Some(opts) = fallback.provider_options.as_mut() {
