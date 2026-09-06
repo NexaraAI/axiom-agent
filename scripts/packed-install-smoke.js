@@ -95,7 +95,11 @@ function runPackedInstallSmoke(options = {}) {
     console.log("Packed npm tarball installed and its global axiom shim executed successfully.");
     return true;
   } finally {
-    fs.rmSync(tempRoot, { recursive: true, force: true });
+    try {
+      fs.rmSync(tempRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+    } catch {
+      // Best-effort cleanup on Windows where OS process locks can briefly linger.
+    }
   }
 }
 

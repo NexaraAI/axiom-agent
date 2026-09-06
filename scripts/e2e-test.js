@@ -233,7 +233,11 @@ function main() {
     runSecuritySelfTest();
     console.log("Axiom E2E tests passed.");
   } finally {
-    fs.rmSync(tempRoot, { recursive: true, force: true });
+    try {
+      fs.rmSync(tempRoot, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+    } catch {
+      // Best-effort cleanup on Windows where OS process locks can briefly linger.
+    }
   }
 }
 
