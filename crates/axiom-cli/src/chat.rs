@@ -2630,7 +2630,10 @@ pub(crate) fn render_interactive_mcq(
     let is_terminal = io::stdin().is_terminal() && io::stdout().is_terminal();
 
     if !is_terminal || options.is_empty() {
-        let default_choice = options.first().cloned().unwrap_or_else(|| question.to_string());
+        let default_choice = options
+            .first()
+            .cloned()
+            .unwrap_or_else(|| question.to_string());
         return Ok(QuestionAnswer {
             selected: default_choice,
             index: Some(1),

@@ -2604,6 +2604,7 @@ mod tests {
                 "git.status",
                 "project.scan",
                 "python.run",
+                "question.ask",
                 "shell.bash.safe",
                 "shell.powershell.safe",
                 "shell.run",
@@ -2617,7 +2618,7 @@ mod tests {
     #[test]
     fn every_builtin_executor_has_complete_schema_policy_and_fixture_metadata() {
         let descriptors = ExecutorRegistry::with_builtin_executors().descriptors();
-        assert_eq!(descriptors.len(), 12);
+        assert_eq!(descriptors.len(), 13);
         for descriptor in descriptors {
             assert!(descriptor.is_complete(), "incomplete: {}", descriptor.id);
             assert!(descriptor.input_schema.is_object());
