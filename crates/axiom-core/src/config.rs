@@ -1326,7 +1326,7 @@ format = "json"
         let mut config = AxiomConfig::default();
         assert_eq!(config.policy.permission_mode(), PermissionMode::Velocity);
         config.policy.mode = "invalid".to_string();
-        assert!(config.validate().is_err());
+        assert!(config.ensure_valid().is_err());
     }
 
     fn unique_temp_dir() -> PathBuf {
