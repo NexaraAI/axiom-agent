@@ -3109,7 +3109,9 @@ async fn handle_chat_command(session: &mut ChatSession, input: &str) -> Result<C
             println!("  - velocity:     Balanced agentic speed; auto-approves workspace edits & safe commands, asks on git/destructive actions (recommended)");
             println!("  - full_machine: Unrestricted access; auto-approves all filesystem, process, network, and git actions without prompting");
             println!("  - strict:       Zero-trust security; requires explicit confirmation for all writes, execution, and external requests");
-            println!("\nUse `/permission <velocity|full_machine|strict>` (alias: `/mode`) to switch.");
+            println!(
+                "\nUse `/permission <velocity|full_machine|strict>` (alias: `/mode`) to switch."
+            );
             Ok(CommandResult::Continue)
         }
         _ if input.starts_with("!permission ")
@@ -3128,7 +3130,11 @@ async fn handle_chat_command(session: &mut ChatSession, input: &str) -> Result<C
             match session.set_permission_mode(target) {
                 Ok(new_mode) => {
                     let desc = new_mode.description();
-                    println!("Switched permission mode to '{}' ({}).", new_mode.as_str(), desc);
+                    println!(
+                        "Switched permission mode to '{}' ({}).",
+                        new_mode.as_str(),
+                        desc
+                    );
                 }
                 Err(error) => println!("{error}"),
             }

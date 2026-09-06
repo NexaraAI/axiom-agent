@@ -195,7 +195,9 @@ impl PermissionMode {
     pub const fn description(self) -> &'static str {
         match self {
             Self::FullMachine => "unrestricted machine access with auto-approved operations",
-            Self::Velocity => "high-speed agentic execution with guardrails for destructive actions",
+            Self::Velocity => {
+                "high-speed agentic execution with guardrails for destructive actions"
+            }
             Self::Strict => "zero-trust isolation requiring approval for mutations",
         }
     }
