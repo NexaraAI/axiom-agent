@@ -16,6 +16,6 @@ min_axiom_version = "0.1.0"
 [llm_card]
 summary = "Write or save text files inside the active workspace."
 when_to_use = ["User asks to write a file", "User asks to save generated content"]
-input_contract = "path, content, overwrite_confirmation"
+input_contract = "path, content"
 output_contract = "written_path, bytes_written"
 token_budget = 220

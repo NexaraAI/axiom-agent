@@ -1048,6 +1048,20 @@ impl CoderSession {
         Ok(())
     }
 
+    fn provider_options(&self) -> Option<std::collections::BTreeMap<String, serde_json::Value>> {
+        let effort = self.config.llm.active_effort();
+        if effort == "none" {
+            None
+        } else {
+            let mut opts = std::collections::BTreeMap::new();
+            opts.insert(
+                "reasoning_effort".to_string(),
+                serde_json::Value::String(effort.to_string()),
+            );
+            Some(opts)
+        }
+    }
+
     async fn llm_chat(&self, messages: Vec<ChatMessage>) -> Result<String> {
         let model = self
             .active_model()
@@ -1085,7 +1099,8 @@ impl CoderSession {
         .with_tools_enabled(false)
         .with_generation_options(Some(0.2), None)
         .with_pricing(self.usage_pricing())
-        .with_streaming(self.config.llm.stream);
+        .with_streaming(self.config.llm.stream)
+        .with_provider_options(self.provider_options());
 
         let (completion, give_up_reason) = match agent.run_turn(user_message).await? {
             TurnResult::Done(completion) => (completion, None),

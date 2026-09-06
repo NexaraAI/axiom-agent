@@ -72,11 +72,11 @@ impl Renderer {
         &self,
         provider: &str,
         model: &str,
-        tier: &str,
+        effort: &str,
         workspace: &str,
         session_id: &str,
     ) -> String {
-        let tier_val = if tier.is_empty() { "medium" } else { tier };
+        let effort_val = if effort.is_empty() { "medium" } else { effort };
         let border = "────────────────────────────────────────────────────────────";
         format!(
             "{}\n  {}  {}\n{}\n  {} {}\n  {} {} {}\n  {} {}\n  {} {}\n{}\n  {}\n  {}\n{}",
@@ -91,13 +91,13 @@ impl Renderer {
             self.bone(provider),
             self.smoke("model:"),
             self.bone(model),
-            self.red(&format!("[tier: {tier_val}]")),
+            self.red(&format!("[effort: {effort_val}]")),
             self.smoke("workspace:"),
             self.bone(workspace),
             self.smoke("session:"),
             self.smoke(session_id),
             self.smoke(&format!("├─{border}")),
-            self.smoke("Commands: /tier · /model · /skills · /clear · /help · /exit"),
+            self.smoke("Commands: /effort · /model · /skills · /clear · /help · /exit (type / for suggestions)"),
             self.smoke("© 2026 DemonZDevelopment"),
             self.smoke(&format!("╰─{border}")),
         )

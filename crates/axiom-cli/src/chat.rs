@@ -39,7 +39,15 @@ use axiom_proof::{
     LensSelectionRecord, PolicyDecisionProof, ProofMode, ProofRecorder, SkillCardProof,
 };
 use axiom_upd::{parse_version, UpdateDirs, UpdatePolicy, UpdateState};
-use rustyline::{error::ReadlineError, Config as ReadlineConfig, DefaultEditor};
+use rustyline::{
+    completion::{Completer, Pair},
+    error::ReadlineError,
+    highlight::Highlighter,
+    hint::{Hint, Hinter},
+    history::FileHistory,
+    validate::{ValidationContext, ValidationResult, Validator},
+    CompletionType, Config as ReadlineConfig, Context, Editor, Helper,
+};
 use serde_json::Value;
 
 use crate::{
@@ -304,23 +312,50 @@ impl ChatSession {
         Ok(cards)
     }
 
-    pub(crate) fn set_tier(&mut self, tier: &str) -> Result<String> {
-        let normalized = tier.trim().to_ascii_lowercase();
-        if !["light", "medium", "high"].contains(&normalized.as_str()) {
+    pub(crate) fn active_effort(&self) -> &str {
+        self.config.llm.active_effort()
+    }
+
+    pub(crate) fn set_effort(&mut self, effort: &str) -> Result<String> {
+        let normalized = effort.trim().to_ascii_lowercase();
+        if !["none", "low", "medium", "high", "max"].contains(&normalized.as_str()) {
             return Err(anyhow!(
-                "invalid tier '{tier}'; supported tiers are: light, medium, high"
+                "invalid reasoning effort '{effort}'; supported efforts are: none, low, medium, high, max"
             ));
         }
+        self.config.llm.effort = normalized.clone();
         self.config.llm.tier = normalized.clone();
-        if let Some(provider) = self.active_provider().map(str::to_string) {
-            if let Some(model) = self.config.llm.model_for_tier(&provider, &normalized) {
-                let model = model.to_string();
-                self.config.llm.active_model = Some(model.clone());
-                self.config.llm.provider_models.insert(provider, model);
-            }
-        }
         self.save_config()?;
         Ok(normalized)
+    }
+
+    pub(crate) fn provider_options(&self) -> Option<std::collections::BTreeMap<String, Value>> {
+        let effort = self.active_effort();
+        if effort == "none" {
+            None
+        } else {
+            let mut opts = std::collections::BTreeMap::new();
+            opts.insert("reasoning_effort".to_string(), Value::String(effort.to_string()));
+            Some(opts)
+        }
+    }
+
+    pub(crate) fn set_tier(&mut self, tier: &str) -> Result<String> {
+        let normalized = tier.trim().to_ascii_lowercase();
+        if ["none", "low", "medium", "high", "max"].contains(&normalized.as_str()) {
+            return self.set_effort(&normalized);
+        }
+        let mapped = match normalized.as_str() {
+            "light" => "low",
+            "medium" => "medium",
+            "high" => "high",
+            _ => {
+                return Err(anyhow!(
+                    "invalid effort/tier '{tier}'; supported values are: none, low, medium, high, max (or legacy: light, medium, high)"
+                ));
+            }
+        };
+        self.set_effort(mapped)
     }
 
     pub(crate) fn set_model(&mut self, model: impl Into<String>) -> Result<String> {
@@ -753,6 +788,7 @@ impl ChatSession {
         .with_todo_list(self.todo.clone())
         .with_cancellation(cancellation)
         .with_side_effect_policy(side_effect_policy)
+        .with_provider_options(self.provider_options())
         .with_transition_observer(&mut checkpoint_writer);
         if let Some(observer) = stream_observer {
             agent = agent.with_stream_observer(observer);
@@ -1371,8 +1407,200 @@ enum PromptRead {
     EndOfInput,
 }
 
+#[derive(Default, Clone)]
+struct AxiomCommandHelper;
+
+struct AxiomHint(String);
+
+impl Hint for AxiomHint {
+    fn display(&self) -> &str {
+        &self.0
+    }
+
+    fn completion(&self) -> Option<&str> {
+        Some(&self.0)
+    }
+}
+
+const COMMAND_HINTS: &[(&str, &str)] = &[
+    ("effort", " [none|low|medium|high|max]"),
+    ("model", " [name]"),
+    ("skills", ""),
+    ("undo", ""),
+    ("clear", ""),
+    ("checkpoints", ""),
+    ("restore", " <checkpoint_id>"),
+    ("provider", " [name]"),
+    ("lens", " [on|off]"),
+    ("proof", " [on|off|status|latest]"),
+    ("multi", ""),
+    ("help", ""),
+    ("exit", ""),
+    ("reasoning", " [none|low|medium|high|max]"),
+    ("tier", " [none|low|medium|high|max]"),
+];
+
+impl Completer for AxiomCommandHelper {
+    type Candidate = Pair;
+
+    fn complete(
+        &self,
+        line: &str,
+        pos: usize,
+        _ctx: &Context<'_>,
+    ) -> rustyline::Result<(usize, Vec<Pair>)> {
+        let current = &line[..pos];
+        if !current.starts_with('/') && !current.starts_with('!') {
+            return Ok((0, Vec::new()));
+        }
+        let prefix = &current[0..1];
+        let rest = &current[1..];
+
+        if let Some(sub) = rest.strip_prefix("effort ") {
+            let start = pos - sub.len();
+            let mut candidates = Vec::new();
+            for eff in &["none", "low", "medium", "high", "max"] {
+                if eff.starts_with(sub) {
+                    candidates.push(Pair {
+                        display: eff.to_string(),
+                        replacement: eff.to_string(),
+                    });
+                }
+            }
+            return Ok((start, candidates));
+        }
+
+        if let Some(sub) = rest.strip_prefix("tier ") {
+            let start = pos - sub.len();
+            let mut candidates = Vec::new();
+            for eff in &["none", "low", "medium", "high", "max", "light"] {
+                if eff.starts_with(sub) {
+                    candidates.push(Pair {
+                        display: eff.to_string(),
+                        replacement: eff.to_string(),
+                    });
+                }
+            }
+            return Ok((start, candidates));
+        }
+
+        if let Some(sub) = rest.strip_prefix("model ") {
+            let start = pos - sub.len();
+            let mut candidates = Vec::new();
+            for opt in &["current", "list", "use "] {
+                if opt.starts_with(sub) {
+                    candidates.push(Pair {
+                        display: opt.to_string(),
+                        replacement: opt.to_string(),
+                    });
+                }
+            }
+            return Ok((start, candidates));
+        }
+
+        if let Some(sub) = rest.strip_prefix("lens ") {
+            let start = pos - sub.len();
+            let mut candidates = Vec::new();
+            for opt in &["on", "off"] {
+                if opt.starts_with(sub) {
+                    candidates.push(Pair {
+                        display: opt.to_string(),
+                        replacement: opt.to_string(),
+                    });
+                }
+            }
+            return Ok((start, candidates));
+        }
+
+        if let Some(sub) = rest.strip_prefix("proof ") {
+            let start = pos - sub.len();
+            let mut candidates = Vec::new();
+            for opt in &["on", "off", "status", "latest"] {
+                if opt.starts_with(sub) {
+                    candidates.push(Pair {
+                        display: opt.to_string(),
+                        replacement: opt.to_string(),
+                    });
+                }
+            }
+            return Ok((start, candidates));
+        }
+
+        let mut candidates = Vec::new();
+        for (cmd, desc) in COMMAND_HINTS {
+            if cmd.starts_with(rest) {
+                candidates.push(Pair {
+                    display: format!("{prefix}{cmd}{desc}"),
+                    replacement: format!("{prefix}{cmd} "),
+                });
+            }
+        }
+
+        Ok((0, candidates))
+    }
+}
+
+impl Hinter for AxiomCommandHelper {
+    type Hint = AxiomHint;
+
+    fn hint(&self, line: &str, pos: usize, _ctx: &Context<'_>) -> Option<Self::Hint> {
+        if pos < line.len() {
+            return None;
+        }
+        if !line.starts_with('/') && !line.starts_with('!') {
+            return None;
+        }
+        let rest = &line[1..];
+        if let Some(sub) = rest.strip_prefix("effort ") {
+            for eff in &["none", "low", "medium", "high", "max"] {
+                if eff.starts_with(sub) && *eff != sub {
+                    return Some(AxiomHint(eff[sub.len()..].to_string()));
+                }
+            }
+            return None;
+        }
+        if let Some(sub) = rest.strip_prefix("tier ") {
+            for eff in &["none", "low", "medium", "high", "max"] {
+                if eff.starts_with(sub) && *eff != sub {
+                    return Some(AxiomHint(eff[sub.len()..].to_string()));
+                }
+            }
+            return None;
+        }
+        if let Some(sub) = rest.strip_prefix("lens ") {
+            for opt in &["on", "off"] {
+                if opt.starts_with(sub) && *opt != sub {
+                    return Some(AxiomHint(opt[sub.len()..].to_string()));
+                }
+            }
+            return None;
+        }
+        for (cmd, desc) in COMMAND_HINTS {
+            if cmd.starts_with(rest) {
+                let suffix = &cmd[rest.len()..];
+                return Some(AxiomHint(format!("{suffix}{desc}")));
+            }
+        }
+        None
+    }
+}
+
+impl Highlighter for AxiomCommandHelper {
+    fn highlight_hint<'h>(&self, hint: &'h str) -> std::borrow::Cow<'h, str> {
+        std::borrow::Cow::Owned(format!("\x1b[90m{hint}\x1b[0m"))
+    }
+}
+
+impl Validator for AxiomCommandHelper {
+    fn validate(&self, _ctx: &mut ValidationContext<'_>) -> rustyline::Result<ValidationResult> {
+        Ok(ValidationResult::Valid(None))
+    }
+}
+
+impl Helper for AxiomCommandHelper {}
+
 struct TerminalInput {
-    editor: Option<DefaultEditor>,
+    editor: Option<Editor<AxiomCommandHelper, FileHistory>>,
     history_path: PathBuf,
 }
 
@@ -1413,6 +1641,25 @@ impl TerminalStreamRenderer {
 
 impl StreamObserver for TerminalStreamRenderer {
     fn on_stream_update(&mut self, update: &ChatStreamUpdate) {
+        if update.tool_call_active {
+            if self.thinking_open {
+                println!();
+                self.thinking_open = false;
+            }
+            let tool_name = update.tool_name.as_deref().unwrap_or("tool");
+            let bytes = update.tool_argument_bytes;
+            let msg = if bytes > 0 {
+                format!("Composing arguments for {tool_name} ({bytes} bytes)...")
+            } else {
+                format!("Preparing {tool_name}...")
+            };
+            if let Some(spinner) = self.spinner.as_ref() {
+                spinner.set_message(msg);
+            } else {
+                self.spinner = Some(Spinner::start(msg, self.ui.primary_color()));
+            }
+        }
+
         if !update.reasoning_delta.is_empty() {
             if let Some(mut spinner) = self.spinner.take() {
                 spinner.stop();
@@ -1461,8 +1708,10 @@ impl TerminalInput {
                 .history_ignore_space(true)
                 .auto_add_history(false)
                 .bracketed_paste(true)
+                .completion_type(CompletionType::List)
                 .build();
-            let mut editor = DefaultEditor::with_config(config)?;
+            let mut editor = Editor::<AxiomCommandHelper, FileHistory>::with_config(config)?;
+            editor.set_helper(Some(AxiomCommandHelper));
             if history_path.exists() && sanitize_terminal_history_file(&history_path) {
                 let _ = editor.load_history(&history_path);
             }
@@ -1553,7 +1802,7 @@ async fn run_terminal_session(mut session: ChatSession) -> Result<()> {
         ui.dashboard_banner(
             session.active_provider().unwrap_or("not configured"),
             session.active_model().unwrap_or("not configured"),
-            &session.config.llm.tier,
+            session.active_effort(),
             &session.workspace_path().display().to_string(),
             session.session_id(),
         )
@@ -2394,9 +2643,57 @@ async fn handle_chat_command(session: &mut ChatSession, input: &str) -> Result<C
     let input = normalized.as_str();
 
     match input {
+        "!" => {
+            print_command_suggestions();
+            Ok(CommandResult::Continue)
+        }
         "!exit" => Ok(CommandResult::Exit),
         "!help" => {
             print_help();
+            Ok(CommandResult::Continue)
+        }
+        "!undo" => {
+            let checkpoints = list_checkpoints(session.agent_checkpoints_dir())?;
+            if let Some(latest) = checkpoints.last() {
+                if confirm(
+                    &format!(
+                        "Undo latest changes? Restore checkpoint `{}` ({} file(s))?",
+                        latest.id,
+                        latest.files.len()
+                    ),
+                    false,
+                )? {
+                    latest.restore(session.workspace_path())?;
+                    println!("Restored checkpoint {}.", latest.id);
+                } else {
+                    println!("Undo cancelled.");
+                }
+            } else {
+                println!("No workspace checkpoints available to undo.");
+            }
+            Ok(CommandResult::Continue)
+        }
+        "!effort" | "!reasoning" => {
+            let active_effort = session.active_effort();
+            println!("Active Reasoning Effort: {active_effort}");
+            println!("Available efforts: none, low, medium, high, max");
+            println!("Use `/effort <none|low|medium|high|max>` to switch.");
+            Ok(CommandResult::Continue)
+        }
+        _ if input.starts_with("!effort ") || input.starts_with("!reasoning ") => {
+            let target = if let Some(t) = input.strip_prefix("!effort ") {
+                t.trim()
+            } else if let Some(t) = input.strip_prefix("!reasoning ") {
+                t.trim()
+            } else {
+                ""
+            };
+            match session.set_effort(target) {
+                Ok(new_effort) => {
+                    println!("Switched reasoning effort to '{new_effort}'.");
+                }
+                Err(error) => println!("{error}"),
+            }
             Ok(CommandResult::Continue)
         }
         "!multi" => Ok(CommandResult::Multiline),
@@ -2422,21 +2719,10 @@ async fn handle_chat_command(session: &mut ChatSession, input: &str) -> Result<C
             Ok(CommandResult::Continue)
         }
         "!tier" => {
-            let active_tier = &session.config.llm.tier;
-            let provider = session.active_provider().unwrap_or("unknown");
-            println!("Active Tier: {active_tier}");
-            if let Some(tiers) = session.config.llm.tier_models.get(provider) {
-                println!("Configured models for provider '{provider}':");
-                for t in &["light", "medium", "high"] {
-                    let marker = if *t == active_tier { "*" } else { " " };
-                    let m = tiers
-                        .get(*t)
-                        .map(String::as_str)
-                        .unwrap_or("not configured");
-                    println!("  {marker} {t:7} -> {m}");
-                }
-            }
-            println!("Use `!tier <light|medium|high>` or `/tier <light|medium|high>` to switch.");
+            let active_effort = session.active_effort();
+            println!("Active Reasoning Effort: {active_effort}");
+            println!("Available efforts: none, low, medium, high, max (legacy tiers: light, medium, high)");
+            println!("Use `/effort <none|low|medium|high|max>` or `/tier <light|medium|high>` to switch.");
             Ok(CommandResult::Continue)
         }
         _ if input.starts_with("!tier ") || input.starts_with("!model tier ") => {
@@ -2450,7 +2736,7 @@ async fn handle_chat_command(session: &mut ChatSession, input: &str) -> Result<C
             match session.set_tier(target) {
                 Ok(new_tier) => {
                     println!(
-                        "Switched to tier '{new_tier}' (model: {}).",
+                        "Switched reasoning effort to '{new_tier}' (model: {}).",
                         session.active_model().unwrap_or("not configured")
                     );
                 }
@@ -2458,11 +2744,12 @@ async fn handle_chat_command(session: &mut ChatSession, input: &str) -> Result<C
             }
             Ok(CommandResult::Continue)
         }
-        "!model current" => {
+        "!model" | "!model current" => {
             println!(
                 "Current model: {}",
                 session.active_model().unwrap_or("not configured")
             );
+            println!("Use `/model <name>` to switch, or `/model list` to see available models.");
             Ok(CommandResult::Continue)
         }
         _ if input == "!model list" || input.starts_with("!model list ") => {
@@ -2527,7 +2814,7 @@ async fn handle_chat_command(session: &mut ChatSession, input: &str) -> Result<C
                 ui.dashboard_banner(
                     session.active_provider().unwrap_or("not configured"),
                     session.active_model().unwrap_or("not configured"),
-                    &session.config.llm.tier,
+                    session.active_effort(),
                     &session.workspace_path().display().to_string(),
                     session.session_id(),
                 )
@@ -2616,8 +2903,17 @@ async fn handle_chat_command(session: &mut ChatSession, input: &str) -> Result<C
             }
             Ok(CommandResult::Continue)
         }
-        _ if input.starts_with("!model use ") => {
-            let model = input.trim_start_matches("!model use ").trim();
+        _ if input.starts_with("!model use ")
+            || (input.starts_with("!model ")
+                && !input.starts_with("!model list")
+                && !input.starts_with("!model current")
+                && !input.starts_with("!model tier")) =>
+        {
+            let model = if let Some(m) = input.strip_prefix("!model use ") {
+                m.trim()
+            } else {
+                input.trim_start_matches("!model ").trim()
+            };
             match session.set_model(model) {
                 Ok(model) => {
                     session.persist_session()?;
@@ -2673,36 +2969,48 @@ async fn handle_chat_command(session: &mut ChatSession, input: &str) -> Result<C
             Ok(CommandResult::Continue)
         }
         _ => {
-            println!("Unknown command. Type !help for commands.");
+            println!("Unknown command. Type /help for commands, or / to view suggestions.");
             Ok(CommandResult::Continue)
         }
     }
 }
 
+fn print_command_suggestions() {
+    println!("╭─── Suggested Commands ───────────────────────────────────────────");
+    println!("│  /effort [none|low|medium|high|max]  Configure reasoning effort");
+    println!("│  /model [name]                       Switch or view active LLM model");
+    println!("│  /undo                               Restore latest workspace checkpoint");
+    println!("│  /skills                             List active and installed skills");
+    println!("│  /clear                              Clear session message history");
+    println!("│  /checkpoints                        List workspace recovery snapshots");
+    println!("│  /restore <id>                       Restore a recovery snapshot");
+    println!("│  /provider [name]                    View or switch inference provider");
+    println!("│  /lens [on|off]                      Toggle dynamic skill routing");
+    println!("│  /proof [on|off|status|latest]       Audit and execution provenance");
+    println!("│  /multi                              Enter multiline input mode");
+    println!("│  /help                               Show detailed command help");
+    println!("│  /exit                               Exit Axiom session");
+    println!("╰──────────────────────────────────────────────────────────────────");
+}
+
 fn print_help() {
-    println!("Commands (prefix with either '!' or '/'):");
-    println!("!help / /help");
-    println!("!exit / /exit");
-    println!("!multi  Enter a multiline prompt; finish with !send or discard with !cancel");
-    println!("!show [OUTPUT_ID]  List or display durable tool output");
-    println!("!checkpoints  List recovery snapshots created before agent writes");
-    println!("!restore CHECKPOINT_ID  Restore an agent recovery snapshot");
-    println!("!model current");
-    println!("!model list [FILTER]  Fetch a bounded catalog view; no inference request");
-    println!("!model use <model>");
-    println!("!tier [light|medium|high]  View or switch active model tier");
-    println!("!provider current");
-    println!("!provider list");
-    println!("!provider use <name>");
-    println!("!clear");
-    println!("!proof on");
-    println!("!proof off");
-    println!("!proof status");
-    println!("!proof latest");
-    println!("!skills");
-    println!("!skills selected <message>");
-    println!("!lens on");
-    println!("!lens off");
+    println!("Commands (prefix with either '/' or '!'):");
+    println!("  /effort [none|low|medium|high|max]  Configure reasoning effort (alias: /tier)");
+    println!("  /model [name]                       Switch or view active LLM model");
+    println!("  /model list [FILTER]                Fetch catalog view of available models");
+    println!("  /undo                               Restore latest workspace checkpoint");
+    println!("  /checkpoints                        List recovery snapshots");
+    println!("  /restore CHECKPOINT_ID              Restore an agent recovery snapshot");
+    println!("  /skills                             List active and installed skills");
+    println!("  /skills selected <message>          Simulate skill routing for a message");
+    println!("  /provider current | list | use <p>  Manage LLM providers");
+    println!("  /clear                              Clear session history");
+    println!("  /lens on | off                      Toggle dynamic skill routing");
+    println!("  /proof on | off | status | latest   Audit and execution provenance");
+    println!("  /multi                              Enter multiline prompt mode (!send to run)");
+    println!("  /show [OUTPUT_ID]                   Display durable tool output");
+    println!("  /help                               Show this help message");
+    println!("  /exit                               Exit Axiom session");
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

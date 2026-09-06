@@ -270,7 +270,8 @@ impl SkillExecutor for FileWriteExecutor {
                 "additionalProperties": false,
                 "properties": {
                     "path": {"type": "string", "minLength": 1},
-                    "content": {"type": "string"}
+                    "content": {"type": "string"},
+                    "overwrite_confirmation": {"type": "boolean"}
                 }
             }),
             output_schema: json!({

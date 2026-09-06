@@ -200,6 +200,24 @@ impl OpenAiCompatibleProvider {
         .await?;
 
         if !status.is_success() {
+            let body_str = String::from_utf8_lossy(&body);
+            if status.as_u16() == 400
+                && (body_str.contains("reasoning_effort")
+                    || body_str.contains("unrecognized field `reasoning_effort`"))
+                && request
+                    .provider_options
+                    .as_ref()
+                    .map_or(false, |opts| opts.contains_key("reasoning_effort"))
+            {
+                let mut fallback = request.clone();
+                if let Some(opts) = fallback.provider_options.as_mut() {
+                    opts.remove("reasoning_effort");
+                    if opts.is_empty() {
+                        fallback.provider_options = None;
+                    }
+                }
+                return Box::pin(self.chat_once(&fallback)).await;
+            }
             return Err(LlmError::HttpStatus {
                 provider: self.name.clone(),
                 status: status.as_u16(),
@@ -232,6 +250,24 @@ impl OpenAiCompatibleProvider {
                 MAX_STREAM_WIRE_BYTES,
             )
             .await?;
+            let body_str = String::from_utf8_lossy(&body);
+            if status.as_u16() == 400
+                && (body_str.contains("reasoning_effort")
+                    || body_str.contains("unrecognized field `reasoning_effort`"))
+                && request
+                    .provider_options
+                    .as_ref()
+                    .map_or(false, |opts| opts.contains_key("reasoning_effort"))
+            {
+                let mut fallback = request.clone();
+                if let Some(opts) = fallback.provider_options.as_mut() {
+                    opts.remove("reasoning_effort");
+                    if opts.is_empty() {
+                        fallback.provider_options = None;
+                    }
+                }
+                return Box::pin(self.stream_once(&fallback)).await;
+            }
             return Err(LlmError::HttpStatus {
                 provider: self.name.clone(),
                 status: status.as_u16(),

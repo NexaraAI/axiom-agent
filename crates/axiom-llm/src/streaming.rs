@@ -44,6 +44,9 @@ pub struct ChatStreamUpdate {
     pub reasoning_delta: String,
     pub content_chars_received: usize,
     pub tool_call_deltas_received: usize,
+    pub tool_call_active: bool,
+    pub tool_name: Option<String>,
+    pub tool_argument_bytes: usize,
     pub done: bool,
 }
 
@@ -247,6 +250,7 @@ impl ChatStream {
             let mut reasoning_delta = chunk.reasoning_delta.clone();
             reasoning_delta.push_str(&projected.reasoning);
 
+            let current_tool_name = tool_calls.values().last().map(|p| p.name.clone());
             if !projected.visible.is_empty() || !reasoning_delta.is_empty() || had_tool_call_deltas
             {
                 observer(ChatStreamUpdate {
@@ -254,6 +258,9 @@ impl ChatStream {
                     reasoning_delta,
                     content_chars_received,
                     tool_call_deltas_received,
+                    tool_call_active: had_tool_call_deltas || !tool_calls.is_empty(),
+                    tool_name: current_tool_name.clone(),
+                    tool_argument_bytes: total_argument_bytes,
                     done: false,
                 });
             }
@@ -268,6 +275,7 @@ impl ChatStream {
             }
         }
         let final_projected = projector.finish();
+        let last_tool_name = tool_calls.values().last().map(|p| p.name.clone());
         if !final_projected.visible.is_empty() || !final_projected.reasoning.is_empty() {
             total_reasoning.push_str(&final_projected.reasoning);
             observer(ChatStreamUpdate {
@@ -275,6 +283,9 @@ impl ChatStream {
                 reasoning_delta: final_projected.reasoning,
                 content_chars_received,
                 tool_call_deltas_received,
+                tool_call_active: !tool_calls.is_empty(),
+                tool_name: last_tool_name.clone(),
+                tool_argument_bytes: total_argument_bytes,
                 done: false,
             });
         }
@@ -283,6 +294,9 @@ impl ChatStream {
             reasoning_delta: String::new(),
             content_chars_received,
             tool_call_deltas_received,
+            tool_call_active: false,
+            tool_name: None,
+            tool_argument_bytes: total_argument_bytes,
             done: true,
         });
 

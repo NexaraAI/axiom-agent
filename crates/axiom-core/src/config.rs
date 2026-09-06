@@ -79,6 +79,8 @@ pub struct LlmConfig {
     #[serde(default)]
     pub provider_models: BTreeMap<String, String>,
     pub stream: bool,
+    #[serde(default = "default_effort", alias = "tier")]
+    pub effort: String,
     #[serde(default = "default_tier")]
     pub tier: String,
     #[serde(default = "default_tier_models")]
@@ -86,6 +88,16 @@ pub struct LlmConfig {
 }
 
 impl LlmConfig {
+    pub fn active_effort(&self) -> &str {
+        if !self.effort.is_empty() {
+            &self.effort
+        } else if !self.tier.is_empty() {
+            &self.tier
+        } else {
+            "medium"
+        }
+    }
+
     pub fn model_for_tier(&self, provider: &str, tier: &str) -> Option<&str> {
         self.tier_models
             .get(provider)
@@ -162,7 +174,7 @@ pub struct UiConfig {
 pub struct SideEffectPolicyConfig {
     #[serde(default = "default_policy_filesystem_read")]
     pub filesystem_read: String,
-    #[serde(default = "default_policy_ask")]
+    #[serde(default = "default_policy_filesystem_read")]
     pub filesystem_write: String,
     #[serde(default = "default_policy_ask")]
     pub network: String,
@@ -199,7 +211,7 @@ impl Default for SideEffectPolicyConfig {
     fn default() -> Self {
         Self {
             filesystem_read: default_policy_filesystem_read(),
-            filesystem_write: default_policy_ask(),
+            filesystem_write: default_policy_filesystem_read(),
             network: default_policy_ask(),
             process: default_policy_ask(),
             git: default_policy_ask(),
@@ -348,6 +360,7 @@ impl Default for AxiomConfig {
                     ("mock".to_string(), "mock-model".to_string()),
                 ]),
                 stream: true,
+                effort: default_effort(),
                 tier: default_tier(),
                 tier_models: default_tier_models(),
             },
@@ -475,6 +488,10 @@ fn default_update_verify_checksums() -> bool {
     true
 }
 
+fn default_effort() -> String {
+    "medium".to_string()
+}
+
 fn default_tier() -> String {
     "medium".to_string()
 }
@@ -492,7 +509,10 @@ fn default_tier_models() -> BTreeMap<String, BTreeMap<String, String>> {
                     "medium".to_string(),
                     "nvidia/nemotron-3.5-lightning-30b-a3b".to_string(),
                 ),
-                ("high".to_string(), "deepseek-ai/deepseek-r1".to_string()),
+                (
+                    "high".to_string(),
+                    "nvidia/nemotron-4-340b-instruct".to_string(),
+                ),
             ]),
         ),
         (
@@ -502,7 +522,7 @@ fn default_tier_models() -> BTreeMap<String, BTreeMap<String, String>> {
                 ("medium".to_string(), "llama-3.3-70b-versatile".to_string()),
                 (
                     "high".to_string(),
-                    "deepseek-r1-distill-llama-70b".to_string(),
+                    "llama-3.3-70b-versatile".to_string(),
                 ),
             ]),
         ),
@@ -1011,6 +1031,49 @@ format = "json"
         assert!(config.network.web_fetch_allowed_hosts.is_empty());
         assert!(!config.network.web_fetch_use_system_proxy);
         assert_eq!(config.config_version, 0);
+    }
+
+    #[test]
+    fn config_llm_effort_and_tier_compatibility() {
+        let legacy_config: AxiomConfig = toml::from_str(
+            r#"
+[agent]
+name = "Axiom Agent"
+channel = "stable"
+first_run_completed = true
+default_workspace = "~/Axiom"
+auto_update_policy = "notify"
+
+[llm]
+active_provider = "nvidia"
+active_model = "nvidia/nemotron-3.5-lightning-30b-a3b"
+stream = true
+tier = "high"
+"#,
+        )
+        .expect("parse legacy config with tier");
+
+        assert_eq!(legacy_config.llm.active_effort(), "high");
+
+        let modern_config: AxiomConfig = toml::from_str(
+            r#"
+[agent]
+name = "Axiom Agent"
+channel = "stable"
+first_run_completed = true
+default_workspace = "~/Axiom"
+auto_update_policy = "notify"
+
+[llm]
+active_provider = "nvidia"
+active_model = "nvidia/nemotron-3.5-lightning-30b-a3b"
+stream = true
+effort = "max"
+"#,
+        )
+        .expect("parse modern config with effort");
+
+        assert_eq!(modern_config.llm.active_effort(), "max");
     }
 
     #[test]

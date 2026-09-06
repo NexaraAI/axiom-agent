@@ -181,6 +181,27 @@ pub fn load_installed_skills(skills_dir: impl AsRef<Path>) -> Result<Vec<Install
         }
     }
 
+    for core_id in [
+        "file.read",
+        "file.write",
+        "project.scan",
+        "web.fetch",
+        "shell.powershell.safe",
+        "shell.bash.safe",
+        "shell.zsh.safe",
+        "shell.run",
+        "python.run",
+        "git.status",
+        "git.diff",
+        "skill.create",
+    ] {
+        if !skills.iter().any(|s| s.manifest.id == core_id) {
+            if let Some(builtin) = crate::builtin_installed_skill(core_id) {
+                skills.push(builtin);
+            }
+        }
+    }
+
     Ok(skills)
 }
 
