@@ -4,6 +4,40 @@ All notable changes to Axiom are documented here. Versions follow semantic
 versioning. Stable releases document user-visible changes, configuration or
 proof migrations, security fixes, and upgrade actions.
 
+## 1.0.7
+
+This release introduces OpenCode Zen and GMI Cloud provider presets, an interactive thinking/reasoning mode toggle with automated 400 parameter fallback, instant turn cancellation with cross-platform child process termination guards, live syntax-highlighted code creation animation, an autonomous auto-testing engine, and runtime provider management with live model discovery.
+
+Install it:
+
+```bash
+npm install -g axiom-agent@1.0.7
+```
+
+### New Features & Improvements
+
+- **OpenCode Zen & GMI Cloud Provider Integration**:
+  - Added OpenCode Zen preset (`https://opencode.ai/zen/v1`), aliases (`zen`, `opencode-zen`), credential resolution (`OPENCODE_API_KEY`, `OPENCODE_ZEN_API_KEY`, `ZEN_API_KEY`), and default models (`claude-3-7-sonnet`, `deepseek-v4-flash-free`, `big-pickle`).
+  - Added GMI Cloud preset (`https://api.gmi-serving.com/v1`), aliases (`gmi`, `gmi-cloud`), credential resolution (`GMI_CLOUD_API_KEY`, `GMI_API_KEY`), and default models (`deepseek-ai/DeepSeek-V4-Pro`, `meta-llama/Llama-3.3-70B-Instruct`).
+- **Thinking / Reasoning Mode Toggle (`/thinking [on|off|auto]`)**:
+  - Added dynamic thinking toggle across OpenAI-compatible and Anthropic endpoints.
+  - Interactive selection modal in TTY or direct arguments (`/thinking on`, `/thinking off`, `/thinking auto`, `/thinking status`).
+  - Added `/thinking` commands in Telegram and Discord gateway bots.
+  - Built-in 400 rejection fallback automatically retries without `thinking` or `reasoning_effort` if the endpoint does not support reasoning parameters.
+- **Instant Turn Cancellation & Process Termination (`Esc` & `Ctrl+C`)**:
+  - Pressing `Esc` (ASCII 27) or `Ctrl+C` immediately aborts active generation turns via cross-platform non-blocking console input polling (`_kbhit` / `_getch` on Windows, `libc::poll` on Unix).
+  - Implemented `ChildProcessGuard` with RAII `Drop` termination (`child.kill()` and `child.wait()`) preventing orphaned or runaway processes.
+- **Live Animated File Creation & Syntax Highlighting**:
+  - Replaced silent background writes with real-time typewriter line-by-line animated terminal rendering during `file.write`.
+  - Colorized syntax highlighting for HTML, CSS, JavaScript, TypeScript, Rust, Python, JSON, and Markdown with line numbering and completion stats.
+- **Autonomous Auto-Testing Engine (`test.run` & `/test`)**:
+  - Built-in `test.run` skill with auto-detection for Cargo (`cargo test`), NPM (`npm test`), Python (`pytest`, `unittest`, or syntax check), and HTML/Web structural integrity.
+  - System prompt mandates auto-testing after file writes and modifications.
+  - User slash command `/test [command]` allows manual test triggering in chat.
+- **Runtime Provider Management & Live Model Discovery (`/provider add`)**:
+  - Added `/provider add` in interactive chat and `axiom provider add` in CLI.
+  - Live model catalog auto-fetching (`GET <base_url>/models`) for both standard presets and custom OpenAI-compatible endpoints with search and graceful manual fallback.
+
 ## 1.0.6
 
 This release brings a complete TUI interface overhaul, interactive Select and MCQ widgets, OpenCode-aligned model variants, multi-agent coder research & verification loop, built-in auto-update notifications, dynamic reasoning effort, anti-freeze streaming, and full gateway parity.

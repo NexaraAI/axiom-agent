@@ -14,7 +14,7 @@ Proof Mode records what happened during each session: what you asked, which skil
 
 ## Current Status
 
-This repository contains Axiom `1.0.6`, a stable release with executive TUI redesign, interactive MCQ question prompts, reasoning effort tiers, and enhanced gateway runtime:
+This repository contains Axiom `1.0.7`, a stable release with OpenCode Zen & GMI Cloud providers, thinking mode toggle, process termination guards, live code animation, auto-testing engine, and runtime provider management:
 
 ```bash
 npm install -g axiom-agent
