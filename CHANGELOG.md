@@ -6,7 +6,7 @@ proof migrations, security fixes, and upgrade actions.
 
 ## 1.0.6
 
-This release brings a complete TUI redesign, interactive Multiple-Choice Questions (MCQ form) for agent clarification, dynamic reasoning effort (`/effort` & `/tier`), anti-freeze tool argument streaming, and Telegram/Discord gateway enhancements.
+This release brings a complete TUI interface overhaul, interactive Select and MCQ widgets, OpenCode-aligned model variants, multi-agent coder research & verification loop, built-in auto-update notifications, dynamic reasoning effort, anti-freeze streaming, and full gateway parity.
 
 Install it:
 
@@ -16,19 +16,25 @@ npm install -g axiom-agent@1.0.6
 
 ### New Features & Improvements
 
-- **Interactive Multiple-Choice Questions (MCQ Form)**:
-  - Added built-in `question.ask` skill enabling models to present structured clarification questions with 2-5 distinct options and write-in fallback.
-  - Sleek interactive terminal MCQ card with numeric option selection (`[1-N]`) and custom reply support.
-  - Updated system identity principles: models proactively use `question.ask` when encountering ambiguity, architectural trade-offs, or library choices instead of guessing broadly.
-- **TUI Redesign & Modern Developer Aesthetics**:
+- **Signature Axiom Obsidian TUI & Interactive Widgets**:
+  - Implemented `SelectWidget` with dark obsidian aesthetic, ember accents, arrow-key navigation, type-to-filter search, and hotkeys.
+  - Interactive Multiple-Choice Questions (MCQ form) with built-in `question.ask` skill for structured agent clarification with write-in fallbacks.
   - Redesigned banner with slate borders, high-contrast labels, and visual badges for provider (`⚡`), model (`🧠`), reasoning effort (`🔥`), workspace (`📁`), and session (`🔑`).
   - Polished terminal notices: cyan-accented `◈ Lens:`, emerald `✔` tool completions, and crisp ash thinking deltas.
-- **Dynamic Reasoning Effort (`/effort` & `/tier`)**:
-  - Replaced legacy tier strings with dynamic reasoning effort: `none`, `low`, `medium`, `high`, `max`.
-  - Automatic HTTP 400 fallback gracefully retries without reasoning effort if an upstream provider or model rejects it.
+- **OpenCode Model Variants Architecture**:
+  - Replaced legacy tier models with OpenCode-aligned model variant configuration supporting reasoning efforts (`none`, `low`, `medium`, `high`, `max`).
+  - Provider configurations now support custom variants, system prompts, and automatic fallback when upstream APIs reject reasoning parameters.
+- **Autonomous Multi-Agent Coder Loop**:
+  - Integrated research-first coding workflow that gathers current documentation and dependencies prior to implementation.
+  - Secondary verification subagent reviews and checks generated code before final feedback is reported to the user.
+- **Inbuilt Auto-Update Notifications**:
+  - Startup check compares running version against npm registry and GitHub releases.
+  - Displays a clean notification banner with direct instructions to run `axiom update` or `npm install -g axiom-agent`.
+- **Command Prefix Normalization**:
+  - Automatically normalizes `!` prefix commands (e.g., `!model`, `!effort`, `!help`) to slash commands in interactive chat.
 - **Anti-Freeze Tool Streaming**:
   - Real-time terminal spinner displays live composed tool arguments (`Composing arguments for file.write (1.2 KB)...`), preventing apparent terminal freezes during tool call emission.
-- **Telegram & Discord Gateway Maintenance**:
+- **Telegram & Discord Gateway Parity**:
   - Added `/effort` and `/tier` slash commands in both Telegram and Discord gateways.
   - Gateway `/status` reports active provider, model, and reasoning effort.
   - Bot approver smoothly integrates with `question.ask` and all synthetic builtins.
