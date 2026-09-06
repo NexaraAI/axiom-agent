@@ -92,18 +92,75 @@ pub(crate) async fn respond_with_session(session: &mut ChatSession, text: &str) 
     match parse_bot_command(text) {
         BotCommand::Start | BotCommand::Help => HELP_TEXT.to_string(),
         BotCommand::Status => format!(
-            "provider: {}\nmodel: {}\neffort: {}",
+            "provider: {}\nmodel: {}\nvariant: {}\npermission: {}\ntheme: {}",
             session.active_provider().unwrap_or("not configured"),
             session.active_model().unwrap_or("not configured"),
-            session.active_effort(),
+            session.active_variant(),
+            session.active_permission_mode(),
+            session.config.ui.theme,
         ),
-        BotCommand::Effort { level } => match level {
-            Some(effort) => match session.set_effort(&effort) {
-                Ok(eff) => format!("Reasoning effort switched to {eff}."),
-                Err(error) => format!("Effort switch failed: {error:#}"),
+        BotCommand::Variant { name } => match name {
+            Some(variant) => match session.set_variant(&variant) {
+                Ok(v) => format!("Variant switched to {v}."),
+                Err(error) => format!("Variant switch failed: {error:#}"),
             },
-            None => format!("Current reasoning effort: {}", session.active_effort()),
+            None => format!(
+                "Current variant: {}\nAvailable: Default, low, medium, high",
+                session.active_variant()
+            ),
         },
+        BotCommand::Permission { mode } => match mode {
+            Some(m) => match session.set_permission_mode(&m) {
+                Ok(new_mode) => format!(
+                    "Permission mode switched to '{}' ({}).",
+                    new_mode.as_str(),
+                    new_mode.description()
+                ),
+                Err(error) => format!("Permission switch failed: {error:#}"),
+            },
+            None => format!(
+                "Current permission mode: {} ({})\nAvailable: velocity, full_machine, strict",
+                session.permission_mode().as_str(),
+                session.permission_mode().description()
+            ),
+        },
+        BotCommand::Theme { name } => match name {
+            Some(t) => {
+                let normalized = t.to_ascii_lowercase();
+                if ["axiom", "blood_red", "ash", "high_contrast"].contains(&normalized.as_str()) {
+                    session.config.ui.theme = normalized.clone();
+                    let _ = session.persist_session();
+                    format!("Theme switched to '{normalized}'.")
+                } else {
+                    format!("Invalid theme '{t}'. Available: axiom, blood_red, ash, high_contrast")
+                }
+            }
+            None => format!(
+                "Current theme: {}\nAvailable: axiom, blood_red, ash, high_contrast",
+                session.config.ui.theme
+            ),
+        },
+        BotCommand::Update => {
+            let client = axiom_upd::GitHubReleaseClient::new(&session.config.update.release_repo)
+                .with_timeout(3);
+            if let Ok(releases) = client.fetch_releases().await {
+                if let Some(latest) = releases.first() {
+                    let current = env!("CARGO_PKG_VERSION");
+                    let tag = latest.tag_name.trim_start_matches('v');
+                    if let (Ok(curr_ver), Ok(latest_ver)) = (
+                        semver::Version::parse(current),
+                        semver::Version::parse(tag),
+                    ) {
+                        if latest_ver > curr_ver {
+                            return format!(
+                                "Update available: v{curr_ver} -> v{tag}\nRun `axiom update` or `npm i -g @nexara/axiom` to update."
+                            );
+                        }
+                    }
+                }
+            }
+            format!("Axiom is up to date (v{}).", env!("CARGO_PKG_VERSION"))
+        }
         BotCommand::Models { filter } => list_models_reply(session, filter.as_deref()).await,
         BotCommand::Model { id } => switch_model_reply(session, &id).await,
         BotCommand::Provider { name } => match session.set_provider(name.clone()) {
@@ -255,7 +312,10 @@ pub(crate) enum BotCommand {
     Start,
     Help,
     Status,
-    Effort { level: Option<String> },
+    Variant { name: Option<String> },
+    Permission { mode: Option<String> },
+    Theme { name: Option<String> },
+    Update,
     Models { filter: Option<String> },
     Model { id: String },
     Provider { name: String },
@@ -279,9 +339,16 @@ pub(crate) fn parse_bot_command(text: &str) -> BotCommand {
         "start" => BotCommand::Start,
         "help" => BotCommand::Help,
         "status" => BotCommand::Status,
-        "effort" | "tier" => BotCommand::Effort {
-            level: (!args.is_empty()).then(|| args.to_string()),
+        "variant" | "variants" | "effort" | "tier" => BotCommand::Variant {
+            name: (!args.is_empty()).then(|| args.to_string()),
         },
+        "permission" | "permissions" | "mode" => BotCommand::Permission {
+            mode: (!args.is_empty()).then(|| args.to_string()),
+        },
+        "theme" | "themes" => BotCommand::Theme {
+            name: (!args.is_empty()).then(|| args.to_string()),
+        },
+        "update" => BotCommand::Update,
         "models" => BotCommand::Models {
             filter: (!args.is_empty()).then(|| args.to_string()),
         },
@@ -333,8 +400,11 @@ pub(crate) fn split_message_text(text: &str, limit: usize) -> Vec<String> {
 
 const HELP_TEXT: &str = "Axiom gateway bot.\n\
     Just write normally to chat.\n\
-    /status — active provider, model, and effort\n\
-    /effort [none|low|medium|high|max] — reasoning effort (also /tier)\n\
+    /status — active provider, model, variant, and permission\n\
+    /variant [Default|low|medium|high] — select model variant\n\
+    /permission [velocity|full_machine|strict] — switch permission mode\n\
+    /theme [axiom|blood_red|ash|high_contrast] — switch visual color theme\n\
+    /update — check for updates\n\
     /models [filter] — live catalog search\n\
     /model <exact-id> — switch model\n\
     /provider <name> — switch provider\n\
@@ -541,21 +611,52 @@ mod tests {
             }
         );
         assert_eq!(
-            parse_bot_command("/effort high"),
-            BotCommand::Effort {
-                level: Some("high".to_string())
+            parse_bot_command("/variant high"),
+            BotCommand::Variant {
+                name: Some("high".to_string())
+            }
+        );
+        assert_eq!(
+            parse_bot_command("/variants low"),
+            BotCommand::Variant {
+                name: Some("low".to_string())
+            }
+        );
+        assert_eq!(
+            parse_bot_command("/effort medium"),
+            BotCommand::Variant {
+                name: Some("medium".to_string())
             }
         );
         assert_eq!(
             parse_bot_command("/tier low"),
-            BotCommand::Effort {
-                level: Some("low".to_string())
+            BotCommand::Variant {
+                name: Some("low".to_string())
             }
         );
         assert_eq!(
-            parse_bot_command("/effort"),
-            BotCommand::Effort { level: None }
+            parse_bot_command("/variant"),
+            BotCommand::Variant { name: None }
         );
+        assert_eq!(
+            parse_bot_command("/permission full_machine"),
+            BotCommand::Permission {
+                mode: Some("full_machine".to_string())
+            }
+        );
+        assert_eq!(
+            parse_bot_command("/mode strict"),
+            BotCommand::Permission {
+                mode: Some("strict".to_string())
+            }
+        );
+        assert_eq!(
+            parse_bot_command("/theme blood_red"),
+            BotCommand::Theme {
+                name: Some("blood_red".to_string())
+            }
+        );
+        assert_eq!(parse_bot_command("/update"), BotCommand::Update);
     }
 
     #[test]

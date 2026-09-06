@@ -79,25 +79,37 @@ pub struct LlmConfig {
     #[serde(default)]
     pub provider_models: BTreeMap<String, String>,
     pub stream: bool,
-    #[serde(default = "default_tier", alias = "effort")]
-    pub tier: String,
-    #[serde(default = "default_tier_models")]
-    pub tier_models: BTreeMap<String, BTreeMap<String, String>>,
+    #[serde(default = "default_variant", alias = "tier", alias = "effort")]
+    pub variant: String,
+    #[serde(default = "default_variant_models", alias = "tier_models")]
+    pub variant_models: BTreeMap<String, BTreeMap<String, String>>,
 }
 
 impl LlmConfig {
-    pub fn active_effort(&self) -> &str {
-        if !self.tier.is_empty() {
-            &self.tier
+    pub fn active_variant(&self) -> &str {
+        if !self.variant.is_empty() {
+            &self.variant
         } else {
-            "medium"
+            "Default"
         }
     }
 
+    pub fn active_effort(&self) -> &str {
+        self.active_variant()
+    }
+
+    pub fn model_for_variant(&self, provider: &str, variant: &str) -> Option<&str> {
+        let normalized = variant.to_ascii_lowercase();
+        self.variant_models.get(provider).and_then(|variants| {
+            variants
+                .get(variant)
+                .or_else(|| variants.get(&normalized))
+                .map(String::as_str)
+        })
+    }
+
     pub fn model_for_tier(&self, provider: &str, tier: &str) -> Option<&str> {
-        self.tier_models
-            .get(provider)
-            .and_then(|tiers| tiers.get(tier).map(String::as_str))
+        self.model_for_variant(provider, tier)
     }
 }
 
@@ -434,8 +446,8 @@ impl Default for AxiomConfig {
                     ("mock".to_string(), "mock-model".to_string()),
                 ]),
                 stream: true,
-                tier: default_tier(),
-                tier_models: default_tier_models(),
+                variant: default_variant(),
+                variant_models: default_variant_models(),
             },
             providers,
             skills: SkillsConfig {
@@ -565,32 +577,31 @@ fn default_update_verify_checksums() -> bool {
     true
 }
 
-fn default_tier() -> String {
-    "medium".to_string()
+fn default_variant() -> String {
+    "Default".to_string()
 }
 
-fn default_tier_models() -> BTreeMap<String, BTreeMap<String, String>> {
+fn default_tier() -> String {
+    default_variant()
+}
+
+fn default_variant_models() -> BTreeMap<String, BTreeMap<String, String>> {
     BTreeMap::from([
         (
             "nvidia".to_string(),
             BTreeMap::from([
-                (
-                    "light".to_string(),
-                    "meta/llama-3.1-8b-instruct".to_string(),
-                ),
-                (
-                    "medium".to_string(),
-                    "nvidia/nemotron-3.5-lightning-30b-a3b".to_string(),
-                ),
-                (
-                    "high".to_string(),
-                    "nvidia/nemotron-4-340b-instruct".to_string(),
-                ),
+                ("default".to_string(), "nvidia/nemotron-3.5-lightning-30b-a3b".to_string()),
+                ("low".to_string(), "meta/llama-3.1-8b-instruct".to_string()),
+                ("light".to_string(), "meta/llama-3.1-8b-instruct".to_string()),
+                ("medium".to_string(), "nvidia/nemotron-3.5-lightning-30b-a3b".to_string()),
+                ("high".to_string(), "nvidia/nemotron-4-340b-instruct".to_string()),
             ]),
         ),
         (
             "groq".to_string(),
             BTreeMap::from([
+                ("default".to_string(), "llama-3.3-70b-versatile".to_string()),
+                ("low".to_string(), "llama-3.1-8b-instant".to_string()),
                 ("light".to_string(), "llama-3.1-8b-instant".to_string()),
                 ("medium".to_string(), "llama-3.3-70b-versatile".to_string()),
                 ("high".to_string(), "llama-3.3-70b-versatile".to_string()),
@@ -599,6 +610,8 @@ fn default_tier_models() -> BTreeMap<String, BTreeMap<String, String>> {
         (
             "openai".to_string(),
             BTreeMap::from([
+                ("default".to_string(), "gpt-4o".to_string()),
+                ("low".to_string(), "gpt-4o-mini".to_string()),
                 ("light".to_string(), "gpt-4o-mini".to_string()),
                 ("medium".to_string(), "gpt-4o".to_string()),
                 ("high".to_string(), "o3-mini".to_string()),
@@ -607,6 +620,8 @@ fn default_tier_models() -> BTreeMap<String, BTreeMap<String, String>> {
         (
             "anthropic".to_string(),
             BTreeMap::from([
+                ("default".to_string(), "claude-3-7-sonnet-latest".to_string()),
+                ("low".to_string(), "claude-3-5-haiku-latest".to_string()),
                 ("light".to_string(), "claude-3-5-haiku-latest".to_string()),
                 ("medium".to_string(), "claude-3-7-sonnet-latest".to_string()),
                 ("high".to_string(), "claude-3-7-sonnet-latest".to_string()),
@@ -615,6 +630,8 @@ fn default_tier_models() -> BTreeMap<String, BTreeMap<String, String>> {
         (
             "cloudflare".to_string(),
             BTreeMap::from([
+                ("default".to_string(), "openai/gpt-4o".to_string()),
+                ("low".to_string(), "openai/gpt-4o-mini".to_string()),
                 ("light".to_string(), "openai/gpt-4o-mini".to_string()),
                 ("medium".to_string(), "openai/gpt-4o".to_string()),
                 ("high".to_string(), "openai/o3-mini".to_string()),
@@ -623,12 +640,18 @@ fn default_tier_models() -> BTreeMap<String, BTreeMap<String, String>> {
         (
             "mock".to_string(),
             BTreeMap::from([
+                ("default".to_string(), "mock-model".to_string()),
+                ("low".to_string(), "mock-model".to_string()),
                 ("light".to_string(), "mock-model".to_string()),
                 ("medium".to_string(), "mock-model".to_string()),
                 ("high".to_string(), "mock-model".to_string()),
             ]),
         ),
     ])
+}
+
+fn default_tier_models() -> BTreeMap<String, BTreeMap<String, String>> {
+    default_variant_models()
 }
 
 fn default_coder_auto_route_from_chat() -> bool {
@@ -1122,6 +1145,7 @@ tier = "high"
         .expect("parse legacy config with tier");
 
         assert_eq!(legacy_config.active_effort(), "high");
+        assert_eq!(legacy_config.active_variant(), "high");
 
         let modern_config: LlmConfig = toml::from_str(
             r#"
@@ -1134,6 +1158,23 @@ effort = "max"
         .expect("parse modern config with effort");
 
         assert_eq!(modern_config.active_effort(), "max");
+        assert_eq!(modern_config.active_variant(), "max");
+
+        let variant_config: LlmConfig = toml::from_str(
+            r#"
+active_provider = "openai"
+active_model = "gpt-4o"
+stream = true
+variant = "high"
+"#,
+        )
+        .expect("parse variant config");
+
+        assert_eq!(variant_config.active_variant(), "high");
+        assert_eq!(
+            variant_config.model_for_variant("openai", "high"),
+            Some("o3-mini")
+        );
     }
 
     #[test]

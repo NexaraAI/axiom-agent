@@ -305,7 +305,7 @@ fn format_option_line(
 ) -> String {
     let raw_content = format!("[{num}] {text}");
     let raw_vis = visible_width(&raw_content);
-    let max_text_width = 52;
+    let max_text_width: usize = 52;
     let (truncated, trunc_vis) = if raw_vis > max_text_width {
         let mut budget = max_text_width.saturating_sub(3);
         let mut out = String::new();

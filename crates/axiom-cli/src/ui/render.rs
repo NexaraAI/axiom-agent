@@ -145,10 +145,10 @@ impl Renderer {
         // Status line
         let status_role = self.smoke("Agent ·");
         let status_model = self.bone(model);
-        let status_effort = self.paint(self.palette.warning, &format!("[effort: {effort_val}]"));
+        let status_variant = self.paint(self.palette.warning, &format!("[variant: {effort_val}]"));
         let status_provider = self.smoke(&format!("· {provider}"));
         let status_content =
-            format!("{status_role} {status_model} {status_effort} {status_provider}");
+            format!("{status_role} {status_model} {status_variant} {status_provider}");
         out.push(pad_card_line(&self.border("│"), &status_content, 58));
 
         out.push(self.border(&card_empty));
@@ -212,14 +212,14 @@ impl Renderer {
         out.push(self.border(&card_empty));
 
         let commands = [
-            ("/effort", "Configure reasoning effort level", true),
+            ("/variant", "Select variant (Default, low, medium, high)", true),
             ("/model", "Configure or inspect the active model", false),
             ("/permission", "Switch execution permission mode", false),
             ("/theme", "Switch terminal visual color theme", false),
+            ("/update", "Check and install the latest Axiom version", false),
             ("/provider", "Configure or inspect the active LLM", false),
             ("/queue", "Manage pending task queue", false),
             ("/skills", "List and manage installed skills", false),
-            ("/lens", "Toggle or inspect dynamic skill routing", false),
             ("/proof", "Toggle verifiable proof recording", false),
             ("/checkpoints", "List saved session checkpoints", false),
             ("/undo", "Restore latest workspace checkpoint", false),
@@ -322,8 +322,30 @@ impl Renderer {
         }
     }
 
+    pub(crate) fn orchestrator_notice(&self, message: &str) -> String {
+        format!("{} {}", self.primary("⟡ Orchestrator:"), self.bone(message))
+    }
+
     pub(crate) fn lens_notice(&self, message: &str) -> String {
-        format!("{} {}", self.primary("⟡ Axiom Lens:"), self.bone(message))
+        self.orchestrator_notice(message)
+    }
+
+    pub(crate) fn update_notification_card(&self, current: &str, latest: &str) -> Vec<String> {
+        let border_top = "  ┌───────────────────── Update Available ──────────────────────┐";
+        let border_bottom = "  └─────────────────────────────────────────────────────────────┘";
+        let border_empty = pad_card_line("│", "", 58);
+        let msg = format!("A new version of Axiom is available: v{current} -> v{latest}");
+        let cmd = "Run /update or npm install -g @nexara/axiom-agent to upgrade";
+        let line1 = pad_card_line(&self.border("│"), &self.accent(&msg), 58);
+        let line2 = pad_card_line(&self.border("│"), &self.bone(cmd), 58);
+        vec![
+            self.paint(self.palette.warning, border_top),
+            self.border(&border_empty),
+            line1,
+            line2,
+            self.border(&border_empty),
+            self.paint(self.palette.warning, border_bottom),
+        ]
     }
 
     #[allow(dead_code)]
@@ -515,7 +537,7 @@ fn palette_for(theme: &str) -> Palette {
     }
 }
 
-fn visible_width(s: &str) -> usize {
+pub(crate) fn visible_width(s: &str) -> usize {
     let mut in_escape = false;
     let mut count = 0;
     for c in s.chars() {
@@ -532,7 +554,7 @@ fn visible_width(s: &str) -> usize {
     count
 }
 
-fn pad_card_line(border_char: &str, content: &str, target_inner_width: usize) -> String {
+pub(crate) fn pad_card_line(border_char: &str, content: &str, target_inner_width: usize) -> String {
     let vis = visible_width(content);
     let padding = target_inner_width.saturating_sub(vis);
     format!(
