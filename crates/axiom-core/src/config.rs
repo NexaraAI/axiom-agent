@@ -166,8 +166,45 @@ pub struct UiConfig {
     pub theme: String,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PermissionMode {
+    FullMachine,
+    Velocity,
+    Strict,
+}
+
+impl PermissionMode {
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "full_machine" | "full" | "unrestricted" | "all" => Some(Self::FullMachine),
+            "velocity" | "fast" | "normal" | "balanced" => Some(Self::Velocity),
+            "strict" | "safe" | "paranoid" | "lockdown" => Some(Self::Strict),
+            _ => None,
+        }
+    }
+
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::FullMachine => "full_machine",
+            Self::Velocity => "velocity",
+            Self::Strict => "strict",
+        }
+    }
+
+    pub const fn description(self) -> &'static str {
+        match self {
+            Self::FullMachine => "unrestricted machine access with auto-approved operations",
+            Self::Velocity => "high-speed agentic execution with guardrails for destructive actions",
+            Self::Strict => "zero-trust isolation requiring approval for mutations",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SideEffectPolicyConfig {
+    #[serde(default = "default_policy_mode")]
+    pub mode: String,
     #[serde(default = "default_policy_filesystem_read")]
     pub filesystem_read: String,
     #[serde(default = "default_policy_filesystem_read")]
@@ -178,6 +215,51 @@ pub struct SideEffectPolicyConfig {
     pub process: String,
     #[serde(default = "default_policy_ask")]
     pub git: String,
+}
+
+impl SideEffectPolicyConfig {
+    pub fn for_mode(mode: PermissionMode) -> Self {
+        match mode {
+            PermissionMode::FullMachine => Self {
+                mode: "full_machine".to_string(),
+                filesystem_read: "allow".to_string(),
+                filesystem_write: "allow".to_string(),
+                network: "allow".to_string(),
+                process: "allow".to_string(),
+                git: "allow".to_string(),
+            },
+            PermissionMode::Velocity => Self {
+                mode: "velocity".to_string(),
+                filesystem_read: "allow".to_string(),
+                filesystem_write: "allow".to_string(),
+                network: "allow".to_string(),
+                process: "allow".to_string(),
+                git: "ask".to_string(),
+            },
+            PermissionMode::Strict => Self {
+                mode: "strict".to_string(),
+                filesystem_read: "allow".to_string(),
+                filesystem_write: "ask".to_string(),
+                network: "ask".to_string(),
+                process: "ask".to_string(),
+                git: "ask".to_string(),
+            },
+        }
+    }
+
+    pub fn permission_mode(&self) -> PermissionMode {
+        PermissionMode::parse(&self.mode).unwrap_or(PermissionMode::Velocity)
+    }
+
+    pub fn apply_mode(&mut self, mode: PermissionMode) {
+        let preset = Self::for_mode(mode);
+        self.mode = preset.mode;
+        self.filesystem_read = preset.filesystem_read;
+        self.filesystem_write = preset.filesystem_write;
+        self.network = preset.network;
+        self.process = preset.process;
+        self.git = preset.git;
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -205,13 +287,7 @@ impl Default for NetworkConfig {
 
 impl Default for SideEffectPolicyConfig {
     fn default() -> Self {
-        Self {
-            filesystem_read: default_policy_filesystem_read(),
-            filesystem_write: default_policy_filesystem_read(),
-            network: default_policy_ask(),
-            process: default_policy_ask(),
-            git: default_policy_ask(),
-        }
+        Self::for_mode(PermissionMode::Velocity)
     }
 }
 
@@ -413,6 +489,10 @@ fn default_ui_color() -> bool {
 
 fn default_ui_theme() -> String {
     "blood_red".to_string()
+}
+
+fn default_policy_mode() -> String {
+    "velocity".to_string()
 }
 
 fn default_policy_filesystem_read() -> String {
@@ -747,6 +827,12 @@ impl AxiomConfig {
             return Err(AxiomError::InvalidConfig {
                 field: "coder scope confirmation",
                 message: "confirmation thresholds cannot exceed the hard patch limits".to_string(),
+            });
+        }
+        if PermissionMode::parse(&self.policy.mode).is_none() {
+            return Err(AxiomError::InvalidConfig {
+                field: "policy.mode",
+                message: "expected full_machine, velocity, or strict".to_string(),
             });
         }
         for (field, value) in [
@@ -1181,6 +1267,49 @@ format = "json"
 
         assert_eq!(config_dir, dir);
         assert!(config_path.ends_with("config.toml"));
+    }
+
+    #[test]
+    fn permission_modes_configure_expected_presets() {
+        let full = SideEffectPolicyConfig::for_mode(PermissionMode::FullMachine);
+        assert_eq!(full.mode, "full_machine");
+        assert_eq!(full.filesystem_read, "allow");
+        assert_eq!(full.filesystem_write, "allow");
+        assert_eq!(full.network, "allow");
+        assert_eq!(full.process, "allow");
+        assert_eq!(full.git, "allow");
+
+        let velocity = SideEffectPolicyConfig::for_mode(PermissionMode::Velocity);
+        assert_eq!(velocity.mode, "velocity");
+        assert_eq!(velocity.filesystem_read, "allow");
+        assert_eq!(velocity.filesystem_write, "allow");
+        assert_eq!(velocity.network, "allow");
+        assert_eq!(velocity.process, "allow");
+        assert_eq!(velocity.git, "ask");
+
+        let strict = SideEffectPolicyConfig::for_mode(PermissionMode::Strict);
+        assert_eq!(strict.mode, "strict");
+        assert_eq!(strict.filesystem_read, "allow");
+        assert_eq!(strict.filesystem_write, "ask");
+        assert_eq!(strict.network, "ask");
+        assert_eq!(strict.process, "ask");
+        assert_eq!(strict.git, "ask");
+    }
+
+    #[test]
+    fn permission_mode_parsing_and_validation() {
+        assert_eq!(PermissionMode::parse("full_machine"), Some(PermissionMode::FullMachine));
+        assert_eq!(PermissionMode::parse("unrestricted"), Some(PermissionMode::FullMachine));
+        assert_eq!(PermissionMode::parse("velocity"), Some(PermissionMode::Velocity));
+        assert_eq!(PermissionMode::parse("fast"), Some(PermissionMode::Velocity));
+        assert_eq!(PermissionMode::parse("strict"), Some(PermissionMode::Strict));
+        assert_eq!(PermissionMode::parse("safe"), Some(PermissionMode::Strict));
+        assert_eq!(PermissionMode::parse("unknown_mode"), None);
+
+        let mut config = AxiomConfig::default();
+        assert_eq!(config.policy.permission_mode(), PermissionMode::Velocity);
+        config.policy.mode = "invalid".to_string();
+        assert!(config.validate().is_err());
     }
 
     fn unique_temp_dir() -> PathBuf {

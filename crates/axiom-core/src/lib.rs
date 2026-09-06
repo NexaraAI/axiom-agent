@@ -10,8 +10,8 @@ pub use atomic::atomic_write;
 pub use child_process::{run_command_bounded, BoundedCommandOutput};
 pub use config::{
     AgentConfig, AxiomConfig, CoderConfig, ConfigMigrationResult, GatewayConfig, LlmConfig,
-    NetworkConfig, ProofConfig, ProviderConfig, SideEffectPolicyConfig, SkillsConfig, UiConfig,
-    CURRENT_CONFIG_VERSION,
+    NetworkConfig, PermissionMode, ProofConfig, ProviderConfig, SideEffectPolicyConfig,
+    SkillsConfig, UiConfig, CURRENT_CONFIG_VERSION,
 };
 pub use cost::{
     current_utc_month, now_unix_seconds, usd_to_microusd, utc_month_from_unix_seconds,

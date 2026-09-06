@@ -16,9 +16,9 @@ use axiom_agent::{
 use axiom_coder::{list_checkpoints, WorkspaceCheckpoint};
 use axiom_core::{
     atomic_write, current_utc_month, now_unix_seconds, usd_to_microusd, AxiomConfig,
-    CostLedgerEvent, CostLedgerStore, PersistedSession, ProviderConfig, SessionApproval,
-    SessionCheckpoint, SessionId, SessionMessage, SessionStore, SessionTodoItem, SessionUsage,
-    CURRENT_IDENTITY_VERSION, CURRENT_SESSION_VERSION,
+    CostLedgerEvent, CostLedgerStore, PermissionMode, PersistedSession, ProviderConfig,
+    SessionApproval, SessionCheckpoint, SessionId, SessionMessage, SessionStore, SessionTodoItem,
+    SessionUsage, CURRENT_IDENTITY_VERSION, CURRENT_SESSION_VERSION,
 };
 use axiom_engine::{
     check_skill_update_statuses, current_axiom_version, execute_installed_tool_with_policy,
@@ -397,6 +397,37 @@ impl ChatSession {
             }
         };
         self.set_effort(mapped)
+    }
+
+    pub(crate) fn permission_mode(&self) -> PermissionMode {
+        self.config.policy.permission_mode()
+    }
+
+    pub(crate) fn active_permission_mode(&self) -> &str {
+        self.permission_mode().as_str()
+    }
+
+    pub(crate) fn set_permission_mode(&mut self, mode_str: &str) -> Result<PermissionMode> {
+        let mode = PermissionMode::parse(mode_str).ok_or_else(|| {
+            anyhow!(
+                "invalid permission mode '{mode_str}'; supported modes are: velocity, full_machine, strict"
+            )
+        })?;
+        self.config.policy.apply_mode(mode);
+        match mode {
+            PermissionMode::FullMachine => {
+                self.config.coder.approval_mode = "trusted".to_string();
+            }
+            PermissionMode::Velocity => {
+                self.config.coder.approval_mode = "trusted".to_string();
+            }
+            PermissionMode::Strict => {
+                self.config.coder.approval_mode = "safe".to_string();
+            }
+        }
+        self.save_config()?;
+        self.persist_session()?;
+        Ok(mode)
     }
 
     pub(crate) fn set_model(&mut self, model: impl Into<String>) -> Result<String> {
@@ -1466,6 +1497,8 @@ impl Hint for AxiomHint {
 const COMMAND_HINTS: &[(&str, &str)] = &[
     ("effort", " [none|low|medium|high|max]"),
     ("model", " [name]"),
+    ("permission", " [velocity|full_machine|strict]"),
+    ("mode", " [velocity|full_machine|strict]"),
     ("provider", " [name]"),
     ("queue", " [add <task>|list|clear]"),
     ("skills", ""),
@@ -1498,6 +1531,34 @@ impl Completer for AxiomCommandHelper {
         }
         let prefix = &current[0..1];
         let rest = &current[1..];
+
+        if let Some(sub) = rest.strip_prefix("permission ") {
+            let start = pos - sub.len();
+            let mut candidates = Vec::new();
+            for opt in &["velocity", "full_machine", "strict"] {
+                if opt.starts_with(sub) {
+                    candidates.push(Pair {
+                        display: opt.to_string(),
+                        replacement: opt.to_string(),
+                    });
+                }
+            }
+            return Ok((start, candidates));
+        }
+
+        if let Some(sub) = rest.strip_prefix("mode ") {
+            let start = pos - sub.len();
+            let mut candidates = Vec::new();
+            for opt in &["velocity", "full_machine", "strict"] {
+                if opt.starts_with(sub) {
+                    candidates.push(Pair {
+                        display: opt.to_string(),
+                        replacement: opt.to_string(),
+                    });
+                }
+            }
+            return Ok((start, candidates));
+        }
 
         if let Some(sub) = rest.strip_prefix("effort ") {
             let start = pos - sub.len();
@@ -1608,6 +1669,26 @@ impl Hinter for AxiomCommandHelper {
             return None;
         }
         let rest = &line[1..];
+        if let Some(sub) = rest.strip_prefix("permission ") {
+            for opt in &["velocity", "full_machine", "strict"] {
+                if let Some(suffix) = opt.strip_prefix(sub) {
+                    if !suffix.is_empty() {
+                        return Some(AxiomHint(suffix.to_string()));
+                    }
+                }
+            }
+            return None;
+        }
+        if let Some(sub) = rest.strip_prefix("mode ") {
+            for opt in &["velocity", "full_machine", "strict"] {
+                if let Some(suffix) = opt.strip_prefix(sub) {
+                    if !suffix.is_empty() {
+                        return Some(AxiomHint(suffix.to_string()));
+                    }
+                }
+            }
+            return None;
+        }
         if let Some(sub) = rest.strip_prefix("effort ") {
             for eff in &["none", "low", "medium", "high", "max"] {
                 if let Some(suffix) = eff.strip_prefix(sub) {
@@ -1875,6 +1956,7 @@ async fn run_terminal_session(mut session: ChatSession) -> Result<()> {
             session.active_provider().unwrap_or("not configured"),
             session.active_model().unwrap_or("not configured"),
             session.active_effort(),
+            session.active_permission_mode(),
             &session.workspace_path().display().to_string(),
             session.session_id(),
         )
@@ -1983,7 +2065,9 @@ async fn run_terminal_session(mut session: ChatSession) -> Result<()> {
             println!("{}", ui.lens_notice(&format!("selected {selected}")));
         }
 
-        let mut approval = TerminalApprover;
+        let mut approval = TerminalApprover {
+            mode: session.permission_mode(),
+        };
         let mut live_stream = TerminalStreamRenderer::new(ui);
         let turn_result = session
             .send_user_message_live(
@@ -2829,10 +2913,15 @@ pub(crate) fn render_interactive_mcq(
     })
 }
 
-struct TerminalApprover;
+struct TerminalApprover {
+    mode: PermissionMode,
+}
 
 impl SkillApproval for TerminalApprover {
     fn approve(&mut self, request: &ApprovalRequest) -> bool {
+        if self.mode == PermissionMode::FullMachine {
+            return true;
+        }
         println!(
             "Axiom approval required [{}]: {}",
             request.risk_level, request.message
@@ -3012,6 +3101,39 @@ async fn handle_chat_command(session: &mut ChatSession, input: &str) -> Result<C
             }
             Ok(CommandResult::Continue)
         }
+        "!permission" | "!permissions" | "!mode" => {
+            let mode = session.permission_mode();
+            println!("Active Permission Mode: {}", mode.as_str());
+            println!("Description: {}", mode.description());
+            println!("\nAvailable permission modes:");
+            println!("  - velocity:     Balanced agentic speed; auto-approves workspace edits & safe commands, asks on git/destructive actions (recommended)");
+            println!("  - full_machine: Unrestricted access; auto-approves all filesystem, process, network, and git actions without prompting");
+            println!("  - strict:       Zero-trust security; requires explicit confirmation for all writes, execution, and external requests");
+            println!("\nUse `/permission <velocity|full_machine|strict>` (alias: `/mode`) to switch.");
+            Ok(CommandResult::Continue)
+        }
+        _ if input.starts_with("!permission ")
+            || input.starts_with("!permissions ")
+            || input.starts_with("!mode ") =>
+        {
+            let target = if let Some(t) = input.strip_prefix("!permission ") {
+                t.trim()
+            } else if let Some(t) = input.strip_prefix("!permissions ") {
+                t.trim()
+            } else if let Some(t) = input.strip_prefix("!mode ") {
+                t.trim()
+            } else {
+                ""
+            };
+            match session.set_permission_mode(target) {
+                Ok(new_mode) => {
+                    let desc = new_mode.description();
+                    println!("Switched permission mode to '{}' ({}).", new_mode.as_str(), desc);
+                }
+                Err(error) => println!("{error}"),
+            }
+            Ok(CommandResult::Continue)
+        }
         "!multi" => Ok(CommandResult::Multiline),
         "!show" => {
             let outputs = session.saved_output_ids()?;
@@ -3131,6 +3253,7 @@ async fn handle_chat_command(session: &mut ChatSession, input: &str) -> Result<C
                     session.active_provider().unwrap_or("not configured"),
                     session.active_model().unwrap_or("not configured"),
                     session.active_effort(),
+                    session.active_permission_mode(),
                     &session.workspace_path().display().to_string(),
                     session.session_id(),
                 )
@@ -3296,6 +3419,7 @@ fn print_help() {
     println!("  /effort [none|low|medium|high|max]  Configure reasoning effort (alias: /tier)");
     println!("  /model [name]                       Switch or view active LLM model");
     println!("  /model list [FILTER]                Fetch catalog view of available models");
+    println!("  /permission [velocity|full|strict]  Switch permission mode (alias: /mode)");
     println!("  /queue [add <task>|list|clear]      Manage sequential background task queue");
     println!("  /undo                               Restore latest workspace checkpoint");
     println!("  /checkpoints                        List recovery snapshots");
@@ -3724,6 +3848,43 @@ mod tests {
             .await
             .expect("slash command");
         assert_eq!(res2, CommandResult::Continue);
+
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn permission_command_switches_modes_and_presets() {
+        let dir = unique_temp_dir();
+        let config_path = dir.join("config.toml");
+        let mut config = AxiomConfig::default();
+        config.agent.first_run_completed = true;
+        config.save_to_path(&config_path).expect("save config");
+        let mut session = ChatSession::load(&config_path).expect("load session");
+
+        assert_eq!(session.permission_mode(), PermissionMode::Velocity);
+
+        handle_chat_command(&mut session, "/permission full_machine")
+            .await
+            .expect("switch to full_machine");
+        assert_eq!(session.permission_mode(), PermissionMode::FullMachine);
+        assert_eq!(session.config.policy.filesystem_write, "allow");
+        assert_eq!(session.config.policy.process, "allow");
+        assert_eq!(session.config.policy.git, "allow");
+
+        handle_chat_command(&mut session, "/mode strict")
+            .await
+            .expect("switch to strict");
+        assert_eq!(session.permission_mode(), PermissionMode::Strict);
+        assert_eq!(session.config.policy.filesystem_write, "ask");
+        assert_eq!(session.config.policy.process, "ask");
+        assert_eq!(session.config.policy.git, "ask");
+
+        handle_chat_command(&mut session, "/permission velocity")
+            .await
+            .expect("switch to velocity");
+        assert_eq!(session.permission_mode(), PermissionMode::Velocity);
+        assert_eq!(session.config.policy.filesystem_write, "allow");
+        assert_eq!(session.config.policy.git, "ask");
 
         let _ = fs::remove_dir_all(dir);
     }

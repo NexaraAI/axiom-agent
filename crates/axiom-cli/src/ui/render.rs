@@ -75,6 +75,7 @@ impl Renderer {
         provider: &str,
         model: &str,
         effort: &str,
+        mode: &str,
         workspace: &str,
         session_id: &str,
     ) -> String {
@@ -140,14 +141,23 @@ impl Renderer {
 
         out.push(self.border(&card_empty));
 
-        // Session line
-        if !session_id.is_empty() {
+        // Mode & Session line
+        let mode_norm = if mode.is_empty() { "velocity" } else { mode };
+        let mode_styled = match mode_norm {
+            "full_machine" => self.paint(self.palette.error, "full_machine"),
+            "strict" => self.paint(self.palette.warning, "strict"),
+            _ => self.paint(self.palette.success, "velocity"),
+        };
+        let mode_label = self.smoke("mode:");
+        let session_line_content = if !session_id.is_empty() {
             let session_label = self.smoke("session:");
             let session_val = self.smoke(session_id);
-            let session_content = format!("{session_label} {session_val}");
-            out.push(pad_card_line(&self.border("│"), &session_content, 58));
-            out.push(self.border(&card_empty));
-        }
+            format!("{mode_label} {mode_styled}   {session_label} {session_val}")
+        } else {
+            format!("{mode_label} {mode_styled}")
+        };
+        out.push(pad_card_line(&self.border("│"), &session_line_content, 58));
+        out.push(self.border(&card_empty));
 
         // Keybindings hints
         let kb_tab = self.smoke("tab");
@@ -192,12 +202,14 @@ impl Renderer {
         let commands = [
             ("/effort", "Configure reasoning effort level", true),
             ("/model", "Configure or inspect the active model", false),
+            ("/permission", "Switch execution permission mode", false),
             ("/provider", "Configure or inspect the active LLM", false),
             ("/queue", "Manage pending task queue", false),
             ("/skills", "List and manage installed skills", false),
             ("/lens", "Toggle or inspect dynamic skill routing", false),
             ("/proof", "Toggle verifiable proof recording", false),
             ("/checkpoints", "List saved session checkpoints", false),
+            ("/undo", "Restore latest workspace checkpoint", false),
             ("/restore", "Restore workspace to a checkpoint", false),
             ("/clear", "Clear conversation history", false),
             ("/help", "Show detailed help and command reference", false),
@@ -649,6 +661,25 @@ mod tests {
         assert!(card.contains("[2]"));
         assert!(card.contains("[3]"));
         assert!(card.contains("Type custom answer..."));
+    }
+
+    #[test]
+    fn dashboard_banner_renders_all_permission_modes() {
+        let mut config = AxiomConfig::default();
+        config.ui.color = false;
+        let renderer = Renderer::from_config_with_terminal(&config, true);
+        for mode in &["velocity", "full_machine", "strict"] {
+            let banner = renderer.dashboard_banner(
+                "openai",
+                "gpt-4o",
+                "medium",
+                mode,
+                "/home/user/project",
+                "session-12345678-abcdef01",
+            );
+            assert!(banner.contains(&format!("mode: {mode}")));
+            assert!(banner.contains("session: session-12345678-abcdef01"));
+        }
     }
 
     struct EnvVarGuard {

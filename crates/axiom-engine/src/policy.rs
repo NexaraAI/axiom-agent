@@ -155,6 +155,30 @@ impl SideEffectPolicy {
         }
     }
 
+    pub const fn full_machine() -> Self {
+        Self::allow_all()
+    }
+
+    pub const fn velocity() -> Self {
+        Self {
+            filesystem_read: PolicyAction::Allow,
+            filesystem_write: PolicyAction::Allow,
+            network: PolicyAction::Allow,
+            process: PolicyAction::Allow,
+            git: PolicyAction::Ask,
+        }
+    }
+
+    pub const fn strict() -> Self {
+        Self {
+            filesystem_read: PolicyAction::Allow,
+            filesystem_write: PolicyAction::Ask,
+            network: PolicyAction::Ask,
+            process: PolicyAction::Ask,
+            git: PolicyAction::Ask,
+        }
+    }
+
     pub fn evaluate(&self, request: SideEffectRequest) -> SideEffectEvaluation {
         let matched_rules = request
             .classes
@@ -312,5 +336,24 @@ mod tests {
             SideEffectPolicy::backward_compatible(false).git,
             PolicyAction::Allow
         );
+    }
+
+    #[test]
+    fn permission_mode_presets_evaluate_expected_actions() {
+        let full = SideEffectPolicy::full_machine();
+        assert_eq!(full.action_for(SideEffectClass::FilesystemWrite), PolicyAction::Allow);
+        assert_eq!(full.action_for(SideEffectClass::Process), PolicyAction::Allow);
+        assert_eq!(full.action_for(SideEffectClass::Git), PolicyAction::Allow);
+
+        let velocity = SideEffectPolicy::velocity();
+        assert_eq!(velocity.action_for(SideEffectClass::FilesystemWrite), PolicyAction::Allow);
+        assert_eq!(velocity.action_for(SideEffectClass::Process), PolicyAction::Allow);
+        assert_eq!(velocity.action_for(SideEffectClass::Git), PolicyAction::Ask);
+
+        let strict = SideEffectPolicy::strict();
+        assert_eq!(strict.action_for(SideEffectClass::FilesystemRead), PolicyAction::Allow);
+        assert_eq!(strict.action_for(SideEffectClass::FilesystemWrite), PolicyAction::Ask);
+        assert_eq!(strict.action_for(SideEffectClass::Process), PolicyAction::Ask);
+        assert_eq!(strict.action_for(SideEffectClass::Git), PolicyAction::Ask);
     }
 }
