@@ -3117,6 +3117,7 @@ mod tests {
                 "shell.run",
                 "shell.zsh.safe",
                 "skill.create",
+                "test.run",
                 "web.fetch",
             ]
         );
@@ -3125,7 +3126,7 @@ mod tests {
     #[test]
     fn every_builtin_executor_has_complete_schema_policy_and_fixture_metadata() {
         let descriptors = ExecutorRegistry::with_builtin_executors().descriptors();
-        assert_eq!(descriptors.len(), 13);
+        assert_eq!(descriptors.len(), 14);
         for descriptor in descriptors {
             assert!(descriptor.is_complete(), "incomplete: {}", descriptor.id);
             assert!(descriptor.input_schema.is_object());
