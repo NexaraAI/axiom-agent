@@ -3198,9 +3198,16 @@ impl SkillApproval for RecordingApprover<'_, '_> {
 }
 
 async fn handle_chat_command(session: &mut ChatSession, input: &str) -> Result<CommandResult> {
-    if !input.starts_with('/') {
+    let normalized = if let Some(stripped) = input.strip_prefix('!') {
+        format!("/{stripped}")
+    } else {
+        input.to_string()
+    };
+
+    if !normalized.starts_with('/') {
         return Ok(CommandResult::NotCommand);
     }
+    let input = normalized.as_str();
 
     match input {
         "/" | "/commands" => {
@@ -3799,16 +3806,16 @@ fn read_multiline_prompt(
         }
         let line = line.trim_end_matches(['\r', '\n']);
         match line {
-            "/send" if lines.iter().any(|line: &String| !line.trim().is_empty()) => {
+            "/send" | "!send" if lines.iter().any(|line: &String| !line.trim().is_empty()) => {
                 return Ok(MultilineRead::Submit(lines.join("\n")));
             }
-            "/send" => {
+            "/send" | "!send" => {
                 writeln!(
                     writer,
                     "Multiline prompt is empty; enter text or type /cancel."
                 )?;
             }
-            "/cancel" => {
+            "/cancel" | "!cancel" => {
                 writeln!(writer, "Multiline prompt cancelled.")?;
                 return Ok(MultilineRead::Cancelled);
             }
