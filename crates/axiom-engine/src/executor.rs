@@ -1,10 +1,12 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
+    io::Read,
     net::IpAddr,
     path::{Path, PathBuf},
     process::Command,
-    time::Duration,
+    sync::{Arc, Mutex},
+    time::{Duration, Instant},
 };
 
 use async_trait::async_trait;
@@ -122,6 +124,11 @@ impl ExecutorRegistry {
         registry.register(Box::new(WebFetchExecutor));
         registry.register(Box::new(GitStatusExecutor));
         registry.register(Box::new(GitDiffExecutor));
+        registry.register(Box::new(ShellExecutor::powershell()));
+        registry.register(Box::new(ShellExecutor::bash()));
+        registry.register(Box::new(ShellExecutor::zsh()));
+        registry.register(Box::new(ShellExecutor::python_run()));
+        registry.register(Box::new(ShellExecutor::generic_run()));
         registry
     }
 
@@ -151,6 +158,41 @@ struct ProjectScanExecutor;
 struct WebFetchExecutor;
 struct GitStatusExecutor;
 struct GitDiffExecutor;
+pub struct ShellExecutor {
+    id: &'static str,
+}
+
+impl ShellExecutor {
+    pub const fn powershell() -> Self {
+        Self {
+            id: "shell.powershell.safe",
+        }
+    }
+
+    pub const fn bash() -> Self {
+        Self {
+            id: "shell.bash.safe",
+        }
+    }
+
+    pub const fn zsh() -> Self {
+        Self {
+            id: "shell.zsh.safe",
+        }
+    }
+
+    pub const fn python_run() -> Self {
+        Self {
+            id: "python.run",
+        }
+    }
+
+    pub const fn generic_run() -> Self {
+        Self {
+            id: "shell.run",
+        }
+    }
+}
 
 #[async_trait(?Send)]
 impl SkillExecutor for FileReadExecutor {
@@ -473,6 +515,98 @@ impl SkillExecutor for GitDiffExecutor {
     ) -> Result<Value, SkillExecutionError> {
         authorize_side_effect(policy, audit, approval, git_side_effect(self.id(), "diff"))?;
         git_command(request, context, "diff")
+    }
+}
+
+#[async_trait(?Send)]
+impl SkillExecutor for ShellExecutor {
+    fn id(&self) -> &'static str {
+        self.id
+    }
+
+    fn descriptor(&self) -> ExecutorDescriptor {
+        ExecutorDescriptor {
+            id: self.id().to_string(),
+            input_schema: json!({
+                "type": "object",
+                "required": ["command"],
+                "properties": {
+                    "command": {
+                        "type": "string",
+                        "minLength": 1,
+                        "description": "The command or script to execute in the workspace."
+                    },
+                    "working_directory": {
+                        "type": "string",
+                        "description": "Optional subdirectory relative to workspace root."
+                    },
+                    "background": {
+                        "type": "boolean",
+                        "description": "Run as a persistent background daemon (recommended for dev servers like http.server, vite, npm run dev)."
+                    },
+                    "is_background": {
+                        "type": "boolean",
+                        "description": "Alias for background."
+                    },
+                    "timeout_seconds": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": 600,
+                        "description": "Execution timeout in seconds for foreground commands (default: 30)."
+                    },
+                    "safety_level": {
+                        "type": "string"
+                    }
+                }
+            }),
+            output_schema: json!({
+                "type": "object",
+                "required": ["exit_code", "stdout", "stderr"],
+                "properties": {
+                    "exit_code": {"type": "integer"},
+                    "stdout": {"type": "string"},
+                    "stderr": {"type": "string"}
+                }
+            }),
+            permissions: vec![Permission::ShellRun],
+            side_effects: vec![SideEffectClass::Process],
+            deterministic_fixture: json!({"command": "echo axiom-test"}),
+        }
+    }
+
+    async fn execute(
+        &self,
+        request: &ToolRequest,
+        context: &SkillExecutionContext,
+        approval: &mut dyn SkillApproval,
+    ) -> Result<Value, SkillExecutionError> {
+        let policy = SideEffectPolicy::backward_compatible(context.auto_approve_medium_risk);
+        let mut audit = crate::NoopSideEffectAuditSink;
+        self.execute_with_policy(request, context, approval, &policy, &mut audit)
+            .await
+    }
+
+    async fn execute_with_policy(
+        &self,
+        request: &ToolRequest,
+        context: &SkillExecutionContext,
+        approval: &mut dyn SkillApproval,
+        policy: &SideEffectPolicy,
+        audit: &mut dyn SideEffectAuditSink,
+    ) -> Result<Value, SkillExecutionError> {
+        let command_str = string_arg(request, "command")?;
+        authorize_side_effect(
+            policy,
+            audit,
+            approval,
+            SideEffectRequest::new(
+                self.id(),
+                "shell.run",
+                [SideEffectClass::Process],
+                Some(command_str.clone()),
+            ),
+        )?;
+        shell_run(self.id(), request, context)
     }
 }
 
@@ -1471,6 +1605,261 @@ fn git_executor_descriptor(skill_id: &str, operation: &str) -> ExecutorDescripto
     }
 }
 
+static BACKGROUND_PROCESSES: Mutex<Vec<std::process::Child>> = Mutex::new(Vec::new());
+
+fn register_background_process(child: std::process::Child) {
+    if let Ok(mut list) = BACKGROUND_PROCESSES.lock() {
+        list.push(child);
+    }
+}
+
+fn check_dangerous_command(command: &str) -> Result<(), SkillExecutionError> {
+    let lower = command.to_ascii_lowercase();
+    if lower.contains("format ")
+        || lower.contains("rmdir /s /q c:")
+        || lower.contains("rm -rf /")
+        || lower.contains(":(){ :|:& };:")
+    {
+        return Err(SkillExecutionError::CommandFailed(
+            "command blocked by safety policy: destructive system command detected".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+fn is_dev_server_command(command: &str) -> bool {
+    let lower = command.to_ascii_lowercase();
+    lower.contains("http.server")
+        || lower.contains("http-server")
+        || lower.contains("live-server")
+        || lower.contains("vite")
+        || lower.contains("next dev")
+        || lower.contains("astro dev")
+        || lower.contains("run dev")
+        || lower.contains("npm start")
+        || lower.contains("npx serve")
+        || lower.contains("webpack serve")
+        || lower.contains("gatsby develop")
+        || lower.contains("flask run")
+        || lower.contains("uvicorn")
+        || lower.contains("rails server")
+}
+
+fn is_server_listening_output(output: &str) -> bool {
+    let lower = output.to_ascii_lowercase();
+    lower.contains("serving http on")
+        || lower.contains("http://localhost:")
+        || lower.contains("http://127.0.0.1:")
+        || lower.contains("listening on")
+        || lower.contains("ready in")
+        || lower.contains("started server")
+        || lower.contains("development server running")
+}
+
+fn spawn_stream_reader<R: Read + Send + 'static>(
+    mut reader: R,
+    buffer: Arc<Mutex<Vec<u8>>>,
+    max_bytes: usize,
+) {
+    std::thread::spawn(move || {
+        let mut chunk = [0u8; 4096];
+        while let Ok(n) = reader.read(&mut chunk) {
+            if n == 0 {
+                break;
+            }
+            if let Ok(mut b) = buffer.lock() {
+                if b.len() < max_bytes {
+                    let remaining = max_bytes.saturating_sub(b.len());
+                    b.extend_from_slice(&chunk[..n.min(remaining)]);
+                }
+            }
+        }
+    });
+}
+
+fn create_shell_command(
+    skill_id: &str,
+    command: &str,
+    cwd: &Path,
+    credential_env_names: &[String],
+) -> Command {
+    let mut cmd = if cfg!(windows) {
+        let mut c = Command::new("powershell.exe");
+        c.arg("-NoProfile")
+            .arg("-NonInteractive")
+            .arg("-ExecutionPolicy")
+            .arg("Bypass")
+            .arg("-Command")
+            .arg(command);
+        c
+    } else if skill_id == "shell.zsh.safe" {
+        let mut c = Command::new("zsh");
+        c.arg("-c").arg(command);
+        c
+    } else {
+        let mut c = Command::new("bash");
+        c.arg("-c").arg(command);
+        c
+    };
+
+    cmd.current_dir(cwd);
+    for env_var in credential_env_names {
+        cmd.env_remove(env_var);
+    }
+    cmd
+}
+
+fn shell_run(
+    skill_id: &str,
+    request: &ToolRequest,
+    context: &SkillExecutionContext,
+) -> Result<Value, SkillExecutionError> {
+    let command_str = string_arg(request, "command")?;
+    check_dangerous_command(&command_str)?;
+
+    let workspace = Workspace::new(&context.workspace_root)?;
+    let working_dir = optional_string_arg(request, "working_directory");
+    let command_cwd = match working_dir {
+        Some(ref dir) if !dir.trim().is_empty() && dir.trim() != "." => {
+            workspace.resolve_inside(dir)?
+        }
+        _ => workspace.root().to_path_buf(),
+    };
+    if !command_cwd.is_dir() {
+        return Err(SkillExecutionError::CommandFailed(format!(
+            "working directory does not exist: {}",
+            command_cwd.display()
+        )));
+    }
+
+    let is_bg = request
+        .arguments
+        .get("background")
+        .and_then(Value::as_bool)
+        .or_else(|| {
+            request
+                .arguments
+                .get("is_background")
+                .and_then(Value::as_bool)
+        })
+        .unwrap_or(false);
+
+    let should_background = is_bg || is_dev_server_command(&command_str);
+
+    let mut command = create_shell_command(
+        skill_id,
+        &command_str,
+        &command_cwd,
+        &context.credential_env_names,
+    );
+    command
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+
+    let mut child = command.spawn().map_err(|err| {
+        SkillExecutionError::CommandFailed(format!("failed to spawn process: {err}"))
+    })?;
+
+    let stdout_buf = Arc::new(Mutex::new(Vec::new()));
+    let stderr_buf = Arc::new(Mutex::new(Vec::new()));
+
+    if let Some(stdout) = child.stdout.take() {
+        spawn_stream_reader(stdout, stdout_buf.clone(), 512 * 1024);
+    }
+    if let Some(stderr) = child.stderr.take() {
+        spawn_stream_reader(stderr, stderr_buf.clone(), 128 * 1024);
+    }
+
+    if should_background {
+        std::thread::sleep(Duration::from_millis(1200));
+        match child
+            .try_wait()
+            .map_err(|e| SkillExecutionError::CommandFailed(e.to_string()))?
+        {
+            Some(status) => {
+                let out_str = String::from_utf8_lossy(&stdout_buf.lock().unwrap()).to_string();
+                let err_str = String::from_utf8_lossy(&stderr_buf.lock().unwrap()).to_string();
+                Ok(json!({
+                    "exit_code": status.code().unwrap_or(-1),
+                    "stdout": out_str,
+                    "stderr": err_str,
+                }))
+            }
+            None => {
+                let pid = child.id();
+                let out_str = String::from_utf8_lossy(&stdout_buf.lock().unwrap()).to_string();
+                let err_str = String::from_utf8_lossy(&stderr_buf.lock().unwrap()).to_string();
+                register_background_process(child);
+                let message = if out_str.trim().is_empty() {
+                    format!("Background process started successfully (PID: {pid}).")
+                } else {
+                    format!(
+                        "Background process started successfully (PID: {pid}).\nInitial output:\n{out_str}"
+                    )
+                };
+                Ok(json!({
+                    "exit_code": 0,
+                    "stdout": message,
+                    "stderr": err_str,
+                }))
+            }
+        }
+    } else {
+        let timeout_seconds = optional_u64_arg(request, "timeout_seconds")
+            .unwrap_or(30)
+            .clamp(1, 600);
+        let start = Instant::now();
+        let timeout = Duration::from_secs(timeout_seconds);
+        let mut exit_status = None;
+
+        while start.elapsed() < timeout {
+            if let Some(status) = child
+                .try_wait()
+                .map_err(|e| SkillExecutionError::CommandFailed(e.to_string()))?
+            {
+                exit_status = Some(status);
+                break;
+            }
+            let current_out = String::from_utf8_lossy(&stdout_buf.lock().unwrap()).to_string();
+            if is_server_listening_output(&current_out) {
+                let pid = child.id();
+                register_background_process(child);
+                return Ok(json!({
+                    "exit_code": 0,
+                    "stdout": format!(
+                        "Server detected listening and running in background (PID: {pid}):\n{current_out}"
+                    ),
+                    "stderr": String::from_utf8_lossy(&stderr_buf.lock().unwrap()).to_string(),
+                }));
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+
+        match exit_status {
+            Some(status) => {
+                std::thread::sleep(Duration::from_millis(50));
+                let out_str = String::from_utf8_lossy(&stdout_buf.lock().unwrap()).to_string();
+                let err_str = String::from_utf8_lossy(&stderr_buf.lock().unwrap()).to_string();
+                Ok(json!({
+                    "exit_code": status.code().unwrap_or(0),
+                    "stdout": out_str,
+                    "stderr": err_str,
+                }))
+            }
+            None => {
+                let _ = child.kill();
+                let out_str = String::from_utf8_lossy(&stdout_buf.lock().unwrap()).to_string();
+                let err_str = String::from_utf8_lossy(&stderr_buf.lock().unwrap()).to_string();
+                Ok(json!({
+                    "exit_code": 124,
+                    "stdout": out_str,
+                    "stderr": format!("Command timed out after {timeout_seconds}s.\n{err_str}"),
+                }))
+            }
+        }
+    }
+}
+
 fn validate_schema_value(value: &Value, schema: &Value) -> std::result::Result<(), String> {
     if let Some(expected) = schema.get("type").and_then(Value::as_str) {
         let matches = match expected {
@@ -1768,6 +2157,11 @@ mod tests {
                 "git.diff",
                 "git.status",
                 "project.scan",
+                "python.run",
+                "shell.bash.safe",
+                "shell.powershell.safe",
+                "shell.run",
+                "shell.zsh.safe",
                 "web.fetch",
             ]
         );
@@ -1776,7 +2170,7 @@ mod tests {
     #[test]
     fn every_builtin_executor_has_complete_schema_policy_and_fixture_metadata() {
         let descriptors = ExecutorRegistry::with_builtin_executors().descriptors();
-        assert_eq!(descriptors.len(), 6);
+        assert_eq!(descriptors.len(), 11);
         for descriptor in descriptors {
             assert!(descriptor.is_complete(), "incomplete: {}", descriptor.id);
             assert!(descriptor.input_schema.is_object());
@@ -1786,6 +2180,22 @@ mod tests {
             validate_schema_value(&descriptor.deterministic_fixture, &descriptor.input_schema)
                 .unwrap_or_else(|error| panic!("invalid fixture for {}: {error}", descriptor.id));
         }
+    }
+
+    #[test]
+    fn dev_server_and_listening_detection_helpers_behave_as_expected() {
+        assert!(is_dev_server_command("python -m http.server 8000"));
+        assert!(is_dev_server_command("npx http-server -p 8080"));
+        assert!(is_dev_server_command("npm run dev"));
+        assert!(is_dev_server_command("vite --host"));
+        assert!(is_dev_server_command("live-server ."));
+        assert!(!is_dev_server_command("cargo test"));
+        assert!(!is_dev_server_command("npm test"));
+
+        assert!(is_server_listening_output("Serving HTTP on 0.0.0.0 port 8000 (http://0.0.0.0:8000/) ..."));
+        assert!(is_server_listening_output("  ➜  Local:   http://localhost:5173/"));
+        assert!(is_server_listening_output("Available on: http://127.0.0.1:8080"));
+        assert!(!is_server_listening_output("test result: ok. 0 passed; 0 failed"));
     }
 
     #[test]

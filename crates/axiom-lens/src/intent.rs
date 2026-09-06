@@ -247,6 +247,11 @@ pub fn analyze_intent(prompt: &str) -> IntentAnalysis {
             "powershell",
             "bash",
             "zsh",
+            "server",
+            "serve",
+            "localhost",
+            "host",
+            "start",
         ],
     ) {
         needs_shell = true;
@@ -415,5 +420,13 @@ mod tests {
         assert!(intent
             .candidate_skill_ids
             .contains(&"file.read".to_string()));
+    }
+
+    #[test]
+    fn selects_shell_for_localhost_server_request() {
+        let intent = analyze_intent("its created? run an local server");
+        assert!(intent
+            .candidate_skill_ids
+            .contains(&"shell.powershell.safe".to_string()));
     }
 }

@@ -275,7 +275,14 @@ impl ChatSession {
             Vec::new()
         };
 
-        for core_id in &["project.scan", "file.read", "file.write", "web.fetch"] {
+        let platform_shell = if cfg!(windows) {
+            "shell.powershell.safe"
+        } else if cfg!(target_os = "macos") {
+            "shell.zsh.safe"
+        } else {
+            "shell.bash.safe"
+        };
+        for core_id in &["project.scan", "file.read", "file.write", "web.fetch", platform_shell] {
             if !cards.iter().any(|c| c.id == *core_id) {
                 if let Some(skill) = installed.iter().find(|s| s.manifest.id == *core_id) {
                     if skill.record.is_selectable() {
@@ -1551,7 +1558,14 @@ async fn run_terminal_session(mut session: ChatSession) -> Result<()> {
 
     loop {
         let mut message = match input_reader.read(&ui.prompt())? {
-            PromptRead::Line(line) => line.trim().to_string(),
+            PromptRead::Line(line) => {
+                let cleaned = clean_pasted_input(&line);
+                let line_count = cleaned.lines().count();
+                if line_count > 3 {
+                    println!("{}", ui.plain(&format!("  📋 [Pasted {line_count} lines]")));
+                }
+                cleaned.trim().to_string()
+            }
             PromptRead::Interrupted => {
                 println!("Cancelled input. Type !exit to leave Axiom.");
                 continue;
@@ -1997,7 +2011,14 @@ impl TransitionObserver for DurableTransitionWriter {
                     println!("  ⚙ Axiom Tool: executing {}...", request.skill_id)
                 }
                 AgentTransitionKind::ToolCompleted { event, .. } => {
-                    println!("  ✔ Axiom Tool: completed {}", event.request.skill_id)
+                    match &event.status {
+                        ToolExecutionStatus::Succeeded(_) => {
+                            println!("  ✔ Axiom Tool: completed {}", event.request.skill_id);
+                        }
+                        ToolExecutionStatus::Failed(error) => {
+                            println!("  ✖ Axiom Tool: failed {} ({})", event.request.skill_id, error);
+                        }
+                    }
                 }
                 AgentTransitionKind::ReflectQueued { .. } => {
                     println!("  🔍 Axiom: verifying workspace changes...")
@@ -2585,6 +2606,26 @@ fn read_multiline_prompt(
     }
 }
 
+pub(crate) fn clean_pasted_input(input: &str) -> String {
+    let mut cleaned = input
+        .replace("\x1b[200~", "")
+        .replace("\x1b[201~", "")
+        .replace("\u{1b}[200~", "")
+        .replace("\u{1b}[201~", "")
+        .replace("\r\n", "\n")
+        .replace('\r', "");
+
+    while let Some(start) = cleaned.find("\x1b[") {
+        if let Some(end) = cleaned[start..].find('~') {
+            cleaned.replace_range(start..start + end + 1, "");
+        } else {
+            break;
+        }
+    }
+
+    cleaned
+}
+
 pub(crate) fn confirm(label: &str, default: bool) -> Result<bool> {
     let hint = if default { "Y/n" } else { "y/N" };
     loop {
@@ -2600,7 +2641,8 @@ pub(crate) fn confirm(label: &str, default: bool) -> Result<bool> {
             return Ok(false);
         }
 
-        let trimmed = input.trim().to_ascii_lowercase();
+        let cleaned = clean_pasted_input(&input);
+        let trimmed = cleaned.trim().to_ascii_lowercase();
         if trimmed.is_empty() {
             if !io::stdin().is_terminal() {
                 println!("Non-interactive input: please answer y or n explicitly.");
@@ -3238,6 +3280,16 @@ mod tests {
             .and_then(|checkpoint| checkpoint.workspace_checkpoint_reference)
             .is_some());
         let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn clean_pasted_input_strips_bracketed_paste_and_normalizes_crlf() {
+        let raw = "\x1b[200~python -m http.server 8000\r\nline2\x1b[201~";
+        let cleaned = clean_pasted_input(raw);
+        assert_eq!(cleaned, "python -m http.server 8000\nline2");
+
+        let approval_raw = "\x1b[200~y\r\n\x1b[201~";
+        assert_eq!(clean_pasted_input(approval_raw).trim(), "y");
     }
 
     fn unique_temp_dir() -> PathBuf {

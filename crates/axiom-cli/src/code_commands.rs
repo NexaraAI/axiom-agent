@@ -1427,7 +1427,14 @@ impl CoderSession {
         let installed = load_installed_skills(self.skills_dir())?;
         let mut cards = select_relevant_skills(prompt, &installed, max_cards);
 
-        for core_id in &["project.scan", "file.read", "file.write", "web.fetch"] {
+        let platform_shell = if cfg!(windows) {
+            "shell.powershell.safe"
+        } else if cfg!(target_os = "macos") {
+            "shell.zsh.safe"
+        } else {
+            "shell.bash.safe"
+        };
+        for core_id in &["project.scan", "file.read", "file.write", "web.fetch", platform_shell] {
             if !cards.iter().any(|c| c.id == *core_id) {
                 if let Some(skill) = installed.iter().find(|s| s.manifest.id == *core_id) {
                     if skill.record.is_selectable() {

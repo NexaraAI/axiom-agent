@@ -4,6 +4,36 @@ All notable changes to Axiom are documented here. Versions follow semantic
 versioning. Stable releases document user-visible changes, configuration or
 proof migrations, security fixes, and upgrade actions.
 
+## 1.0.5
+
+This release enables autonomous shell command execution, local dev server hosting (e.g. `python -m http.server`, `vite`, `npm run dev`), terminal safe pasting, and accurate tool failure status reporting.
+
+Install it:
+
+```bash
+npm install -g axiom-agent@1.0.5
+```
+
+### New Features & Improvements
+
+- **Autonomous Shell & Terminal Execution (`shell.*` & `python.run`)**:
+  - Registered full `ShellExecutor` in Axiom Engine supporting `shell.powershell.safe` (Windows), `shell.bash.safe` (Linux), `shell.zsh.safe` (macOS), `python.run`, and `shell.run`.
+  - Workspace directory containment via `Workspace::resolve_inside` with credential environment variable sanitization.
+  - Destructive system command protection (blocks disk wipes, system formatting, destructive directory removals).
+- **Background Dev Server & Localhost Hosting**:
+  - Direct support for persistent background daemon execution (`background: true`).
+  - Automatic detection of local dev server commands (`http.server`, `vite`, `npm run dev`, `live-server`, `npx serve`, `next dev`, etc.).
+  - Asynchronous stream capture monitors startup within initial window: if the process starts listening (e.g. `Serving HTTP on ...`, `http://localhost:...`), it detaches to background and returns the running PID and URL to the agent without blocking foreground turns.
+- **Terminal Safe Pasting**:
+  - Clean input sanitizer strips bracketed-paste escape sequences (`\x1b[200~`, `\x1b[201~`) and normalizes CRLF carriage returns across chat, confirmations (`[y/N]`), and onboarding prompts.
+  - Multi-line pasting captures full multi-line code/prompts without premature single-line execution, displaying a clean indicator `📋 [Pasted N lines]`.
+- **Accurate Tool Execution Status**:
+  - Fixed misleading status reporting in CLI: `AgentTransitionKind::ToolCompleted` now accurately distinguishes `✔ Axiom Tool: completed` from `✖ Axiom Tool: failed`.
+- **High-Agency Identity Operating Principles**:
+  - Updated system prompt instructions to prioritize autonomous direct execution of commands, tests, and dev servers over lazily telling the user to run them in their terminal.
+- **Core Skills Fallback**:
+  - Ensured the platform's safe shell skill is always included in the fallback skill cards.
+
 ## 1.0.4
 
 This release fixes terminal line-erasure on streaming completion and adds live streaming visibility for model thinking/reasoning processes.
