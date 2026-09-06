@@ -3291,8 +3291,6 @@ async fn handle_chat_command(session: &mut ChatSession, input: &str) -> Result<C
     }
 }
 
-
-
 fn print_help() {
     println!("Commands (prefix with either '/' or '!'):");
     println!("  /effort [none|low|medium|high|max]  Configure reasoning effort (alias: /tier)");
@@ -4104,11 +4102,15 @@ mod tests {
         assert_eq!(clean_pasted_input(approval_raw).trim(), "y");
     }
 
+    static UNIQUE_DIR_COUNTER: std::sync::atomic::AtomicU64 =
+        std::sync::atomic::AtomicU64::new(0);
+
     fn unique_temp_dir() -> PathBuf {
+        let count = UNIQUE_DIR_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .expect("system time")
             .as_nanos();
-        std::env::temp_dir().join(format!("axiom-cli-chat-test-{nanos}"))
+        std::env::temp_dir().join(format!("axiom-cli-chat-test-{nanos}-{count}"))
     }
 }
