@@ -212,11 +212,19 @@ impl Renderer {
         out.push(self.border(&card_empty));
 
         let commands = [
-            ("/variant", "Select variant (Default, low, medium, high)", true),
+            (
+                "/variant",
+                "Select variant (Default, low, medium, high)",
+                true,
+            ),
             ("/model", "Configure or inspect the active model", false),
             ("/permission", "Switch execution permission mode", false),
             ("/theme", "Switch terminal visual color theme", false),
-            ("/update", "Check and install the latest Axiom version", false),
+            (
+                "/update",
+                "Check and install the latest Axiom version",
+                false,
+            ),
             ("/provider", "Configure or inspect the active LLM", false),
             ("/queue", "Manage pending task queue", false),
             ("/skills", "List and manage installed skills", false),

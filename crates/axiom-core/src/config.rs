@@ -590,11 +590,23 @@ fn default_variant_models() -> BTreeMap<String, BTreeMap<String, String>> {
         (
             "nvidia".to_string(),
             BTreeMap::from([
-                ("default".to_string(), "nvidia/nemotron-3.5-lightning-30b-a3b".to_string()),
+                (
+                    "default".to_string(),
+                    "nvidia/nemotron-3.5-lightning-30b-a3b".to_string(),
+                ),
                 ("low".to_string(), "meta/llama-3.1-8b-instruct".to_string()),
-                ("light".to_string(), "meta/llama-3.1-8b-instruct".to_string()),
-                ("medium".to_string(), "nvidia/nemotron-3.5-lightning-30b-a3b".to_string()),
-                ("high".to_string(), "nvidia/nemotron-4-340b-instruct".to_string()),
+                (
+                    "light".to_string(),
+                    "meta/llama-3.1-8b-instruct".to_string(),
+                ),
+                (
+                    "medium".to_string(),
+                    "nvidia/nemotron-3.5-lightning-30b-a3b".to_string(),
+                ),
+                (
+                    "high".to_string(),
+                    "nvidia/nemotron-4-340b-instruct".to_string(),
+                ),
             ]),
         ),
         (
@@ -620,7 +632,10 @@ fn default_variant_models() -> BTreeMap<String, BTreeMap<String, String>> {
         (
             "anthropic".to_string(),
             BTreeMap::from([
-                ("default".to_string(), "claude-3-7-sonnet-latest".to_string()),
+                (
+                    "default".to_string(),
+                    "claude-3-7-sonnet-latest".to_string(),
+                ),
                 ("low".to_string(), "claude-3-5-haiku-latest".to_string()),
                 ("light".to_string(), "claude-3-5-haiku-latest".to_string()),
                 ("medium".to_string(), "claude-3-7-sonnet-latest".to_string()),

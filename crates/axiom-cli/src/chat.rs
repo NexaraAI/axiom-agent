@@ -390,10 +390,7 @@ impl ChatSession {
             None
         } else {
             let mut opts = std::collections::BTreeMap::new();
-            opts.insert(
-                "reasoning_effort".to_string(),
-                Value::String(normalized),
-            );
+            opts.insert("reasoning_effort".to_string(), Value::String(normalized));
             Some(opts)
         }
     }
@@ -1639,11 +1636,17 @@ impl Completer for AxiomCommandHelper {
             return Ok((start, candidates));
         }
 
-        if let Some(sub) = rest.strip_prefix("variant ").or_else(|| rest.strip_prefix("variants ")) {
+        if let Some(sub) = rest
+            .strip_prefix("variant ")
+            .or_else(|| rest.strip_prefix("variants "))
+        {
             let start = pos - sub.len();
             let mut candidates = Vec::new();
             for opt in &["Default", "low", "medium", "high"] {
-                if opt.to_ascii_lowercase().starts_with(&sub.to_ascii_lowercase()) {
+                if opt
+                    .to_ascii_lowercase()
+                    .starts_with(&sub.to_ascii_lowercase())
+                {
                     candidates.push(Pair {
                         display: opt.to_string(),
                         replacement: opt.to_string(),
@@ -1740,7 +1743,10 @@ impl Hinter for AxiomCommandHelper {
             }
             return None;
         }
-        if let Some(sub) = rest.strip_prefix("variant ").or_else(|| rest.strip_prefix("variants ")) {
+        if let Some(sub) = rest
+            .strip_prefix("variant ")
+            .or_else(|| rest.strip_prefix("variants "))
+        {
             for opt in &["Default", "low", "medium", "high"] {
                 if let Some(suffix) = opt.strip_prefix(sub) {
                     if !suffix.is_empty() {
@@ -2086,7 +2092,9 @@ async fn run_terminal_session(mut session: ChatSession) -> Result<()> {
         if let Some(ref search_query) = orchestrator_plan.web_research_query {
             println!(
                 "{}",
-                ui.orchestrator_notice(&format!("fetching current web knowledge for \"{search_query}\"..."))
+                ui.orchestrator_notice(&format!(
+                    "fetching current web knowledge for \"{search_query}\"..."
+                ))
             );
             if let Some(knowledge) = fetch_web_knowledge(search_query).await {
                 final_prompt = format!("{final_prompt}\n\n[Latest Internet Knowledge & Docs for \"{search_query}\"]:\n{knowledge}\n(Always use latest packages, modern APIs, and clean patterns)");
@@ -2100,12 +2108,7 @@ async fn run_terminal_session(mut session: ChatSession) -> Result<()> {
         };
         let mut live_stream = TerminalStreamRenderer::new(ui);
         let turn_result = session
-            .send_user_message_live(
-                final_prompt,
-                &skill_cards,
-                &mut approval,
-                &mut live_stream,
-            )
+            .send_user_message_live(final_prompt, &skill_cards, &mut approval, &mut live_stream)
             .await;
         live_stream.finish_line();
         let streamed_visible = live_stream.visible_content;
@@ -2169,7 +2172,9 @@ async fn run_terminal_session(mut session: ChatSession) -> Result<()> {
                                 first_test.command
                             ))
                         );
-                        match run_debugger_check(session.workspace_path(), &first_test.command).await {
+                        match run_debugger_check(session.workspace_path(), &first_test.command)
+                            .await
+                        {
                             Ok(true) => {
                                 println!(
                                     "{}",
@@ -2267,7 +2272,10 @@ pub(crate) async fn run_one_shot(command: RunCommand) -> Result<()> {
             .map(|card| card.id.as_str())
             .collect::<Vec<_>>()
             .join(", ");
-        println!("{}", ui.orchestrator_notice(&format!("selected {selected}")));
+        println!(
+            "{}",
+            ui.orchestrator_notice(&format!("selected {selected}"))
+        );
     }
 
     let mut approval = NonInteractiveApprover;
@@ -2902,11 +2910,8 @@ async fn fetch_web_knowledge(query: &str) -> Option<String> {
         .timeout(std::time::Duration::from_secs(5))
         .build()
         .ok()?;
-    let url = reqwest::Url::parse_with_params(
-        "https://html.duckduckgo.com/html/",
-        &[("q", query)],
-    )
-    .ok()?;
+    let url = reqwest::Url::parse_with_params("https://html.duckduckgo.com/html/", &[("q", query)])
+        .ok()?;
     let response = client
         .get(url)
         .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
@@ -2976,10 +2981,9 @@ async fn check_for_startup_update(config: &AxiomConfig) -> Option<(String, Strin
         if let Some(latest) = releases.first() {
             let current = env!("CARGO_PKG_VERSION");
             let tag = latest.tag_name.trim_start_matches('v');
-            if let (Ok(curr_ver), Ok(latest_ver)) = (
-                semver::Version::parse(current),
-                semver::Version::parse(tag),
-            ) {
+            if let (Ok(curr_ver), Ok(latest_ver)) =
+                (semver::Version::parse(current), semver::Version::parse(tag))
+            {
                 if latest_ver > curr_ver {
                     return Some((current.to_string(), tag.to_string()));
                 }
@@ -3036,9 +3040,7 @@ pub(crate) fn extract_mcq_from_text(text: &str) -> Option<ParsedMcq> {
         let filtered_q = question_lines
             .into_iter()
             .filter(|l| {
-                !l.starts_with("**Multiple-Choice")
-                    && !l.starts_with("#")
-                    && !l.starts_with("---")
+                !l.starts_with("**Multiple-Choice") && !l.starts_with("#") && !l.starts_with("---")
             })
             .collect::<Vec<_>>()
             .join(" ");
@@ -3073,6 +3075,7 @@ fn is_mcq_option_line(line: &str, current_count: usize) -> bool {
     {
         return true;
     }
+
     false
 }
 
@@ -3096,13 +3099,7 @@ pub(crate) fn render_interactive_mcq(
     let renderer = crate::ui::Renderer::from_config(&config);
 
     println!();
-    let result = crate::ui::interactive_select(
-        question,
-        options,
-        0,
-        allow_custom,
-        &renderer,
-    );
+    let result = crate::ui::interactive_select(question, options, 0, allow_custom, &renderer);
 
     match result {
         crate::ui::SelectionResult::Selected { index, text } => {
@@ -3357,7 +3354,10 @@ async fn handle_chat_command(session: &mut ChatSession, input: &str) -> Result<C
         }
         "/update" => {
             let ui = Renderer::from_config(&session.config);
-            println!("{}", ui.orchestrator_notice("Checking for updates from GitHub..."));
+            println!(
+                "{}",
+                ui.orchestrator_notice("Checking for updates from GitHub...")
+            );
             if let Some((curr, latest)) = check_for_startup_update(&session.config).await {
                 for line in ui.update_notification_card(&curr, &latest) {
                     println!("{line}");

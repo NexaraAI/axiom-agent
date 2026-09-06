@@ -55,6 +55,7 @@ mod platform {
 #[cfg(not(windows))]
 mod platform {
     use std::io::{self, Read};
+
     use super::Key;
 
     struct RawModeGuard {
@@ -259,7 +260,10 @@ fn render_card(
 
     let title_vis = visible_width(title).min(45);
     let title_display = if visible_width(title) > 45 {
-        format!("{}...", &title[..title.chars().take(42).map(|c| c.len_utf8()).sum()])
+        format!(
+            "{}...",
+            &title[..title.chars().take(42).map(|c| c.len_utf8()).sum()]
+        )
     } else {
         title.to_string()
     };
@@ -280,12 +284,8 @@ fn render_card(
 
     if allow_custom {
         let is_selected = selected_idx == options.len();
-        let line_content = format_option_line(
-            options.len() + 1,
-            "Custom reply...",
-            is_selected,
-            renderer,
-        );
+        let line_content =
+            format_option_line(options.len() + 1, "Custom reply...", is_selected, renderer);
         lines.push(line_content);
     }
 
@@ -297,12 +297,7 @@ fn render_card(
     lines
 }
 
-fn format_option_line(
-    num: usize,
-    text: &str,
-    is_selected: bool,
-    renderer: &Renderer,
-) -> String {
+fn format_option_line(num: usize, text: &str, is_selected: bool, renderer: &Renderer) -> String {
     let raw_content = format!("[{num}] {text}");
     let raw_vis = visible_width(&raw_content);
     let max_text_width: usize = 52;
@@ -327,9 +322,7 @@ fn format_option_line(
 
     if is_selected {
         let padding_spaces = " ".repeat(55_usize.saturating_sub(trunc_vis));
-        let highlighted = format!(
-            "\x1b[48;5;215;38;5;16;1m▌ {truncated}{padding_spaces}\x1b[0m"
-        );
+        let highlighted = format!("\x1b[48;5;215;38;5;16;1m▌ {truncated}{padding_spaces}\x1b[0m");
         pad_card_line(&renderer.border("│"), &highlighted, 58)
     } else {
         let content = format!("  {truncated}");
@@ -390,8 +383,9 @@ fn fallback_select(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use axiom_core::AxiomConfig;
+
+    use super::*;
 
     #[test]
     fn render_card_maintains_65_char_width_across_all_lines() {
@@ -404,7 +398,13 @@ mod tests {
         ];
 
         for selected_idx in 0..options.len() {
-            let lines = render_card("Select Permission Mode", &options, selected_idx, true, &renderer);
+            let lines = render_card(
+                "Select Permission Mode",
+                &options,
+                selected_idx,
+                true,
+                &renderer,
+            );
             for (idx, line) in lines.iter().enumerate() {
                 let vis = visible_width(line);
                 assert_eq!(
