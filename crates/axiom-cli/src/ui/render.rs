@@ -390,27 +390,27 @@ impl Renderer {
         self.paint(self.palette.border, text)
     }
 
-    fn red(&self, text: &str) -> String {
+    pub(crate) fn red(&self, text: &str) -> String {
         self.paint(self.palette.primary, text)
     }
 
-    fn ember(&self, text: &str) -> String {
+    pub(crate) fn ember(&self, text: &str) -> String {
         self.paint(self.palette.warning, text)
     }
 
-    fn ash(&self, text: &str) -> String {
+    pub(crate) fn ash(&self, text: &str) -> String {
         self.paint(self.palette.text, text)
     }
 
-    fn smoke(&self, text: &str) -> String {
+    pub(crate) fn smoke(&self, text: &str) -> String {
         self.paint(self.palette.muted, text)
     }
 
-    fn green(&self, text: &str) -> String {
+    pub(crate) fn green(&self, text: &str) -> String {
         self.paint(self.palette.success, text)
     }
 
-    fn bone(&self, text: &str) -> String {
+    pub(crate) fn bone(&self, text: &str) -> String {
         self.paint(self.palette.text, text)
     }
 

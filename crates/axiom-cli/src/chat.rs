@@ -2740,8 +2740,8 @@ pub(crate) fn render_interactive_mcq(
         });
     }
 
-    let config = AxiomConfig::load_or_default();
-    let renderer = crate::ui::render::Renderer::from_config(&config);
+    let config = AxiomConfig::default();
+    let renderer = crate::ui::Renderer::from_config(&config);
 
     println!();
     println!("{}", renderer.mcq_card(question, options, allow_custom));
