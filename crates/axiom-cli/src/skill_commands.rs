@@ -235,6 +235,7 @@ async fn run_skill(skill_id: &str, args: Option<&str>) -> Result<()> {
         web_fetch_use_system_proxy: config.network.web_fetch_use_system_proxy,
         auto_approve_medium_risk: config.coder.approval_mode == "trusted",
         credential_env_names: crate::credentials::credential_environment_names(&config)?,
+        skills_dir: Some(skills_dir(&config_path, &config)),
     };
     let mut tool_call = new_tool_call(&request.skill_id, request.arguments.to_string());
     if let Some(skill) = installed.iter().find(|skill| skill.manifest.id == skill_id) {

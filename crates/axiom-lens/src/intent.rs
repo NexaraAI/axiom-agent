@@ -262,6 +262,23 @@ pub fn analyze_intent(prompt: &str) -> IntentAnalysis {
         push_candidate(&mut candidates, "shell.zsh.safe");
     }
 
+    if contains_any(
+        &lower,
+        &[
+            "skill",
+            "skills",
+            "personalized skill",
+            "custom skill",
+            "create skill",
+            "new skill",
+            "author skill",
+            "make a skill",
+        ],
+    ) {
+        push_keyword(&mut keywords, "skill");
+        push_candidate(&mut candidates, "skill.create");
+    }
+
     IntentAnalysis {
         original_prompt: prompt.to_string(),
         task_type,
@@ -428,5 +445,13 @@ mod tests {
         assert!(intent
             .candidate_skill_ids
             .contains(&"shell.powershell.safe".to_string()));
+    }
+
+    #[test]
+    fn selects_skill_create_for_custom_skill_requests() {
+        let intent = analyze_intent("create a personalized skill for deploy automation");
+        assert!(intent
+            .candidate_skill_ids
+            .contains(&"skill.create".to_string()));
     }
 }

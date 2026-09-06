@@ -19,8 +19,9 @@ use thiserror::Error;
 
 use crate::{
     check_manifest_compatibility, current_axiom_version, InstalledSkill, Permission, Platform,
-    PolicyAction, PolicyOutcome, SideEffectAuditSink, SideEffectClass, SideEffectDecision,
-    SideEffectPolicy, SideEffectRequest, SkillLifecycleState, SkillType, TrustLevel,
+    PolicyAction, PolicyOutcome, RiskLevel, SideEffectAuditSink, SideEffectClass,
+    SideEffectDecision, SideEffectPolicy, SideEffectRequest, SkillLifecycleState, SkillType,
+    TrustLevel,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -43,6 +44,7 @@ pub struct SkillExecutionContext {
     pub auto_approve_medium_risk: bool,
 
     pub credential_env_names: Vec<String>,
+    pub skills_dir: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -129,6 +131,7 @@ impl ExecutorRegistry {
         registry.register(Box::new(ShellExecutor::zsh()));
         registry.register(Box::new(ShellExecutor::python_run()));
         registry.register(Box::new(ShellExecutor::generic_run()));
+        registry.register(Box::new(SkillCreateExecutor));
         registry
     }
 
@@ -154,6 +157,7 @@ impl ExecutorRegistry {
 
 struct FileReadExecutor;
 struct FileWriteExecutor;
+struct SkillCreateExecutor;
 struct ProjectScanExecutor;
 struct WebFetchExecutor;
 struct GitStatusExecutor;
@@ -182,15 +186,11 @@ impl ShellExecutor {
     }
 
     pub const fn python_run() -> Self {
-        Self {
-            id: "python.run",
-        }
+        Self { id: "python.run" }
     }
 
     pub const fn generic_run() -> Self {
-        Self {
-            id: "shell.run",
-        }
+        Self { id: "shell.run" }
     }
 }
 
@@ -316,6 +316,96 @@ impl SkillExecutor for FileWriteExecutor {
             ),
         )?;
         file_write(request, context)
+    }
+}
+
+#[async_trait(?Send)]
+impl SkillExecutor for SkillCreateExecutor {
+    fn id(&self) -> &'static str {
+        "skill.create"
+    }
+
+    fn descriptor(&self) -> ExecutorDescriptor {
+        ExecutorDescriptor {
+            id: self.id().to_string(),
+            input_schema: json!({
+                "type": "object",
+                "required": ["id", "name", "description", "content"],
+                "additionalProperties": false,
+                "properties": {
+                    "id": { "type": "string", "minLength": 1 },
+                    "name": { "type": "string", "minLength": 1 },
+                    "description": { "type": "string", "minLength": 1 },
+                    "content": { "type": "string", "minLength": 1 },
+                    "skill_type": {
+                        "type": "string",
+                        "enum": ["prompt", "tool", "workflow", "guard"]
+                    },
+                    "when_to_use": {
+                        "type": "array",
+                        "items": { "type": "string" }
+                    },
+                    "tags": {
+                        "type": "array",
+                        "items": { "type": "string" }
+                    }
+                }
+            }),
+            output_schema: json!({
+                "type": "object",
+                "required": ["status", "skill_id", "path", "message"],
+                "additionalProperties": false,
+                "properties": {
+                    "status": { "type": "string" },
+                    "skill_id": { "type": "string" },
+                    "path": { "type": "string" },
+                    "message": { "type": "string" }
+                }
+            }),
+            permissions: vec![Permission::FileSystemWrite],
+            side_effects: vec![SideEffectClass::FilesystemWrite],
+            deterministic_fixture: json!({
+                "id": "custom.fixture",
+                "name": "Custom Fixture",
+                "description": "Fixture skill description",
+                "content": "Fixture content",
+            }),
+        }
+    }
+
+    async fn execute(
+        &self,
+        request: &ToolRequest,
+        context: &SkillExecutionContext,
+        approval: &mut dyn SkillApproval,
+    ) -> Result<Value, SkillExecutionError> {
+        let policy = SideEffectPolicy::backward_compatible(context.auto_approve_medium_risk);
+        let mut audit = crate::NoopSideEffectAuditSink;
+        self.execute_with_policy(request, context, approval, &policy, &mut audit)
+            .await
+    }
+
+    async fn execute_with_policy(
+        &self,
+        request: &ToolRequest,
+        context: &SkillExecutionContext,
+        approval: &mut dyn SkillApproval,
+        policy: &SideEffectPolicy,
+        audit: &mut dyn SideEffectAuditSink,
+    ) -> Result<Value, SkillExecutionError> {
+        let skill_id = string_arg(request, "id")?;
+        authorize_side_effect(
+            policy,
+            audit,
+            approval,
+            SideEffectRequest::new(
+                self.id(),
+                "skill.create",
+                [SideEffectClass::FilesystemWrite],
+                Some(skill_id),
+            ),
+        )?;
+        skill_create(request, context)
     }
 }
 
@@ -696,6 +786,8 @@ pub enum SkillExecutionError {
     ResponseTooLarge { bytes: usize, limit: usize },
     #[error("safe command failed: {0}")]
     CommandFailed(String),
+    #[error("skill `{skill_id}` execution failed: {message}")]
+    ExecutionFailed { skill_id: String, message: String },
 }
 
 pub fn extract_tool_request(text: &str) -> Result<ToolRequest, SkillExecutionError> {
@@ -803,6 +895,124 @@ pub async fn execute_installed_tool(
     .await
 }
 
+pub fn builtin_installed_skill(skill_id: &str) -> Option<InstalledSkill> {
+    let (name, desc, skill_type, risk) = match skill_id {
+        "skill.create" => (
+            "Create Personalized Skill",
+            "Author and install a personalized skill or workflow dynamically mid-conversation",
+            SkillType::Tool,
+            RiskLevel::Low,
+        ),
+        "file.read" => (
+            "Read Workspace File",
+            "Read UTF-8 text files inside the active workspace",
+            SkillType::Tool,
+            RiskLevel::Low,
+        ),
+        "file.write" => (
+            "Write Workspace File",
+            "Writes UTF-8 text files inside the active workspace",
+            SkillType::Tool,
+            RiskLevel::Medium,
+        ),
+        "project.scan" => (
+            "Scan Workspace Project",
+            "Scans workspace directory tree",
+            SkillType::Tool,
+            RiskLevel::Low,
+        ),
+        "web.fetch" => (
+            "Fetch Web Resource",
+            "Fetches web resource over HTTPS",
+            SkillType::Tool,
+            RiskLevel::Low,
+        ),
+        "git.status" => (
+            "Git Working Tree Status",
+            "Reports clean/dirty status in git repository",
+            SkillType::Tool,
+            RiskLevel::Low,
+        ),
+        "git.diff" => (
+            "Git Working Tree Diff",
+            "Displays uncommitted working tree diff",
+            SkillType::Tool,
+            RiskLevel::Low,
+        ),
+        "shell.powershell.safe" | "shell.bash.safe" | "shell.zsh.safe" | "shell.run" => (
+            "Execute Shell Command",
+            "Runs authorized shell commands inside the active workspace",
+            SkillType::Tool,
+            RiskLevel::Medium,
+        ),
+        "python.run" => (
+            "Run Python Script",
+            "Runs python scripts inside the active workspace",
+            SkillType::Tool,
+            RiskLevel::Medium,
+        ),
+        _ => return None,
+    };
+
+    Some(InstalledSkill {
+        record: crate::InstalledSkillRecord {
+            id: skill_id.to_string(),
+            version: semver::Version::new(1, 0, 0),
+            installed_at: "builtin".to_string(),
+            updated_at: None,
+            source: "builtin".to_string(),
+            registry_url: None,
+            manifest_url: None,
+            checksum: None,
+            enabled: true,
+            state: SkillLifecycleState::Enabled,
+            trust_level: TrustLevel::Trusted,
+            last_checked_at: None,
+            last_update_error: None,
+            last_runtime_error: None,
+            success_count: 0,
+            failure_count: 0,
+            last_used_at: None,
+            average_latency_ms: None,
+        },
+        manifest: crate::SkillManifest {
+            schema_version: "1.0".to_string(),
+            id: skill_id.to_string(),
+            name: name.to_string(),
+            version: semver::Version::new(1, 0, 0),
+            description: desc.to_string(),
+            category: "builtin".to_string(),
+            skill_type,
+            risk_level: risk,
+            permissions: vec![],
+            platforms: vec![Platform::Windows, Platform::Linux, Platform::Macos],
+            entrypoint: format!("builtin:{skill_id}"),
+            author: "Axiom Agent".to_string(),
+            license: "MIT".to_string(),
+            min_axiom_version: semver::Version::new(0, 1, 0),
+            max_axiom_version: None,
+            depends_on: vec![],
+            provides: vec![],
+            hooks: crate::manifest::SkillHooks::default(),
+            side_effects: vec![],
+            idempotent: false,
+            cache_key: None,
+            examples: vec![],
+            keywords: vec![],
+            llm_card: Some(crate::manifest::LlmCardManifest {
+                summary: desc.to_string(),
+                when_to_use: vec![],
+                input_contract: "standard".to_string(),
+                output_contract: "standard".to_string(),
+                token_budget: 300,
+            }),
+            updates: crate::manifest::UpdatePolicy::default(),
+            input_schema: toml::Value::Table(toml::map::Map::new()),
+            output_schema: toml::Value::Table(toml::map::Map::new()),
+        },
+    })
+}
+
 pub async fn execute_installed_tool_with_policy(
     request: &ToolRequest,
     installed_skills: &[InstalledSkill],
@@ -811,10 +1021,26 @@ pub async fn execute_installed_tool_with_policy(
     policy: &SideEffectPolicy,
     audit: &mut dyn SideEffectAuditSink,
 ) -> Result<SkillExecutionResult, SkillExecutionError> {
-    let skill = installed_skills
+    let synthetic_builtin;
+    let skill = match installed_skills
         .iter()
-        .find(|skill| skill.manifest.id == request.skill_id)
-        .ok_or_else(|| SkillExecutionError::SkillNotInstalled(request.skill_id.clone()))?;
+        .find(|s| s.manifest.id == request.skill_id)
+    {
+        Some(s) => s,
+        None => {
+            let registry = ExecutorRegistry::with_builtin_executors();
+            if registry.get(&request.skill_id).is_some() {
+                synthetic_builtin = builtin_installed_skill(&request.skill_id);
+                synthetic_builtin.as_ref().ok_or_else(|| {
+                    SkillExecutionError::SkillNotInstalled(request.skill_id.clone())
+                })?
+            } else {
+                return Err(SkillExecutionError::SkillNotInstalled(
+                    request.skill_id.clone(),
+                ));
+            }
+        }
+    };
 
     if !skill.record.is_executable() {
         return Err(SkillExecutionError::SkillBlocked {
@@ -932,10 +1158,12 @@ fn file_read(
     }
 
     let content = fs::read_to_string(&resolved)?;
+    let lines = content.lines().count();
     Ok(json!({
         "path": path,
         "content": content,
         "bytes": metadata.len(),
+        "lines": lines,
     }))
 }
 
@@ -951,15 +1179,102 @@ fn file_write(
     block_secret_path(&resolved)?;
     let created = !resolved.exists();
 
+    let old_content = if resolved.exists() {
+        fs::read_to_string(&resolved).ok()
+    } else {
+        None
+    };
+
     if let Some(parent) = resolved.parent() {
         fs::create_dir_all(parent)?;
     }
     atomic_write(&resolved, content.as_bytes())?;
 
+    let total_lines = content.lines().count();
+    let (lines_added, lines_deleted) = if let Some(ref old) = old_content {
+        let old_lines: Vec<&str> = old.lines().collect();
+        let new_lines: Vec<&str> = content.lines().collect();
+        let old_set: BTreeSet<&str> = old_lines.iter().copied().collect();
+        let new_set: BTreeSet<&str> = new_lines.iter().copied().collect();
+        let added = new_lines.iter().filter(|l| !old_set.contains(*l)).count();
+        let deleted = old_lines.iter().filter(|l| !new_set.contains(*l)).count();
+        (added, deleted)
+    } else {
+        (total_lines, 0)
+    };
+
     Ok(json!({
         "path": path,
         "bytes_written": content.len(),
         "created": created,
+        "lines": total_lines,
+        "lines_added": lines_added,
+        "lines_deleted": lines_deleted,
+    }))
+}
+
+fn skill_create(
+    request: &ToolRequest,
+    context: &SkillExecutionContext,
+) -> Result<Value, SkillExecutionError> {
+    let id = string_arg(request, "id")?;
+    let name = string_arg(request, "name")?;
+    let description = string_arg(request, "description")?;
+    let content = string_arg(request, "content")?;
+    let skill_type = request.arguments.get("skill_type").and_then(Value::as_str);
+    let when_to_use = request
+        .arguments
+        .get("when_to_use")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::to_string)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let tags = request
+        .arguments
+        .get("tags")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::to_string)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+
+    let target_skills_dir = context
+        .skills_dir
+        .clone()
+        .unwrap_or_else(|| context.workspace_root.join(".axiom").join("skills"));
+
+    let skill_folder = crate::installed::create_personalized_skill(
+        &target_skills_dir,
+        &id,
+        &name,
+        &description,
+        skill_type,
+        &content,
+        &when_to_use,
+        &tags,
+    )
+    .map_err(|err| SkillExecutionError::ExecutionFailed {
+        skill_id: "skill.create".to_string(),
+        message: err.to_string(),
+    })?;
+
+    Ok(json!({
+        "status": "success",
+        "skill_id": id,
+        "path": skill_folder.display().to_string(),
+        "message": format!(
+            "Personalized skill '{id}' created at {} and registered for use.",
+            skill_folder.display()
+        )
     }))
 }
 
@@ -2162,6 +2477,7 @@ mod tests {
                 "shell.powershell.safe",
                 "shell.run",
                 "shell.zsh.safe",
+                "skill.create",
                 "web.fetch",
             ]
         );
@@ -2170,7 +2486,7 @@ mod tests {
     #[test]
     fn every_builtin_executor_has_complete_schema_policy_and_fixture_metadata() {
         let descriptors = ExecutorRegistry::with_builtin_executors().descriptors();
-        assert_eq!(descriptors.len(), 11);
+        assert_eq!(descriptors.len(), 12);
         for descriptor in descriptors {
             assert!(descriptor.is_complete(), "incomplete: {}", descriptor.id);
             assert!(descriptor.input_schema.is_object());
@@ -2192,10 +2508,18 @@ mod tests {
         assert!(!is_dev_server_command("cargo test"));
         assert!(!is_dev_server_command("npm test"));
 
-        assert!(is_server_listening_output("Serving HTTP on 0.0.0.0 port 8000 (http://0.0.0.0:8000/) ..."));
-        assert!(is_server_listening_output("  ➜  Local:   http://localhost:5173/"));
-        assert!(is_server_listening_output("Available on: http://127.0.0.1:8080"));
-        assert!(!is_server_listening_output("test result: ok. 0 passed; 0 failed"));
+        assert!(is_server_listening_output(
+            "Serving HTTP on 0.0.0.0 port 8000 (http://0.0.0.0:8000/) ..."
+        ));
+        assert!(is_server_listening_output(
+            "  ➜  Local:   http://localhost:5173/"
+        ));
+        assert!(is_server_listening_output(
+            "Available on: http://127.0.0.1:8080"
+        ));
+        assert!(!is_server_listening_output(
+            "test result: ok. 0 passed; 0 failed"
+        ));
     }
 
     #[test]
@@ -2798,6 +3122,84 @@ min_axiom_version = "0.1.0"
             web_fetch_use_system_proxy: false,
             auto_approve_medium_risk: false,
             credential_env_names: Vec::new(),
+            skills_dir: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn skill_create_executor_creates_skill_and_updates_manifest() {
+        let dir = unique_temp_dir();
+        let workspace = dir.join("workspace");
+        let skills_dir = dir.join("skills");
+        fs::create_dir_all(&workspace).expect("workspace dir");
+        fs::create_dir_all(&skills_dir).expect("skills dir");
+
+        let mut ctx = context(&workspace);
+        ctx.skills_dir = Some(skills_dir.clone());
+        ctx.auto_approve_medium_risk = true;
+
+        let registry = ExecutorRegistry::with_builtin_executors();
+        let executor = registry
+            .get("skill.create")
+            .expect("skill.create registered");
+
+        let request = ToolRequest {
+            skill_id: "skill.create".to_string(),
+            arguments: json!({
+                "id": "project.test_helper",
+                "name": "Project Test Helper",
+                "description": "Helps running custom tests",
+                "content": "Step 1: Check tests. Step 2: Run them.",
+                "skill_type": "workflow",
+                "when_to_use": ["user asks to test helper"],
+                "tags": ["testing", "workflow"]
+            }),
+        };
+
+        let mut approval = AllowAllApprover;
+        let policy = SideEffectPolicy::allow_all();
+        let mut audit = crate::NoopSideEffectAuditSink;
+
+        let output = executor
+            .execute_with_policy(&request, &ctx, &mut approval, &policy, &mut audit)
+            .await
+            .expect("execute skill.create");
+
+        assert_eq!(
+            output.get("status").and_then(Value::as_str),
+            Some("success")
+        );
+        assert_eq!(
+            output.get("skill_id").and_then(Value::as_str),
+            Some("project.test_helper")
+        );
+
+        let skill_folder = skills_dir.join("project.test_helper");
+        assert!(skill_folder.join("skill.toml").exists());
+        assert!(skill_folder.join("SKILL.md").exists());
+
+        let installed = crate::InstalledSkills::load_from_dir(&skills_dir).expect("load installed");
+        assert!(installed.skills.contains_key("project.test_helper"));
+
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn builtin_installed_skill_provides_executable_synthetic_skills() {
+        for builtin_id in &[
+            "skill.create",
+            "file.read",
+            "file.write",
+            "project.scan",
+            "web.fetch",
+            "shell.powershell.safe",
+            "shell.bash.safe",
+            "python.run",
+        ] {
+            let skill = builtin_installed_skill(builtin_id).expect("builtin skill found");
+            assert_eq!(skill.manifest.id, *builtin_id);
+            assert!(skill.record.is_executable());
+            assert_eq!(skill.manifest.skill_type, SkillType::Tool);
         }
     }
 

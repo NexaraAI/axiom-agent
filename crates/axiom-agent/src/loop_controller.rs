@@ -899,6 +899,7 @@ mod tests {
             web_fetch_use_system_proxy: false,
             auto_approve_medium_risk: false,
             credential_env_names: Vec::new(),
+            skills_dir: None,
         }
     }
 

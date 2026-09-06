@@ -1197,7 +1197,8 @@ fn prompt(label: &str) -> Result<String> {
     if bytes == 0 {
         bail!("end of input while waiting for an answer (are you piping stdin? run onboarding in a terminal)");
     }
-    Ok(input.trim().to_string())
+    let cleaned = crate::chat::clean_pasted_input(&input);
+    Ok(cleaned.trim().to_string())
 }
 
 pub(crate) fn materialize_embedded_registry(config_path: &Path) -> Result<PathBuf> {

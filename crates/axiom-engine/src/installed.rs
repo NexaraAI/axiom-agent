@@ -459,7 +459,7 @@ fn update_skill_record(
     Ok(Some(record))
 }
 
-fn validate_skill_id(skill_id: &str) -> Result<()> {
+pub fn validate_skill_id(skill_id: &str) -> Result<()> {
     if skill_id.trim().is_empty()
         || skill_id.contains('/')
         || skill_id.contains('\\')
@@ -469,6 +469,105 @@ fn validate_skill_id(skill_id: &str) -> Result<()> {
         return Err(InstalledSkillError::InvalidSkillId(skill_id.to_string()));
     }
     Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn create_personalized_skill(
+    skills_dir: impl AsRef<Path>,
+    id: &str,
+    name: &str,
+    description: &str,
+    skill_type: Option<&str>,
+    content: &str,
+    when_to_use: &[String],
+    tags: &[String],
+) -> Result<PathBuf> {
+    validate_skill_id(id)?;
+    let skills_dir = skills_dir.as_ref();
+    let skill_folder = skills_dir.join(id);
+    fs::create_dir_all(&skill_folder)?;
+
+    let type_str = match skill_type.map(|s| s.trim().to_ascii_lowercase()) {
+        Some(ref s) if s == "tool" => "tool",
+        Some(ref s) if s == "workflow" => "workflow",
+        Some(ref s) if s == "guard" => "guard",
+        _ => "prompt",
+    };
+
+    let when_to_use_items = if when_to_use.is_empty() {
+        format!("\"User requests {}\"", name.replace('"', "\\\""))
+    } else {
+        when_to_use
+            .iter()
+            .map(|item| format!("\"{}\"", item.replace('"', "\\\"")))
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+
+    let keywords_items = tags
+        .iter()
+        .map(|item| format!("\"{}\"", item.replace('"', "\\\"")))
+        .collect::<Vec<_>>()
+        .join(", ");
+
+    let manifest_content = format!(
+        r#"schema_version = "1.0"
+id = "{id}"
+name = "{name}"
+version = "0.1.0"
+description = "{description}"
+category = "personalized"
+skill_type = "{type_str}"
+risk_level = "low"
+permissions = []
+platforms = ["windows", "linux", "macos"]
+entrypoint = "SKILL.md"
+author = "axiom-agent"
+license = "MIT"
+min_axiom_version = "0.1.0"
+keywords = [{keywords_items}]
+
+[llm_card]
+summary = "{description}"
+when_to_use = [{when_to_use_items}]
+input_contract = "standard"
+output_contract = "standard"
+token_budget = 350
+"#
+    );
+
+    let manifest_path = skill_folder.join("skill.toml");
+    atomic_write(&manifest_path, manifest_content.as_bytes())?;
+
+    let readme_path = skill_folder.join("SKILL.md");
+    let skill_doc = format!("# {name}\n\n{description}\n\n{content}\n");
+    atomic_write(&readme_path, skill_doc.as_bytes())?;
+
+    let mut installed = InstalledSkills::load_from_dir(skills_dir)?;
+    let record = InstalledSkillRecord {
+        id: id.to_string(),
+        version: Version::new(0, 1, 0),
+        installed_at: now_timestamp(),
+        updated_at: None,
+        source: "personalized".to_string(),
+        registry_url: None,
+        manifest_url: None,
+        checksum: None,
+        enabled: true,
+        state: SkillLifecycleState::Enabled,
+        trust_level: TrustLevel::Trusted,
+        last_checked_at: None,
+        last_update_error: None,
+        last_runtime_error: None,
+        success_count: 0,
+        failure_count: 0,
+        last_used_at: None,
+        average_latency_ms: None,
+    };
+    installed.upsert(record);
+    installed.save_to_dir(skills_dir)?;
+
+    Ok(skill_folder)
 }
 
 pub(crate) fn now_timestamp() -> String {
@@ -700,6 +799,46 @@ min_axiom_version = "{min_axiom_version}"
             ),
         )
         .expect("skill toml");
+    }
+
+    #[test]
+    fn creates_and_persists_personalized_skill() {
+        let dir = unique_temp_dir();
+        let skills_dir = dir.join("skills");
+        let skill_folder = create_personalized_skill(
+            &skills_dir,
+            "custom.helper",
+            "Custom Helper",
+            "A test helper",
+            Some("prompt"),
+            "Use this skill to assist with helper tasks.",
+            &["When user asks for helper".to_string()],
+            &["test".to_string()],
+        )
+        .expect("create personalized skill");
+
+        assert!(skill_folder.exists());
+        assert!(skill_folder.join("skill.toml").exists());
+        assert!(skill_folder.join("SKILL.md").exists());
+
+        let installed = InstalledSkills::load_from_dir(&skills_dir).expect("load installed");
+        let record = installed
+            .skills
+            .get("custom.helper")
+            .expect("record present");
+        assert_eq!(record.id, "custom.helper");
+        assert_eq!(record.source, "personalized");
+        assert!(record.enabled);
+        assert_eq!(record.trust_level, TrustLevel::Trusted);
+
+        let loaded = load_installed_skills(&skills_dir).expect("load installed skills");
+        let loaded_skill = loaded
+            .iter()
+            .find(|s| s.record.id == "custom.helper")
+            .expect("found");
+        assert_eq!(loaded_skill.manifest.name, "Custom Helper");
+
+        let _ = fs::remove_dir_all(dir);
     }
 
     fn unique_temp_dir() -> PathBuf {

@@ -119,19 +119,29 @@ impl Renderer {
         format!("{} {}", self.smoke("◈ Axiom Lens:"), self.bone(message))
     }
 
+    #[allow(dead_code)]
     pub(crate) fn tool_notice(&self, skill_id: &str, high_risk: bool) -> String {
+        self.tool_notice_with_summary(skill_id, high_risk, None)
+    }
+
+    pub(crate) fn tool_notice_with_summary(
+        &self,
+        skill_id: &str,
+        high_risk: bool,
+        summary: Option<&str>,
+    ) -> String {
+        let detail = match summary {
+            Some(s) if !s.is_empty() => format!("executed {skill_id} → {s}"),
+            _ => format!("executed {skill_id}"),
+        };
         if high_risk {
             format!(
                 "  {} {}",
                 self.ember("▲ [HIGH RISK] Axiom Tool:"),
-                self.bone(&format!("executed {skill_id}"))
+                self.bone(&detail)
             )
         } else {
-            format!(
-                "  {} {}",
-                self.green("✔ Axiom Tool:"),
-                self.bone(&format!("executed {skill_id}"))
-            )
+            format!("  {} {}", self.green("✔ Axiom Tool:"), self.bone(&detail))
         }
     }
 

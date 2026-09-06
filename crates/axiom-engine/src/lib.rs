@@ -8,13 +8,13 @@ pub mod registry;
 pub mod updater;
 
 pub use executor::{
-    authorize_side_effect, execute_installed_tool, execute_installed_tool_with_policy,
-    extract_tool_request, AllowAllApprover, ApprovalRequest, DenyAllApprover, ExecutorDescriptor,
-    ExecutorRegistry, SkillApproval, SkillExecutionContext, SkillExecutionError,
-    SkillExecutionResult, SkillExecutor, ToolRequest,
+    authorize_side_effect, builtin_installed_skill, execute_installed_tool,
+    execute_installed_tool_with_policy, extract_tool_request, AllowAllApprover, ApprovalRequest,
+    DenyAllApprover, ExecutorDescriptor, ExecutorRegistry, SkillApproval, SkillExecutionContext,
+    SkillExecutionError, SkillExecutionResult, SkillExecutor, ToolRequest,
 };
 pub use installed::{
-    disable_skill, enable_skill, install_bundle_from_local_registry,
+    create_personalized_skill, disable_skill, enable_skill, install_bundle_from_local_registry,
     install_bundle_from_registry_client, install_skill_from_local_registry,
     install_skill_from_registry_client, load_installed_skills, mark_skill_update_failed,
     record_skill_execution_failure, record_skill_execution_success, remove_skill,

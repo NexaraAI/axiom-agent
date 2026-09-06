@@ -800,7 +800,7 @@ impl CoderSession {
                 }),
             };
             let mut audit = RecordingSideEffectAuditSink::default();
-            execute_installed_tool_with_policy(
+            let execution_result = execute_installed_tool_with_policy(
                 &request,
                 &installed_skills,
                 &execution_context,
@@ -809,6 +809,9 @@ impl CoderSession {
                 &mut audit,
             )
             .await?;
+            let summary =
+                crate::chat::format_tool_result_summary("file.write", &execution_result.output);
+            println!("  ✔ Axiom: {summary}");
             crate::side_effects::record_audit(proof, audit);
             proof.record_file_write(FileWriteProof {
                 event_id: axiom_proof::trace::new_event_id("write"),
@@ -1434,12 +1437,21 @@ impl CoderSession {
         } else {
             "shell.bash.safe"
         };
-        for core_id in &["project.scan", "file.read", "file.write", "web.fetch", platform_shell] {
+        for core_id in &[
+            "project.scan",
+            "file.read",
+            "file.write",
+            "web.fetch",
+            "skill.create",
+            platform_shell,
+        ] {
             if !cards.iter().any(|c| c.id == *core_id) {
                 if let Some(skill) = installed.iter().find(|s| s.manifest.id == *core_id) {
                     if skill.record.is_selectable() {
                         cards.push(skill.manifest.to_skill_card());
                     }
+                } else if let Some(builtin) = axiom_engine::builtin_installed_skill(core_id) {
+                    cards.push(builtin.manifest.to_skill_card());
                 }
             }
         }
@@ -1593,6 +1605,7 @@ impl CoderSession {
             web_fetch_use_system_proxy: self.config.network.web_fetch_use_system_proxy,
             auto_approve_medium_risk: false,
             credential_env_names: self.credential_env_names.clone(),
+            skills_dir: Some(self.skills_dir()),
         }
     }
 
@@ -1649,7 +1662,8 @@ fn prompt_apply_choice() -> Result<ApplyChoice> {
         io::stdout().flush()?;
         let mut input = String::new();
         io::stdin().read_line(&mut input)?;
-        match input.trim().to_ascii_lowercase().as_str() {
+        let cleaned = crate::chat::clean_pasted_input(&input);
+        match cleaned.trim().to_ascii_lowercase().as_str() {
             "" | "1" | "y" | "yes" | "a" | "apply" => return Ok(ApplyChoice::Apply),
             "2" | "e" | "edit" | "r" | "revise" => return Ok(ApplyChoice::Edit),
             "3" | "c" | "cancel" | "n" | "no" | "q" | "quit" => return Ok(ApplyChoice::Cancel),
@@ -1663,7 +1677,8 @@ fn prompt_plan_revision() -> Result<String> {
     io::stdout().flush()?;
     let mut input = String::new();
     io::stdin().read_line(&mut input)?;
-    Ok(input.trim().to_string())
+    let cleaned = crate::chat::clean_pasted_input(&input);
+    Ok(cleaned.trim().to_string())
 }
 
 fn print_scan_summary(scan: &ProjectScanSummary) {
@@ -1715,7 +1730,8 @@ fn choose_test_command(commands: &[TestCommand]) -> Result<&TestCommand> {
         io::stdout().flush()?;
         let mut input = String::new();
         io::stdin().read_line(&mut input)?;
-        if let Ok(index) = input.trim().parse::<usize>() {
+        let cleaned = crate::chat::clean_pasted_input(&input);
+        if let Ok(index) = cleaned.trim().parse::<usize>() {
             if let Some(command) = commands.get(index.saturating_sub(1)) {
                 return Ok(command);
             }

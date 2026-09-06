@@ -40,6 +40,7 @@ use axiom_proof::{
 };
 use axiom_upd::{parse_version, UpdateDirs, UpdatePolicy, UpdateState};
 use rustyline::{error::ReadlineError, Config as ReadlineConfig, DefaultEditor};
+use serde_json::Value;
 
 use crate::{
     startup::StartupRoute,
@@ -268,12 +269,11 @@ impl ChatSession {
         prompt: &str,
         max_cards: usize,
     ) -> Result<Vec<SkillCard>> {
+        if !self.lens_enabled {
+            return Ok(Vec::new());
+        }
         let installed = load_installed_skills(self.skills_dir())?;
-        let mut cards = if self.lens_enabled {
-            select_relevant_skills(prompt, &installed, max_cards)
-        } else {
-            Vec::new()
-        };
+        let mut cards = select_relevant_skills(prompt, &installed, max_cards);
 
         let platform_shell = if cfg!(windows) {
             "shell.powershell.safe"
@@ -282,12 +282,21 @@ impl ChatSession {
         } else {
             "shell.bash.safe"
         };
-        for core_id in &["project.scan", "file.read", "file.write", "web.fetch", platform_shell] {
+        for core_id in &[
+            "project.scan",
+            "file.read",
+            "file.write",
+            "web.fetch",
+            "skill.create",
+            platform_shell,
+        ] {
             if !cards.iter().any(|c| c.id == *core_id) {
                 if let Some(skill) = installed.iter().find(|s| s.manifest.id == *core_id) {
                     if skill.record.is_selectable() {
                         cards.push(skill.manifest.to_skill_card());
                     }
+                } else if let Some(builtin) = axiom_engine::builtin_installed_skill(core_id) {
+                    cards.push(builtin.manifest.to_skill_card());
                 }
             }
         }
@@ -1099,6 +1108,7 @@ impl ChatSession {
             web_fetch_use_system_proxy: self.config.network.web_fetch_use_system_proxy,
             auto_approve_medium_risk: self.config.coder.approval_mode == "trusted",
             credential_env_names: self.credential_env_names.clone(),
+            skills_dir: Some(self.skills_dir()),
         }
     }
 
@@ -1744,8 +1754,12 @@ pub(crate) async fn run_one_shot(command: RunCommand) -> Result<()> {
         tool_results,
         runtime,
     } = turn;
-    for result in tool_results {
-        println!("{}", ui.tool_notice(&result.skill_id, false));
+    for result in &tool_results {
+        let summary = format_tool_result_summary(&result.skill_id, &result.output);
+        println!(
+            "{}",
+            ui.tool_notice_with_summary(&result.skill_id, false, Some(&summary))
+        );
     }
     println!("{}", ui.plain(&content));
     if let Some(runtime) = runtime {
@@ -2008,18 +2022,62 @@ impl TransitionObserver for DurableTransitionWriter {
                     );
                 }
                 AgentTransitionKind::ToolStarted { request, .. } => {
-                    println!("  ⚙ Axiom Tool: executing {}...", request.skill_id)
-                }
-                AgentTransitionKind::ToolCompleted { event, .. } => {
-                    match &event.status {
-                        ToolExecutionStatus::Succeeded(_) => {
-                            println!("  ✔ Axiom Tool: completed {}", event.request.skill_id);
-                        }
-                        ToolExecutionStatus::Failed(error) => {
-                            println!("  ✖ Axiom Tool: failed {} ({})", event.request.skill_id, error);
-                        }
+                    let target = match request.skill_id.as_str() {
+                        "file.read" => request
+                            .arguments
+                            .get("path")
+                            .and_then(Value::as_str)
+                            .map(|p| format!(" `{p}`")),
+                        "file.write" => request
+                            .arguments
+                            .get("path")
+                            .and_then(Value::as_str)
+                            .map(|p| format!(" `{p}`")),
+                        "shell.powershell.safe"
+                        | "shell.bash.safe"
+                        | "shell.zsh.safe"
+                        | "shell.run" => request
+                            .arguments
+                            .get("command")
+                            .and_then(Value::as_str)
+                            .map(|c| {
+                                if c.len() > 40 {
+                                    format!(" `{}...`", &c[..37])
+                                } else {
+                                    format!(" `{c}`")
+                                }
+                            }),
+                        "skill.create" => request
+                            .arguments
+                            .get("id")
+                            .and_then(Value::as_str)
+                            .map(|id| format!(" `{id}`")),
+                        "web.fetch" => request
+                            .arguments
+                            .get("url")
+                            .and_then(Value::as_str)
+                            .map(|u| format!(" `{u}`")),
+                        _ => None,
                     }
+                    .unwrap_or_default();
+                    println!("  ⚙ Axiom Tool: executing {}{target}...", request.skill_id);
                 }
+                AgentTransitionKind::ToolCompleted { event, .. } => match &event.status {
+                    ToolExecutionStatus::Succeeded(result) => {
+                        let summary =
+                            format_tool_result_summary(&event.request.skill_id, &result.output);
+                        println!(
+                            "  ✔ Axiom Tool: completed {} → {}",
+                            event.request.skill_id, summary
+                        );
+                    }
+                    ToolExecutionStatus::Failed(error) => {
+                        println!(
+                            "  ✖ Axiom Tool: failed {} ({})",
+                            event.request.skill_id, error
+                        );
+                    }
+                },
                 AgentTransitionKind::ReflectQueued { .. } => {
                     println!("  🔍 Axiom: verifying workspace changes...")
                 }
@@ -2027,6 +2085,96 @@ impl TransitionObserver for DurableTransitionWriter {
             }
         }
         Ok(())
+    }
+}
+
+pub(crate) fn format_tool_result_summary(skill_id: &str, output: &serde_json::Value) -> String {
+    match skill_id {
+        "file.write" => {
+            let path = output.get("path").and_then(Value::as_str).unwrap_or("file");
+            let created = output
+                .get("created")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            let bytes = output
+                .get("bytes_written")
+                .and_then(Value::as_u64)
+                .unwrap_or(0);
+            let added = output
+                .get("lines_added")
+                .and_then(Value::as_u64)
+                .unwrap_or(0);
+            let deleted = output
+                .get("lines_deleted")
+                .and_then(Value::as_u64)
+                .unwrap_or(0);
+            let total = output.get("lines").and_then(Value::as_u64).unwrap_or(0);
+
+            let action = if created { "created" } else { "updated" };
+            let mut parts = Vec::new();
+            if added > 0 {
+                parts.push(format!("+{added} lines"));
+            }
+            if deleted > 0 {
+                parts.push(format!("-{deleted} lines"));
+            }
+            if parts.is_empty() && total > 0 {
+                parts.push(format!("{total} lines"));
+            }
+            let diff = if parts.is_empty() {
+                format!("{bytes} bytes")
+            } else {
+                format!("{}, {bytes} bytes", parts.join(", "))
+            };
+            format!("{action} `{path}` ({diff})")
+        }
+        "file.read" => {
+            let path = output.get("path").and_then(Value::as_str).unwrap_or("file");
+            let bytes = output.get("bytes").and_then(Value::as_u64).unwrap_or(0);
+            let lines = output.get("lines").and_then(Value::as_u64).unwrap_or(0);
+            if lines > 0 {
+                format!("read `{path}` ({lines} lines, {bytes} bytes)")
+            } else {
+                format!("read `{path}` ({bytes} bytes)")
+            }
+        }
+        "shell.powershell.safe" | "shell.bash.safe" | "shell.zsh.safe" | "shell.run" => {
+            if let Some(url) = output.get("listening_url").and_then(Value::as_str) {
+                format!("started server (listening on {url})")
+            } else if let Some(code) = output.get("exit_code").and_then(Value::as_i64) {
+                format!("process finished with exit code {code}")
+            } else {
+                "completed command".to_string()
+            }
+        }
+        "python.run" => {
+            if let Some(code) = output.get("exit_code").and_then(Value::as_i64) {
+                format!("python script finished with exit code {code}")
+            } else {
+                "python script completed".to_string()
+            }
+        }
+        "skill.create" => {
+            let id = output
+                .get("skill_id")
+                .and_then(Value::as_str)
+                .unwrap_or("skill");
+            format!("created & installed personalized skill `{id}`")
+        }
+        "project.scan" => {
+            let count = output
+                .get("files")
+                .and_then(Value::as_array)
+                .map(|f| f.len())
+                .unwrap_or(0);
+            format!("scanned project structure ({count} files indexed)")
+        }
+        "web.fetch" => {
+            let url = output.get("url").and_then(Value::as_str).unwrap_or("url");
+            let bytes = output.get("bytes").and_then(Value::as_u64).unwrap_or(0);
+            format!("fetched `{url}` ({bytes} bytes)")
+        }
+        _ => "completed".to_string(),
     }
 }
 
@@ -2601,7 +2749,7 @@ fn read_multiline_prompt(
                 writeln!(writer, "Multiline prompt cancelled.")?;
                 return Ok(MultilineRead::Cancelled);
             }
-            _ => lines.push(line.to_string()),
+            _ => lines.push(clean_pasted_input(line)),
         }
     }
 }
