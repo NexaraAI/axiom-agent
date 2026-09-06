@@ -3715,6 +3715,10 @@ async fn handle_chat_command(session: &mut ChatSession, input: &str) -> Result<C
                 for line in ui.update_notification_card(&curr, &latest) {
                     println!("{line}");
                 }
+                println!();
+                println!("  To upgrade to v{latest}:");
+                println!("    npm install -g axiom-agent@latest");
+                println!();
             } else {
                 println!(
                     "{}",

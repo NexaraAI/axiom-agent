@@ -341,7 +341,7 @@ impl Renderer {
         let border_bottom = "  └─────────────────────────────────────────────────────────────┘";
         let border_empty = pad_card_line("│", "", 58);
         let msg = format!("A new version of Axiom is available: v{current} -> v{latest}");
-        let cmd = "Run /update or npm install -g @nexara/axiom-agent to upgrade";
+        let cmd = "Run npm install -g axiom-agent to upgrade";
         let line1 = pad_card_line(&self.border("│"), &self.accent(&msg), 58);
         let line2 = pad_card_line(&self.border("│"), &self.bone(cmd), 58);
         vec![

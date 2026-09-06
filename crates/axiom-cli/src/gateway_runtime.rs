@@ -177,7 +177,7 @@ pub(crate) async fn respond_with_session(session: &mut ChatSession, text: &str) 
                     ) {
                         if axiom_upd::is_newer_version(&curr_ver, &latest_ver) {
                             return format!(
-                                "Update available: v{curr_ver} -> v{tag}\nRun `axiom update` or `npm i -g @nexara/axiom` to update."
+                                "Update available: v{curr_ver} -> v{tag}\nRun `axiom update` or `npm i -g axiom-agent` to update."
                             );
                         }
                     }
