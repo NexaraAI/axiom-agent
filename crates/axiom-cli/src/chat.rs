@@ -2984,9 +2984,10 @@ async fn check_for_startup_update(config: &AxiomConfig) -> Option<(String, Strin
         if let Some(latest) = releases.first() {
             let current = env!("CARGO_PKG_VERSION");
             let tag = latest.tag_name.trim_start_matches('v');
-            if let (Ok(curr_ver), Ok(latest_ver)) =
-                (axiom_upd::parse_version(current), axiom_upd::parse_version(tag))
-            {
+            if let (Ok(curr_ver), Ok(latest_ver)) = (
+                axiom_upd::parse_version(current),
+                axiom_upd::parse_version(tag),
+            ) {
                 if axiom_upd::is_newer_version(&curr_ver, &latest_ver) {
                     return Some((current.to_string(), tag.to_string()));
                 }
