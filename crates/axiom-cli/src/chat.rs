@@ -323,7 +323,6 @@ impl ChatSession {
                 "invalid reasoning effort '{effort}'; supported efforts are: none, low, medium, high, max"
             ));
         }
-        self.config.llm.effort = normalized.clone();
         self.config.llm.tier = normalized.clone();
         self.save_config()?;
         Ok(normalized)
@@ -335,7 +334,10 @@ impl ChatSession {
             None
         } else {
             let mut opts = std::collections::BTreeMap::new();
-            opts.insert("reasoning_effort".to_string(), Value::String(effort.to_string()));
+            opts.insert(
+                "reasoning_effort".to_string(),
+                Value::String(effort.to_string()),
+            );
             Some(opts)
         }
     }

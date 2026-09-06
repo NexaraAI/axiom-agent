@@ -79,9 +79,7 @@ pub struct LlmConfig {
     #[serde(default)]
     pub provider_models: BTreeMap<String, String>,
     pub stream: bool,
-    #[serde(default = "default_effort", alias = "tier")]
-    pub effort: String,
-    #[serde(default = "default_tier")]
+    #[serde(default = "default_tier", alias = "effort")]
     pub tier: String,
     #[serde(default = "default_tier_models")]
     pub tier_models: BTreeMap<String, BTreeMap<String, String>>,
@@ -89,9 +87,7 @@ pub struct LlmConfig {
 
 impl LlmConfig {
     pub fn active_effort(&self) -> &str {
-        if !self.effort.is_empty() {
-            &self.effort
-        } else if !self.tier.is_empty() {
+        if !self.tier.is_empty() {
             &self.tier
         } else {
             "medium"
@@ -360,7 +356,6 @@ impl Default for AxiomConfig {
                     ("mock".to_string(), "mock-model".to_string()),
                 ]),
                 stream: true,
-                effort: default_effort(),
                 tier: default_tier(),
                 tier_models: default_tier_models(),
             },
@@ -488,10 +483,6 @@ fn default_update_verify_checksums() -> bool {
     true
 }
 
-fn default_effort() -> String {
-    "medium".to_string()
-}
-
 fn default_tier() -> String {
     "medium".to_string()
 }
@@ -520,10 +511,7 @@ fn default_tier_models() -> BTreeMap<String, BTreeMap<String, String>> {
             BTreeMap::from([
                 ("light".to_string(), "llama-3.1-8b-instant".to_string()),
                 ("medium".to_string(), "llama-3.3-70b-versatile".to_string()),
-                (
-                    "high".to_string(),
-                    "llama-3.3-70b-versatile".to_string(),
-                ),
+                ("high".to_string(), "llama-3.3-70b-versatile".to_string()),
             ]),
         ),
         (

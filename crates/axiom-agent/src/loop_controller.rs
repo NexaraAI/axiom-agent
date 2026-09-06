@@ -837,7 +837,8 @@ impl<'a> AgentLoop<'a> {
             .or_else(|| cleaned.strip_prefix("axiom."))
             .unwrap_or(cleaned);
 
-        if let Some(skill_id) = self.installed_skills
+        if let Some(skill_id) = self
+            .installed_skills
             .iter()
             .map(|skill| skill.manifest.id.as_str())
             .find(|skill_id| {
