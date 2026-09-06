@@ -866,18 +866,13 @@ impl<'a> AgentLoop<'a> {
             "git.diff",
             "skill.create",
         ];
-        for builtin in CORE_BUILTIN_IDS {
-            if *builtin == cleaned
+        CORE_BUILTIN_IDS.iter().copied().find(|builtin| {
+            *builtin == cleaned
                 || *builtin == unprefix
                 || native_tool_name(builtin) == cleaned
                 || builtin.replace('.', "_") == cleaned
                 || builtin.replace('.', "_") == unprefix
-            {
-                return Some(builtin);
-            }
-        }
-
-        None
+        })
     }
 }
 
