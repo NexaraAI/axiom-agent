@@ -4186,11 +4186,11 @@ async fn handle_chat_command(session: &mut ChatSession, input: &str) -> Result<C
                 )
             );
             let context = session.execution_context();
-            let request = ToolRequest {
+            let request = axiom_engine::ToolRequest {
                 skill_id: "test.run".to_string(),
-                arguments: json!({}),
+                arguments: serde_json::json!({}),
             };
-            let registry = ExecutorRegistry::with_builtin_executors();
+            let registry = axiom_engine::ExecutorRegistry::with_builtin_executors();
             if let Some(executor) = registry.get("test.run") {
                 let mut approval = TerminalApprover {
                     mode: session.permission_mode(),
@@ -4238,11 +4238,11 @@ async fn handle_chat_command(session: &mut ChatSession, input: &str) -> Result<C
                 ui.orchestrator_notice(&format!("Running test command: `{cmd}`..."))
             );
             let context = session.execution_context();
-            let request = ToolRequest {
+            let request = axiom_engine::ToolRequest {
                 skill_id: "test.run".to_string(),
-                arguments: json!({ "command": cmd }),
+                arguments: serde_json::json!({ "command": cmd }),
             };
-            let registry = ExecutorRegistry::with_builtin_executors();
+            let registry = axiom_engine::ExecutorRegistry::with_builtin_executors();
             if let Some(executor) = registry.get("test.run") {
                 let mut approval = TerminalApprover {
                     mode: session.permission_mode(),
