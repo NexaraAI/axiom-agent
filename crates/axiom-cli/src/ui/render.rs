@@ -217,11 +217,7 @@ impl Renderer {
                 "Select variant (Default, low, medium, high)",
                 true,
             ),
-            (
-                "/thinking",
-                "Toggle thinking mode on, off, or auto",
-                false,
-            ),
+            ("/thinking", "Toggle thinking mode on, off, or auto", false),
             ("/model", "Configure or inspect the active model", false),
             ("/test", "Auto-detect and run workspace tests", false),
             ("/permission", "Switch execution permission mode", false),

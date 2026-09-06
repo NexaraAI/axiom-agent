@@ -661,7 +661,10 @@ impl SkillExecutor for TestRunExecutor {
                 "required": ["status", "passed", "framework", "command", "output", "summary"]
             }),
             permissions: vec![Permission::ShellExecution, Permission::FileSystemRead],
-            side_effects: vec![SideEffectClass::ProcessSpawn, SideEffectClass::FilesystemRead],
+            side_effects: vec![
+                SideEffectClass::ProcessSpawn,
+                SideEffectClass::FilesystemRead,
+            ],
             deterministic_fixture: json!({"path": "."}),
         }
     }
@@ -694,7 +697,10 @@ impl SkillExecutor for TestRunExecutor {
             SideEffectRequest::new(
                 self.id(),
                 "test.run",
-                [SideEffectClass::ProcessSpawn, SideEffectClass::FilesystemRead],
+                [
+                    SideEffectClass::ProcessSpawn,
+                    SideEffectClass::FilesystemRead,
+                ],
                 Some(target_dir),
             ),
         )?;
@@ -2549,7 +2555,10 @@ fn validate_html_project(dir: &Path) -> Result<Value, SkillExecutionError> {
 
         let lower = content.to_ascii_lowercase();
         if !lower.contains("<html") && !lower.contains("<!doctype") {
-            errors.push(format!("{}: missing <!DOCTYPE html> or <html> tag", html_file.display()));
+            errors.push(format!(
+                "{}: missing <!DOCTYPE html> or <html> tag",
+                html_file.display()
+            ));
         }
 
         for tag in &["script", "style", "div", "body", "head"] {
@@ -3939,7 +3948,11 @@ min_axiom_version = "0.1.0"
 </html>"#;
         fs::write(dir.join("index.html"), html_content).expect("write html");
         fs::write(dir.join("style.css"), "body { background: #111; }").expect("write css");
-        fs::write(dir.join("game.js"), "const canvas = document.getElementById('game');").expect("write js");
+        fs::write(
+            dir.join("game.js"),
+            "const canvas = document.getElementById('game');",
+        )
+        .expect("write js");
 
         let registry = ExecutorRegistry::with_builtin_executors();
         let executor = registry.get("test.run").expect("test.run registered");
@@ -3970,7 +3983,10 @@ min_axiom_version = "0.1.0"
 
         assert_eq!(result.get("status").and_then(Value::as_str), Some("passed"));
         assert_eq!(result.get("passed").and_then(Value::as_bool), Some(true));
-        assert_eq!(result.get("framework").and_then(Value::as_str), Some("html_web"));
+        assert_eq!(
+            result.get("framework").and_then(Value::as_str),
+            Some("html_web")
+        );
 
         let _ = fs::remove_dir_all(dir);
     }

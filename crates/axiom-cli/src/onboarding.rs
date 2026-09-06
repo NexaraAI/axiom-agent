@@ -781,7 +781,9 @@ async fn prompt_provider_setup() -> Result<ProviderSetup> {
                 "2" | "openrouter" => prompt_preset_setup("openrouter").await?,
                 "3" | "gemini" => prompt_preset_setup("gemini").await?,
                 "4" | "github-models" => prompt_preset_setup("github-models").await?,
-                "5" | "opencode" | "zen" | "opencode-zen" => prompt_preset_setup("opencode").await?,
+                "5" | "opencode" | "zen" | "opencode-zen" => {
+                    prompt_preset_setup("opencode").await?
+                }
                 "6" | "gmicloud" | "gmi" | "gmi-cloud" => prompt_preset_setup("gmicloud").await?,
                 "7" | "nvidia" | "nvidia-nim" => prompt_preset_setup("nvidia").await?,
                 "8" | "openai" => prompt_preset_setup("openai").await?,

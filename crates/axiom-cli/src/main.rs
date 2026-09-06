@@ -650,8 +650,9 @@ async fn provider(command: ProviderCommands) -> Result<()> {
                     config.save_to_path(&config_path)?;
                     println!("Provider '{}' configured successfully!", preset.id);
                 } else {
-                    let b_url = base_url
-                        .ok_or_else(|| anyhow::anyhow!("--base-url required for custom provider"))?;
+                    let b_url = base_url.ok_or_else(|| {
+                        anyhow::anyhow!("--base-url required for custom provider")
+                    })?;
                     let key_env = format!(
                         "{}_API_KEY",
                         provider_name.to_ascii_uppercase().replace('-', "_")

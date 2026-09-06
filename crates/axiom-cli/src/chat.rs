@@ -848,8 +848,7 @@ impl ChatSession {
 
         let installed_skills = load_installed_skills(self.skills_dir())?;
         let cancellation = CancellationToken::new();
-        let (signal_listener, turn_guard) =
-            spawn_turn_cancellation_listener(cancellation.clone());
+        let (signal_listener, turn_guard) = spawn_turn_cancellation_listener(cancellation.clone());
         let live_status = stream_observer.is_some();
         let approvals = Rc::new(RefCell::new(Vec::new()));
         let mut recording_approval = RecordingApprover {
@@ -4293,8 +4292,12 @@ async fn handle_chat_command(session: &mut ChatSession, input: &str) -> Result<C
 fn print_help() {
     println!("Commands (prefix with '/'):");
     println!("  /variant [Default|low|medium|high]  Configure model variant (alias: /variants)");
-    println!("  /thinking [on|off|auto]             Toggle reasoning/thinking mode (alias: /reasoning)");
-    println!("  /test [command]                     Auto-detect and run workspace tests (alias: /tests)");
+    println!(
+        "  /thinking [on|off|auto]             Toggle reasoning/thinking mode (alias: /reasoning)"
+    );
+    println!(
+        "  /test [command]                     Auto-detect and run workspace tests (alias: /tests)"
+    );
     println!("  /model [name]                       Switch or view active LLM model");
     println!("  /model list [FILTER]                Fetch catalog view of available models");
     println!("  /permission [velocity|full|strict]  Switch permission mode (alias: /mode)");
@@ -4307,7 +4310,9 @@ fn print_help() {
     println!("  /skills                             List active and installed skills");
     println!("  /skills selected <message>          Simulate skill routing for a message");
     println!("  /provider current | list | use <p>  Manage LLM providers");
-    println!("  /provider add [name]                Add or configure a new provider post-onboarding");
+    println!(
+        "  /provider add [name]                Add or configure a new provider post-onboarding"
+    );
     println!("  /clear                              Clear session history");
     println!("  /proof on | off | status | latest   Audit and execution provenance");
     println!("  /multi                              Enter multiline prompt mode (/send to run)");
