@@ -1,3 +1,4 @@
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use anyhow::{anyhow, Result};
@@ -443,6 +444,8 @@ impl<'a> AgentLoop<'a> {
                     streaming: request.stream,
                 },
             )?;
+            let stream_accumulator = Arc::new(Mutex::new(String::new()));
+            let acc_sink = stream_accumulator.clone();
             let provider_call = async {
                 if self.streaming {
                     let stream = self.provider.stream_chat(request).await?;
@@ -451,12 +454,29 @@ impl<'a> AgentLoop<'a> {
                             .collect_response_with_observer(
                                 self.provider.provider_name(),
                                 &self.model,
-                                |update| observer.on_stream_update(&update),
+                                |update| {
+                                    if !update.visible_delta.is_empty() {
+                                        if let Ok(mut text) = acc_sink.lock() {
+                                            text.push_str(&update.visible_delta);
+                                        }
+                                    }
+                                    observer.on_stream_update(&update);
+                                },
                             )
                             .await
                     } else {
                         stream
-                            .collect_response(self.provider.provider_name(), &self.model)
+                            .collect_response_with_observer(
+                                self.provider.provider_name(),
+                                &self.model,
+                                |update| {
+                                    if !update.visible_delta.is_empty() {
+                                        if let Ok(mut text) = acc_sink.lock() {
+                                            text.push_str(&update.visible_delta);
+                                        }
+                                    }
+                                },
+                            )
                             .await
                     }
                 } else {
@@ -466,6 +486,20 @@ impl<'a> AgentLoop<'a> {
             let provider_result = tokio::select! {
                 result = provider_call => result,
                 _ = self.cancellation.cancelled() => {
+                    let partial_str = stream_accumulator
+                        .lock()
+                        .map(|guard| guard.clone())
+                        .unwrap_or_default();
+                    if !partial_str.trim().is_empty() {
+                        progress.partial = partial_str.clone();
+                        progress.history_delta.push(ChatMessage {
+                            role: "assistant".to_string(),
+                            content: format!(
+                                "{}\n\n[Response interrupted by user]",
+                                partial_str.trim_end()
+                            ),
+                        });
+                    }
                     return self.give_up(
                         GiveUpReason::Cancelled,
                         iteration.saturating_sub(1),
@@ -635,23 +669,30 @@ impl<'a> AgentLoop<'a> {
                 )?;
                 let tool_started_at = Instant::now();
                 let mut policy_audit = RecordingSideEffectAuditSink::default();
-                let status = match execute_installed_tool_with_policy(
+                let tool_future = execute_installed_tool_with_policy(
                     &request,
                     self.installed_skills,
                     &self.execution_context,
                     &mut *self.approval,
                     &self.side_effect_policy,
                     &mut policy_audit,
-                )
-                .await
-                {
-                    Ok(result) => {
+                );
+                let tool_result = tokio::select! {
+                    res = tool_future => Some(res),
+                    _ = self.cancellation.cancelled() => None,
+                };
+                let status = match tool_result {
+                    Some(Ok(result)) => {
                         consecutive_tool_errors = 0;
                         ToolExecutionStatus::Succeeded(result)
                     }
-                    Err(error) => {
+                    Some(Err(error)) => {
                         consecutive_tool_errors += 1;
                         ToolExecutionStatus::Failed(error.to_string())
+                    }
+                    None => {
+                        consecutive_tool_errors += 1;
+                        ToolExecutionStatus::Failed("Tool execution cancelled by user".to_string())
                     }
                 };
                 progress
@@ -753,6 +794,21 @@ impl<'a> AgentLoop<'a> {
     ) -> Result<TurnResult> {
         let partial = progress.partial.clone();
         if reason == GiveUpReason::Cancelled {
+            if !partial.trim().is_empty() {
+                let already_recorded = progress
+                    .history_delta
+                    .last()
+                    .is_some_and(|m| m.role == "assistant");
+                if !already_recorded {
+                    progress.history_delta.push(ChatMessage {
+                        role: "assistant".to_string(),
+                        content: format!(
+                            "{}\n\n[Response interrupted by user]",
+                            partial.trim_end()
+                        ),
+                    });
+                }
+            }
             self.record_transition(
                 &mut progress,
                 AgentTransitionKind::CancellationObserved {

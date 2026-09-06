@@ -1,5 +1,6 @@
 use std::{
     cell::RefCell,
+    collections::VecDeque,
     io::{self, BufRead, IsTerminal, Write},
     path::{Path, PathBuf},
     rc::Rc,
@@ -68,6 +69,7 @@ pub(crate) struct ChatSession {
     session_created_at_unix_ms: u128,
     workspace_path: PathBuf,
     credential_env_names: Vec<String>,
+    pub(crate) prompt_queue: VecDeque<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -215,7 +217,39 @@ impl ChatSession {
             session_created_at_unix_ms,
             workspace_path,
             credential_env_names,
+            prompt_queue: VecDeque::new(),
         })
+    }
+
+    pub(crate) fn display_queue(&self, ui: &Renderer) {
+        if self.prompt_queue.is_empty() {
+            println!(
+                "{}",
+                ui.plain(
+                    "  No tasks currently in queue. Use `/queue add <prompt>` to enqueue a task."
+                )
+            );
+        } else {
+            let border = "─────────────────────────────────────────────────────────────";
+            let suffix = if self.prompt_queue.len() == 1 { "" } else { "s" };
+            println!("  \x1b[38;5;240m┌{border}┐\x1b[0m");
+            println!(
+                "  \x1b[38;5;240m│\x1b[0m  \x1b[1;38;5;255mPending Task Queue ({} task{suffix} pending)\x1b[0m",
+                self.prompt_queue.len()
+            );
+            println!("  \x1b[38;5;240m├{border}┤\x1b[0m");
+            for (idx, task) in self.prompt_queue.iter().enumerate() {
+                let count = idx + 1;
+                println!("  \x1b[38;5;240m│\x1b[0m  \x1b[38;5;208m{count:>2}.\x1b[0m \x1b[38;5;254m{task}\x1b[0m");
+            }
+            println!("  \x1b[38;5;240m└{border}┘\x1b[0m");
+            println!(
+                "{}",
+                ui.smoke(
+                    "  Tasks execute sequentially. Use `/queue clear` to clear pending tasks."
+                )
+            );
+        }
     }
 
     pub(crate) fn provider_names(&self) -> Vec<String> {
@@ -1428,15 +1462,17 @@ impl Hint for AxiomHint {
 const COMMAND_HINTS: &[(&str, &str)] = &[
     ("effort", " [none|low|medium|high|max]"),
     ("model", " [name]"),
+    ("provider", " [name]"),
+    ("queue", " [add <task>|list|clear]"),
     ("skills", ""),
     ("undo", ""),
     ("clear", ""),
     ("checkpoints", ""),
     ("restore", " <checkpoint_id>"),
-    ("provider", " [name]"),
     ("lens", " [on|off]"),
     ("proof", " [on|off|status|latest]"),
     ("multi", ""),
+    ("commands", ""),
     ("help", ""),
     ("exit", ""),
     ("reasoning", " [none|low|medium|high|max]"),
@@ -1481,6 +1517,20 @@ impl Completer for AxiomCommandHelper {
                     candidates.push(Pair {
                         display: eff.to_string(),
                         replacement: eff.to_string(),
+                    });
+                }
+            }
+            return Ok((start, candidates));
+        }
+
+        if let Some(sub) = rest.strip_prefix("queue ") {
+            let start = pos - sub.len();
+            let mut candidates = Vec::new();
+            for opt in &["add ", "list", "clear"] {
+                if opt.starts_with(sub) {
+                    candidates.push(Pair {
+                        display: opt.to_string(),
+                        replacement: opt.to_string(),
                     });
                 }
             }
@@ -1567,6 +1617,16 @@ impl Hinter for AxiomCommandHelper {
         if let Some(sub) = rest.strip_prefix("tier ") {
             for eff in &["none", "low", "medium", "high", "max"] {
                 if let Some(suffix) = eff.strip_prefix(sub) {
+                    if !suffix.is_empty() {
+                        return Some(AxiomHint(suffix.to_string()));
+                    }
+                }
+            }
+            return None;
+        }
+        if let Some(sub) = rest.strip_prefix("queue ") {
+            for opt in &["add <task>", "list", "clear"] {
+                if let Some(suffix) = opt.strip_prefix(sub) {
                     if !suffix.is_empty() {
                         return Some(AxiomHint(suffix.to_string()));
                     }
@@ -1824,23 +1884,36 @@ async fn run_terminal_session(mut session: ChatSession) -> Result<()> {
     let mut input_reader = TerminalInput::new(&session.config_path)?;
 
     loop {
-        let mut message = match input_reader.read(&ui.prompt())? {
-            PromptRead::Line(line) => {
-                let cleaned = clean_pasted_input(&line);
-                let line_count = cleaned.lines().count();
-                if line_count > 3 {
-                    println!("{}", ui.plain(&format!("  📋 [Pasted {line_count} lines]")));
+        let (mut message, from_queue) = if let Some(queued) = session.prompt_queue.pop_front() {
+            println!(
+                "{}",
+                ui.lens_notice(&format!(
+                    "Executing queued task ({} remaining): \"{}\"",
+                    session.prompt_queue.len(),
+                    queued
+                ))
+            );
+            (queued, true)
+        } else {
+            let read_line = match input_reader.read(&ui.prompt())? {
+                PromptRead::Line(line) => {
+                    let cleaned = clean_pasted_input(&line);
+                    let line_count = cleaned.lines().count();
+                    if line_count > 3 {
+                        println!("{}", ui.plain(&format!("  📋 [Pasted {line_count} lines]")));
+                    }
+                    cleaned.trim().to_string()
                 }
-                cleaned.trim().to_string()
-            }
-            PromptRead::Interrupted => {
-                println!("Cancelled input. Type !exit to leave Axiom.");
-                continue;
-            }
-            PromptRead::EndOfInput => {
-                println!();
-                break;
-            }
+                PromptRead::Interrupted => {
+                    println!("Cancelled input. Type /exit to leave Axiom.");
+                    continue;
+                }
+                PromptRead::EndOfInput => {
+                    println!();
+                    break;
+                }
+            };
+            (read_line, false)
         };
         if message.is_empty() {
             continue;
@@ -1861,7 +1934,9 @@ async fn run_terminal_session(mut session: ChatSession) -> Result<()> {
             }
             CommandResult::NotCommand => {}
         }
-        input_reader.remember(&message)?;
+        if !from_queue {
+            input_reader.remember(&message)?;
+        }
         let trimmed = message.as_str();
 
         match session.auto_route_action(trimmed) {
@@ -1923,6 +1998,8 @@ async fn run_terminal_session(mut session: ChatSession) -> Result<()> {
                     tool_results,
                     runtime,
                 } = turn;
+                let was_cancelled = content.contains("[Response interrupted by user]")
+                    || content.contains("Axiom stopped before completion: cancelled");
                 for result in &tool_results {
                     let saved = session.save_tool_output(result)?;
                     println!(
@@ -1941,6 +2018,24 @@ async fn run_terminal_session(mut session: ChatSession) -> Result<()> {
                 }
                 if !streamed_visible {
                     println!("{}", ui.assistant(&content));
+                }
+                if was_cancelled {
+                    println!(
+                        "{}",
+                        ui.warning(
+                            "Task interrupted by user (Ctrl+C / Esc). Partial response preserved in session context."
+                        )
+                    );
+                    if !session.prompt_queue.is_empty() {
+                        let count = session.prompt_queue.len();
+                        let s = if count == 1 { "" } else { "s" };
+                        println!(
+                            "{}",
+                            ui.status_line(&format!(
+                                "Queue paused ({count} task{s} pending). Type /queue to view or run next prompt to resume."
+                            ))
+                        );
+                    }
                 }
                 if let Some(runtime) = runtime {
                     println!("{}", ui.status_line(&runtime.status_text()));
@@ -2641,44 +2736,34 @@ pub(crate) fn render_interactive_mcq(
         });
     }
 
-    let border = "────────────────────────────────────────────────────────────";
+    let config = AxiomConfig::load_or_default();
+    let renderer = crate::ui::render::Renderer::from_config(&config);
+
     println!();
-    println!("\x1b[38;5;240m╭─{border}\x1b[0m");
-    println!("  \x1b[38;5;39m?\x1b[0m  \x1b[1;38;5;255m{question}\x1b[0m");
-    println!("\x1b[38;5;240m├─{border}\x1b[0m");
-    for (i, opt) in options.iter().enumerate() {
-        println!(
-            "  \x1b[38;5;196m[{}]\x1b[0m \x1b[38;5;254m{}\x1b[0m",
-            i + 1,
-            opt
-        );
-    }
-    if allow_custom {
-        println!(
-            "  \x1b[38;5;244m[{}]\x1b[0m \x1b[38;5;244mType custom answer...\x1b[0m",
-            options.len() + 1
-        );
-    }
-    println!("\x1b[38;5;240m╰─{border}\x1b[0m");
+    println!("{}", renderer.mcq_card(question, options, allow_custom));
 
     let num_choices = if allow_custom {
         options.len() + 1
     } else {
         options.len()
     };
-    print!("\x1b[38;5;196maxiom ❯\x1b[0m \x1b[38;5;244mSelect [1-{num_choices}] or type custom reply:\x1b[0m ");
+    print!(
+        "{}{} ",
+        renderer.prompt(),
+        renderer.plain(&format!("Select [1-{num_choices}] or type custom reply:"))
+    );
     let _ = io::stdout().flush();
 
     let mut input = String::new();
     let _ = io::stdin().read_line(&mut input);
     let trimmed = input.trim();
 
-    if trimmed.is_empty() {
+    if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("esc") {
         let first = options
             .first()
             .cloned()
             .unwrap_or_else(|| question.to_string());
-        println!("  \x1b[38;5;113m✔ Selected default:\x1b[0m \x1b[1;38;5;255m{first}\x1b[0m\n");
+        println!("{}\n", renderer.success(&format!("Selected default: {first}")));
         return Ok(QuestionAnswer {
             selected: first,
             index: Some(1),
@@ -2689,7 +2774,7 @@ pub(crate) fn render_interactive_mcq(
     if let Ok(num) = trimmed.parse::<usize>() {
         if num >= 1 && num <= options.len() {
             let choice = options[num - 1].clone();
-            println!("  \x1b[38;5;113m✔ Selected:\x1b[0m \x1b[1;38;5;255m{choice}\x1b[0m\n");
+            println!("{}\n", renderer.success(&format!("Selected: {choice}")));
             return Ok(QuestionAnswer {
                 selected: choice,
                 index: Some(num),
@@ -2697,7 +2782,11 @@ pub(crate) fn render_interactive_mcq(
             });
         }
         if allow_custom && num == options.len() + 1 {
-            print!("\x1b[38;5;196maxiom ❯\x1b[0m \x1b[38;5;244mEnter your custom reply:\x1b[0m ");
+            print!(
+                "{}{} ",
+                renderer.prompt(),
+                renderer.plain("Enter your custom reply:")
+            );
             let _ = io::stdout().flush();
             let mut custom_input = String::new();
             let _ = io::stdin().read_line(&mut custom_input);
@@ -2710,7 +2799,7 @@ pub(crate) fn render_interactive_mcq(
             } else {
                 custom_trimmed
             };
-            println!("  \x1b[38;5;113m✔ Custom reply:\x1b[0m \x1b[1;38;5;255m{final_ans}\x1b[0m\n");
+            println!("{}\n", renderer.success(&format!("Custom reply: {final_ans}")));
             return Ok(QuestionAnswer {
                 selected: final_ans,
                 index: None,
@@ -2719,7 +2808,7 @@ pub(crate) fn render_interactive_mcq(
         }
     }
 
-    println!("  \x1b[38;5;113m✔ Custom reply:\x1b[0m \x1b[1;38;5;255m{trimmed}\x1b[0m\n");
+    println!("{}\n", renderer.success(&format!("Custom reply: {trimmed}")));
     Ok(QuestionAnswer {
         selected: trimmed.to_string(),
         index: None,
@@ -2808,13 +2897,59 @@ async fn handle_chat_command(session: &mut ChatSession, input: &str) -> Result<C
     let input = normalized.as_str();
 
     match input {
-        "!" => {
-            print_command_suggestions();
+        "!" | "!commands" => {
+            let ui = Renderer::from_config(&session.config);
+            println!("{}", ui.command_palette());
             Ok(CommandResult::Continue)
         }
         "!exit" => Ok(CommandResult::Exit),
         "!help" => {
+            let ui = Renderer::from_config(&session.config);
+            println!("{}", ui.command_palette());
             print_help();
+            Ok(CommandResult::Continue)
+        }
+        "!queue" => {
+            let ui = Renderer::from_config(&session.config);
+            session.display_queue(&ui);
+            Ok(CommandResult::Continue)
+        }
+        _ if input.starts_with("!queue ") => {
+            let ui = Renderer::from_config(&session.config);
+            let rest = input.strip_prefix("!queue ").unwrap_or("").trim();
+            if rest == "list" {
+                session.display_queue(&ui);
+            } else if rest == "clear" {
+                session.prompt_queue.clear();
+                println!("{}", ui.success("Cleared all pending tasks from queue."));
+            } else if let Some(prompt) = rest.strip_prefix("add ") {
+                let task = prompt.trim();
+                if task.is_empty() {
+                    println!("{}", ui.warning("Provide a task to enqueue: /queue add <task>"));
+                } else {
+                    session.prompt_queue.push_back(task.to_string());
+                    println!(
+                        "{}",
+                        ui.success(&format!(
+                            "Enqueued task #{} ({} pending): \"{}\"",
+                            session.prompt_queue.len(),
+                            session.prompt_queue.len(),
+                            task
+                        ))
+                    );
+                }
+            } else {
+                session.prompt_queue.push_back(rest.to_string());
+                println!(
+                    "{}",
+                    ui.success(&format!(
+                        "Enqueued task #{} ({} pending): \"{}\"",
+                        session.prompt_queue.len(),
+                        session.prompt_queue.len(),
+                        rest
+                    ))
+                );
+            }
             Ok(CommandResult::Continue)
         }
         "!undo" => {
@@ -3163,6 +3298,7 @@ fn print_help() {
     println!("  /effort [none|low|medium|high|max]  Configure reasoning effort (alias: /tier)");
     println!("  /model [name]                       Switch or view active LLM model");
     println!("  /model list [FILTER]                Fetch catalog view of available models");
+    println!("  /queue [add <task>|list|clear]      Manage sequential background task queue");
     println!("  /undo                               Restore latest workspace checkpoint");
     println!("  /checkpoints                        List recovery snapshots");
     println!("  /restore CHECKPOINT_ID              Restore an agent recovery snapshot");
@@ -3174,6 +3310,7 @@ fn print_help() {
     println!("  /proof on | off | status | latest   Audit and execution provenance");
     println!("  /multi                              Enter multiline prompt mode (!send to run)");
     println!("  /show [OUTPUT_ID]                   Display durable tool output");
+    println!("  /commands                           Display interactive command palette");
     println!("  /help                               Show this help message");
     println!("  /exit                               Exit Axiom session");
 }
@@ -3536,6 +3673,60 @@ mod tests {
             .expect("clear command");
 
         assert_eq!(session.history_len(), 0);
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn queue_commands_enqueue_and_clear_tasks() {
+        let dir = unique_temp_dir();
+        let config_path = dir.join("config.toml");
+        let mut config = AxiomConfig::default();
+        config.agent.first_run_completed = true;
+        config.save_to_path(&config_path).expect("save config");
+        let mut session = ChatSession::load(&config_path).expect("load session");
+
+        assert!(session.prompt_queue.is_empty());
+
+        handle_chat_command(&mut session, "/queue add build snake game")
+            .await
+            .expect("queue add");
+        assert_eq!(session.prompt_queue.len(), 1);
+        assert_eq!(
+            session.prompt_queue.front().map(String::as_str),
+            Some("build snake game")
+        );
+
+        handle_chat_command(&mut session, "/queue add add unit tests")
+            .await
+            .expect("queue add second");
+        assert_eq!(session.prompt_queue.len(), 2);
+
+        handle_chat_command(&mut session, "/queue clear")
+            .await
+            .expect("queue clear");
+        assert!(session.prompt_queue.is_empty());
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn commands_palette_command_succeeds() {
+        let dir = unique_temp_dir();
+        let config_path = dir.join("config.toml");
+        let mut config = AxiomConfig::default();
+        config.agent.first_run_completed = true;
+        config.save_to_path(&config_path).expect("save config");
+        let mut session = ChatSession::load(&config_path).expect("load session");
+
+        let res = handle_chat_command(&mut session, "/commands")
+            .await
+            .expect("commands command");
+        assert_eq!(res, CommandResult::Continue);
+
+        let res2 = handle_chat_command(&mut session, "/")
+            .await
+            .expect("slash command");
+        assert_eq!(res2, CommandResult::Continue);
+
         let _ = fs::remove_dir_all(dir);
     }
 

@@ -76,64 +76,193 @@ impl Renderer {
         model: &str,
         effort: &str,
         workspace: &str,
-        session_id: &str,
+        _session_id: &str,
     ) -> String {
         let effort_val = if effort.is_empty() { "medium" } else { effort };
-        let border = "────────────────────────────────────────────────────────────";
-        format!(
-            "{}\n  {}  {}\n{}\n  {} {}\n  {} {}\n  {} {}\n  {} {}\n  {} {}\n{}\n  {}\n  {}\n  {}\n{}",
-            self.border(&format!("╭─{border}")),
-            self.red("◆ AXIOM AGENT"),
-            self.smoke(&format!(
-                "v{} · Autonomous Workspace Harness",
-                env!("CARGO_PKG_VERSION")
-            )),
-            self.border(&format!("├─{border}")),
-            self.smoke("⚡ provider: "),
-            self.bone(provider),
-            self.smoke("🧠 model:    "),
-            self.bone(&format!("{model}  {}", self.red(&format!("[effort: {effort_val}]")))),
-            self.smoke("🔥 effort:   "),
-            self.red(effort_val),
-            self.smoke("📁 workspace:"),
-            self.bone(workspace),
-            self.smoke("🔑 session:  "),
-            self.smoke(session_id),
-            self.border(&format!("├─{border}")),
-            self.smoke("✦ Commands:    /effort · /model · /skills · /clear · /help · /exit"),
-            self.smoke("✦ Suggestions: Type / or ! to autocomplete commands"),
-            self.smoke("© 2026 DemonZDevelopment"),
-            self.border(&format!("╰─{border}")),
-        )
+        let version = env!("CARGO_PKG_VERSION");
+        let ws_display = if let Some(stripped) = workspace.strip_prefix(r"C:\Users\") {
+            if let Some((_user, rest)) = stripped.split_once('\\') {
+                format!(r"~\{rest}")
+            } else {
+                workspace.to_string()
+            }
+        } else if let Some(stripped) = workspace.strip_prefix("/home/") {
+            if let Some((_user, rest)) = stripped.split_once('/') {
+                format!("~/{rest}")
+            } else {
+                workspace.to_string()
+            }
+        } else {
+            workspace.to_string()
+        };
+
+        let logo_lines = [
+            r"        ▄▄▄       ██   ██ ██  ▄██████▄   ███    ███",
+            r"       █████       ██ ██  ██ ███    ███  ████  ████",
+            r"      ██   ██       ███   ██ ███    ███  ██ ████ ██",
+            r"     █████████     ▄███▄  ██ ███    ███  ██  ██  ██",
+            r"    ██       ██   ██   ██ ██  ▀██████▀   ██      ██",
+        ];
+        let subtitle = "a  x  i  o  m     a  g  e  n  t";
+
+        let border_top = "  ┌─────────────────────────────────────────────────────────────┐";
+        let border_bottom = "  └─────────────────────────────────────────────────────────────┘";
+        let card_empty = pad_card_line("│", "", 58);
+
+        let mut out = Vec::new();
+        out.push(String::new());
+        for line in logo_lines {
+            out.push(format!("  {}", self.paint(self.palette.primary, line)));
+        }
+        out.push(format!("                    {}", self.smoke(subtitle)));
+        out.push(String::new());
+
+        out.push(self.border(border_top));
+        out.push(self.border(&card_empty));
+
+        // Input prompt line
+        let input_accent = self.paint(self.palette.primary, "│");
+        let input_cursor = self.bone("▌");
+        let input_hint = self.smoke("Ask anything... \"Fix a TODO in the codebase\"");
+        let input_content = format!("{input_accent} {input_cursor} {input_hint}");
+        out.push(pad_card_line(&self.border("│"), &input_content, 58));
+
+        out.push(self.border(&card_empty));
+
+        // Status line
+        let status_role = self.smoke("Agent ·");
+        let status_model = self.bone(model);
+        let status_effort = self.paint(self.palette.warning, &format!("[effort: {effort_val}]"));
+        let status_provider = self.smoke(&format!("· {provider}"));
+        let status_content =
+            format!("{status_role} {status_model} {status_effort} {status_provider}");
+        out.push(pad_card_line(&self.border("│"), &status_content, 58));
+
+        out.push(self.border(&card_empty));
+
+        // Keybindings hints
+        let kb_tab = self.smoke("tab");
+        let kb_tab_label = self.ash("skills");
+        let kb_cancel = self.smoke("ctrl+c");
+        let kb_cancel_label = self.ash("cancel / esc");
+        let kb_slash = self.smoke("/");
+        let kb_slash_label = self.ash("commands");
+        let kb_content = format!(
+            "{kb_tab} {kb_tab_label}   {kb_cancel} {kb_cancel_label}   {kb_slash} {kb_slash_label}"
+        );
+        out.push(pad_card_line(&self.border("│"), &kb_content, 58));
+
+        out.push(self.border(&card_empty));
+        out.push(self.border(border_bottom));
+
+        // Footer line
+        let total_chars = ws_display.len().saturating_add(version.len().saturating_add(1));
+        let footer_spaces = " ".repeat(63_usize.saturating_sub(total_chars));
+        out.push(format!(
+            "  {}{footer_spaces}{}",
+            self.smoke(&ws_display),
+            self.smoke(&format!("v{version}"))
+        ));
+
+        out.join("\n")
     }
 
-    #[allow(dead_code)]
+    pub(crate) fn command_palette(&self) -> String {
+        let border_top = "  ┌─────────────────────────────────────────────────────────────┐";
+        let border_bottom = "  └─────────────────────────────────────────────────────────────┘";
+        let card_empty = pad_card_line("│", "", 58);
+
+        let mut out = Vec::new();
+        out.push(self.border(border_top));
+        let prompt_row = format!("> {}", self.bone("/"));
+        out.push(pad_card_line(&self.border("│"), &prompt_row, 58));
+        out.push(self.border(&card_empty));
+
+        let commands = [
+            ("/effort", "Configure reasoning effort level", true),
+            ("/model", "Configure or inspect the active model", false),
+            ("/provider", "Configure or inspect the active LLM", false),
+            ("/queue", "Manage pending task queue", false),
+            ("/skills", "List and manage installed skills", false),
+            ("/lens", "Toggle or inspect dynamic skill routing", false),
+            ("/proof", "Toggle verifiable proof recording", false),
+            ("/checkpoints", "List saved session checkpoints", false),
+            ("/restore", "Restore workspace to a checkpoint", false),
+            ("/clear", "Clear conversation history", false),
+            ("/help", "Show detailed help and command reference", false),
+            ("/exit", "Leave the Axiom session", false),
+        ];
+
+        for (cmd, desc, active) in commands {
+            if active && self.color_enabled {
+                let highlight_style = nu_ansi_term::Style::new()
+                    .on(nu_ansi_term::Color::Fixed(208))
+                    .fg(nu_ansi_term::Color::Fixed(16))
+                    .bold();
+                let raw_content = format!("  {:<13} {}", cmd, desc);
+                let padding = 59_usize.saturating_sub(raw_content.len());
+                let padded = format!("{raw_content}{:>padding$}", "", padding = padding);
+                out.push(format!(
+                    "  {} {} {}",
+                    self.border("│"),
+                    highlight_style.paint(padded),
+                    self.border("│")
+                ));
+            } else {
+                let cmd_styled = self.bone(cmd);
+                let desc_styled = self.smoke(desc);
+                let content = format!("{:<14} {}", cmd_styled, desc_styled);
+                out.push(pad_card_line(&self.border("│"), &content, 58));
+            }
+        }
+
+        out.push(self.border(border_bottom));
+        out.join("\n")
+    }
+
     pub(crate) fn mcq_card(
         &self,
         question: &str,
         options: &[String],
         allow_custom: bool,
     ) -> String {
-        let border = "────────────────────────────────────────────────────────────";
+        let border_top = "  ┌─────────────────────────────────────────────────────────────┐";
+        let border_bottom = "  └─────────────────────────────────────────────────────────────┘";
+        let border_mid = "  ├─────────────────────────────────────────────────────────────┤";
+        let card_empty = pad_card_line("│", "", 58);
         let mut lines = Vec::new();
-        lines.push(self.border(&format!("╭─{border}")));
-        lines.push(format!("  {}  {}", self.cyan("?"), self.bone(question)));
-        lines.push(self.border(&format!("├─{border}")));
+        lines.push(self.border(border_top));
+
+        let title = self.bone("Clarification");
+        let esc = self.smoke("esc");
+        let header_vis = visible_width("Clarification") + visible_width("esc");
+        let header_spaces = " ".repeat(58_usize.saturating_sub(header_vis));
+        let header_line = format!("{title}{header_spaces}{esc}");
+        lines.push(pad_card_line(&self.border("│"), &header_line, 58));
+        lines.push(self.border(border_mid));
+
+        let q_prefix = format!("{}  ", self.cyan("?"));
+        lines.extend(wrap_card_lines(&self.border("│"), &q_prefix, question, 58));
+        lines.push(self.border(&card_empty));
+
         for (i, opt) in options.iter().enumerate() {
-            lines.push(format!(
-                "  {} {}",
-                self.red(&format!("[{}]", i + 1)),
-                self.bone(opt)
-            ));
+            let badge = self.paint(self.palette.warning, &format!("[{}]", i + 1));
+            let opt_prefix = format!("{badge} ");
+            lines.extend(wrap_card_lines(&self.border("│"), &opt_prefix, opt, 58));
         }
+
         if allow_custom {
-            lines.push(format!(
-                "  {} {}",
-                self.smoke(&format!("[{}]", options.len() + 1)),
-                self.smoke("Type custom answer...")
+            let badge = self.smoke(&format!("[{}]", options.len() + 1));
+            let custom_prefix = format!("{badge} ");
+            lines.extend(wrap_card_lines(
+                &self.border("│"),
+                &custom_prefix,
+                "Type custom answer...",
+                58,
             ));
         }
-        lines.push(self.border(&format!("╰─{border}")));
+
+        lines.push(self.border(border_bottom));
         lines.join("\n")
     }
 
@@ -146,7 +275,15 @@ impl Renderer {
     }
 
     pub(crate) fn prompt(&self) -> String {
-        format!("{} ", self.red("axiom>"))
+        if self.color_enabled {
+            format!(
+                "{} {} ",
+                self.paint(self.palette.primary, "│"),
+                self.paint(self.palette.text, "axiom ❯")
+            )
+        } else {
+            "│ axiom ❯ ".to_string()
+        }
     }
 
     pub(crate) fn lens_notice(&self, message: &str) -> String {
@@ -316,6 +453,81 @@ fn palette_for(theme: &str) -> Palette {
     }
 }
 
+fn visible_width(s: &str) -> usize {
+    let mut in_escape = false;
+    let mut count = 0;
+    for c in s.chars() {
+        if c == '\x1b' {
+            in_escape = true;
+        } else if in_escape {
+            if c == 'm' {
+                in_escape = false;
+            }
+        } else {
+            count += 1;
+        }
+    }
+    count
+}
+
+fn pad_card_line(border_char: &str, content: &str, target_inner_width: usize) -> String {
+    let vis = visible_width(content);
+    let padding = target_inner_width.saturating_sub(vis);
+    format!(
+        "  {border_char}  {content}{:>padding$} {border_char}",
+        "",
+        padding = padding
+    )
+}
+
+fn wrap_card_lines(
+    border_char: &str,
+    prefix: &str,
+    text: &str,
+    target_inner_width: usize,
+) -> Vec<String> {
+    let prefix_vis = visible_width(prefix);
+    let indent = " ".repeat(prefix_vis);
+    let words = text.split_whitespace().collect::<Vec<_>>();
+    if words.is_empty() {
+        return vec![pad_card_line(border_char, prefix, target_inner_width)];
+    }
+
+    let mut lines = Vec::new();
+    let mut current_line = prefix.to_string();
+    let mut current_vis = prefix_vis;
+
+    for word in words {
+        let word_vis = visible_width(word);
+        if current_vis.saturating_add(1).saturating_add(word_vis) <= target_inner_width {
+            if current_vis > prefix_vis {
+                current_line.push(' ');
+                current_line.push_str(word);
+                current_vis = current_vis.saturating_add(1).saturating_add(word_vis);
+            } else {
+                current_line.push_str(word);
+                current_vis = current_vis.saturating_add(word_vis);
+            }
+        } else {
+            lines.push(pad_card_line(
+                border_char,
+                &current_line,
+                target_inner_width,
+            ));
+            current_line = format!("{indent}{word}");
+            current_vis = prefix_vis.saturating_add(word_vis);
+        }
+    }
+    if !current_line.is_empty() {
+        lines.push(pad_card_line(
+            border_char,
+            &current_line,
+            target_inner_width,
+        ));
+    }
+    lines
+}
+
 #[cfg(test)]
 mod tests {
     use std::ffi::OsString;
@@ -339,14 +551,14 @@ mod tests {
         config.ui.color = false;
         assert_eq!(
             Renderer::from_config_with_terminal(&config, true).prompt(),
-            "axiom> "
+            "│ axiom ❯ "
         );
 
         config.ui.color = true;
         let _guard = EnvVarGuard::set("NO_COLOR", "1");
         assert_eq!(
             Renderer::from_config_with_terminal(&config, true).prompt(),
-            "axiom> "
+            "│ axiom ❯ "
         );
     }
 
@@ -357,7 +569,7 @@ mod tests {
         config.ui.theme = "none".to_string();
         assert_eq!(
             Renderer::from_config_with_terminal(&config, true).prompt(),
-            "axiom> "
+            "│ axiom ❯ "
         );
 
         config.ui.theme = "high_contrast".to_string();
@@ -372,7 +584,7 @@ mod tests {
         let config = AxiomConfig::default();
         assert_eq!(
             Renderer::from_config_with_terminal(&config, false).prompt(),
-            "axiom> "
+            "│ axiom ❯ "
         );
     }
 
@@ -394,6 +606,35 @@ mod tests {
 
         assert!(banner.contains("NEXARA AI / AXIOM"));
         assert!(!banner.contains("!help"));
+    }
+
+    #[test]
+    fn mcq_card_renders_flush_65_char_box_with_wrapping() {
+        let mut config = AxiomConfig::default();
+        config.ui.color = false;
+        let renderer = Renderer::from_config_with_terminal(&config, true);
+        let card = renderer.mcq_card(
+            "Which of the following statements about the DemonZ-Development Geo-Restrict plugin is false?",
+            &[
+                "It can block or allow players based on their country (ISO-2 code).".to_string(),
+                "It supports ASN (Autonomous System Number) filtering to block entire ISPs.".to_string(),
+            ],
+            true,
+        );
+
+        for line in card.lines() {
+            assert_eq!(
+                visible_width(line),
+                65,
+                "Card line failed 65-char width constraint: {line:?}"
+            );
+        }
+        assert!(card.contains("Clarification"));
+        assert!(card.contains("esc"));
+        assert!(card.contains("[1]"));
+        assert!(card.contains("[2]"));
+        assert!(card.contains("[3]"));
+        assert!(card.contains("Type custom answer..."));
     }
 
     struct EnvVarGuard {
