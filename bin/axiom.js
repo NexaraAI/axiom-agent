@@ -96,6 +96,26 @@ function run(argv = process.argv.slice(2), options = {}) {
       process.kill(process.pid, signal);
       return;
     }
+    if (code === 42) {
+      console.log("\n[axiom] Updating Axiom globally via npm (binary unlocked)...");
+      const npmCmd = process.platform === "win32" ? "npm.cmd" : "npm";
+      const { spawnSync } = require("child_process");
+      const updateResult = spawnSync(npmCmd, ["install", "-g", "axiom-agent@latest"], {
+        stdio: "inherit",
+        shell: process.platform === "win32"
+      });
+      if (updateResult.status === 0) {
+        console.log("\n[axiom] Update complete! Restarting Axiom...\n");
+        const nextCode = run(argv, options);
+        if (nextCode !== 0) {
+          process.exit(nextCode);
+        }
+        return;
+      } else {
+        console.error("\n[axiom] Automatic update failed. Try running `npm install -g axiom-agent@latest` manually.");
+        process.exit(1);
+      }
+    }
     process.exit(code === null ? 1 : code);
   });
 

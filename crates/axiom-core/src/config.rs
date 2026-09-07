@@ -144,7 +144,8 @@ impl LlmConfig {
         let prov_hyphen = prov_lower.replace('_', "-");
         let prov_underscore = prov_lower.replace('-', "_");
 
-        self.variant_models
+        let configured = self
+            .variant_models
             .get(prov_raw)
             .or_else(|| self.variant_models.get(&prov_lower))
             .or_else(|| self.variant_models.get(&prov_hyphen))
@@ -154,7 +155,60 @@ impl LlmConfig {
                     .get(variant)
                     .or_else(|| variants.get(&normalized))
                     .map(String::as_str)
-            })
+            });
+
+        if configured.is_some() {
+            return configured;
+        }
+
+        Self::default_variant_model(&prov_lower, &normalized)
+    }
+
+    pub fn default_variant_model(provider: &str, variant: &str) -> Option<&'static str> {
+        let p = provider.trim().to_ascii_lowercase();
+        let v = variant.trim().to_ascii_lowercase();
+        match (p.as_str(), v.as_str()) {
+            ("opencode" | "zen" | "opencode-zen", "default" | "medium") => {
+                Some("nemotron-3.5-lightning-free")
+            }
+            ("opencode" | "zen" | "opencode-zen", "low" | "light") => Some("mimo-v2.5-free"),
+            ("opencode" | "zen" | "opencode-zen", "high" | "xhigh") => {
+                Some("nemotron-3-ultra-free")
+            }
+            ("openrouter", "default" | "medium") => Some("anthropic/claude-3.7-sonnet"),
+            ("openrouter", "low" | "light") => Some("meta-llama/llama-3.3-70b-instruct"),
+            ("openrouter", "high") => Some("deepseek/deepseek-r1"),
+            ("openrouter", "xhigh") => Some("anthropic/claude-3.7-sonnet:thinking"),
+            ("gemini", "default" | "low" | "light" | "medium") => Some("gemini-2.5-flash"),
+            ("gemini", "high" | "xhigh") => Some("gemini-2.5-pro"),
+            ("github-models" | "github", "default" | "medium") => Some("openai/gpt-4.1"),
+            ("github-models" | "github", "low" | "light") => Some("meta/llama-3.3-70b-instruct"),
+            ("github-models" | "github", "high") => Some("openai/o3-mini"),
+            ("github-models" | "github", "xhigh") => Some("openai/o1"),
+            ("groq", "default" | "medium") => Some("llama-3.3-70b-versatile"),
+            ("groq", "low" | "light") => Some("llama-3.1-8b-instant"),
+            ("groq", "high" | "xhigh") => Some("deepseek-r1-distill-llama-70b"),
+            ("nvidia" | "nvidia-nim", "default" | "medium") => {
+                Some("nvidia/nemotron-3.5-lightning-30b-a3b")
+            }
+            ("nvidia" | "nvidia-nim", "low" | "light") => Some("meta/llama-3.1-8b-instruct"),
+            ("nvidia" | "nvidia-nim", "high" | "xhigh") => Some("deepseek-ai/deepseek-r1"),
+            ("openai", "default" | "medium") => Some("gpt-4o"),
+            ("openai", "low" | "light") => Some("gpt-4o-mini"),
+            ("openai", "high" | "xhigh") => Some("o3-mini"),
+            ("anthropic", "default" | "medium" | "high" | "xhigh") => {
+                Some("claude-3-7-sonnet-latest")
+            }
+            ("anthropic", "low" | "light") => Some("claude-3-5-haiku-latest"),
+            ("gmicloud", "default" | "high" | "xhigh") => Some("deepseek-ai/DeepSeek-V4-Pro"),
+            ("gmicloud", "low" | "light") => Some("meta-llama/Llama-3.1-8B-Instruct"),
+            ("gmicloud", "medium") => Some("meta-llama/Llama-3.3-70B-Instruct"),
+            ("ollama", _) => Some("llama3.3:70b"),
+            ("ollama_cloud" | "ollama-cloud", "low" | "light") => Some("llama3.3:70b"),
+            ("ollama_cloud" | "ollama-cloud", "medium" | "default") => Some("qwen2.5-coder:32b"),
+            ("ollama_cloud" | "ollama-cloud", "high" | "xhigh") => Some("deepseek-r1:70b"),
+            _ => None,
+        }
     }
 
     pub fn model_for_tier(&self, provider: &str, tier: &str) -> Option<&str> {

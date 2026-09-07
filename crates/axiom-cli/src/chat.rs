@@ -2405,8 +2405,8 @@ async fn run_terminal_session(mut session: ChatSession) -> Result<()> {
                     cleaned.trim().to_string()
                 }
                 PromptRead::Interrupted => {
-                    println!("Cancelled input. Type /exit to leave Axiom.");
-                    continue;
+                    println!("\nExiting Axiom...");
+                    break;
                 }
                 PromptRead::EndOfInput => {
                     println!();
@@ -4496,25 +4496,13 @@ async fn handle_chat_command(session: &mut ChatSession, input: &str) -> Result<C
                         );
                     }
                     InstallationMode::NpmGlobal => {
-                        let npm_cmd = if cfg!(windows) { "npm.cmd" } else { "npm" };
-                        println!("Executing `{npm_cmd} install -g axiom-agent@latest`...");
-                        match crate::update_commands::run_npm_global_update(binary_path.as_deref())
-                        {
-                            Ok(()) => {
-                                println!(
-                                    "{}",
-                                    ui.success(&format!(
-                                        "Successfully updated Axiom to v{latest}! Please restart Axiom to use the new version."
-                                    ))
-                                );
-                            }
-                            Err(e) => {
-                                println!("{}", ui.error(e));
-                                println!(
-                                    "To update manually, run: npm install -g axiom-agent@latest"
-                                );
-                            }
-                        }
+                        println!(
+                            "{}",
+                            ui.orchestrator_notice(&format!(
+                                "Restarting to install Axiom v{latest} globally via npm..."
+                            ))
+                        );
+                        std::process::exit(42);
                     }
                     _ => match crate::update_commands::install().await {
                         Ok(()) => {
