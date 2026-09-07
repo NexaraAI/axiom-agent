@@ -1872,7 +1872,6 @@ min_axiom_version = "0.1.0"
                     "is_custom": true,
                     "index": 3
                 }),
-                latency_ms: 100,
             }),
         };
 
