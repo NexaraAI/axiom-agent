@@ -132,17 +132,12 @@ pub(crate) async fn install() -> Result<()> {
 
     if mode == InstallationMode::NpmGlobal {
         println!("Axiom was installed via npm. Running npm update...");
-        let npm_cmd = if cfg!(windows) { "npm.cmd" } else { "npm" };
-        let status = std::process::Command::new(npm_cmd)
-            .args(["install", "-g", "axiom-agent@latest"])
-            .status();
-        match status {
-            Ok(s) if s.success() => {
+        match run_npm_global_update(Some(&binary_path)) {
+            Ok(()) => {
                 println!("Axiom updated successfully via npm. Please restart your session.");
                 return Ok(());
             }
-            Ok(s) => bail!("npm update failed with exit code: {s}"),
-            Err(e) => bail!("failed to run npm: {e}"),
+            Err(e) => bail!("{e}"),
         }
     }
 
@@ -535,6 +530,111 @@ fn load_config() -> Result<(PathBuf, AxiomConfig)> {
     let config_path = AxiomConfig::default_config_path()?;
     let config = AxiomConfig::load_or_create(&config_path)?;
     Ok((config_path, config))
+}
+
+pub(crate) fn run_npm_global_update(binary_path: Option<&Path>) -> Result<(), String> {
+    let npm_cmd = if cfg!(windows) { "npm.cmd" } else { "npm" };
+
+    // On Windows, moving a running executable outside the npm package folder prevents
+    // npm from failing with EBUSY during directory replacement.
+    #[cfg(windows)]
+    let staged_backup = if let Some(bin) = binary_path {
+        move_running_binary_for_npm_update(bin)
+    } else {
+        None
+    };
+
+    // Try npm install with --allow-scripts first (for modern npm 12+), fallback to standard
+    let status = std::process::Command::new(npm_cmd)
+        .args(["install", "-g", "axiom-agent@latest", "--allow-scripts=axiom-agent"])
+        .status();
+
+    let success = match status {
+        Ok(s) if s.success() => true,
+        _ => {
+            // Fallback without --allow-scripts for older npm versions
+            std::process::Command::new(npm_cmd)
+                .args(["install", "-g", "axiom-agent@latest"])
+                .status()
+                .is_ok_and(|s| s.success())
+        }
+    };
+
+    if success {
+        #[cfg(windows)]
+        if let Some((_, ref backup_path)) = staged_backup {
+            let _ = std::fs::remove_file(backup_path);
+        }
+
+        // Verify native binary is present; run postinstall.js if missing
+        if let Some(bin) = binary_path {
+            if !bin.exists() {
+                if let Some(pkg_dir) = find_axiom_package_dir(bin) {
+                    let postinstall = pkg_dir.join("scripts").join("postinstall.js");
+                    if postinstall.exists() {
+                        let _ = std::process::Command::new("node")
+                            .arg(&postinstall)
+                            .status();
+                    }
+                }
+            }
+        }
+
+        Ok(())
+    } else {
+        #[cfg(windows)]
+        if let Some((ref original_path, ref backup_path)) = staged_backup {
+            let _ = std::fs::rename(backup_path, original_path);
+        }
+        Err("npm update failed to install the latest package".to_string())
+    }
+}
+
+#[cfg(windows)]
+fn move_running_binary_for_npm_update(binary_path: &Path) -> Option<(PathBuf, PathBuf)> {
+    if !binary_path.exists() {
+        return None;
+    }
+    let mut current = binary_path.parent();
+    while let Some(dir) = current {
+        if dir
+            .file_name()
+            .is_some_and(|n| n.to_string_lossy().eq_ignore_ascii_case("axiom-agent"))
+        {
+            if let Some(parent) = dir.parent() {
+                let backup_name = format!(".axiom-running-{}.bak", std::process::id());
+                let backup_path = parent.join(backup_name);
+                if let Ok(entries) = std::fs::read_dir(parent) {
+                    for entry in entries.flatten() {
+                        let name = entry.file_name().to_string_lossy().to_string();
+                        if name.starts_with(".axiom-running-") && name.ends_with(".bak") {
+                            let _ = std::fs::remove_file(entry.path());
+                        }
+                    }
+                }
+                if std::fs::rename(binary_path, &backup_path).is_ok() {
+                    return Some((binary_path.to_path_buf(), backup_path));
+                }
+            }
+            break;
+        }
+        current = dir.parent();
+    }
+    None
+}
+
+fn find_axiom_package_dir(binary_path: &Path) -> Option<PathBuf> {
+    let mut current = binary_path.parent();
+    while let Some(dir) = current {
+        if dir
+            .file_name()
+            .is_some_and(|n| n.to_string_lossy().eq_ignore_ascii_case("axiom-agent"))
+        {
+            return Some(dir.to_path_buf());
+        }
+        current = dir.parent();
+    }
+    None
 }
 
 #[cfg(test)]

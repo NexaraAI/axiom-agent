@@ -3851,11 +3851,8 @@ async fn handle_chat_command(session: &mut ChatSession, input: &str) -> Result<C
                     InstallationMode::NpmGlobal => {
                         let npm_cmd = if cfg!(windows) { "npm.cmd" } else { "npm" };
                         println!("Executing `{npm_cmd} install -g axiom-agent@latest`...");
-                        let status = std::process::Command::new(npm_cmd)
-                            .args(["install", "-g", "axiom-agent@latest"])
-                            .status();
-                        match status {
-                            Ok(s) if s.success() => {
+                        match crate::update_commands::run_npm_global_update(binary_path.as_deref()) {
+                            Ok(()) => {
                                 println!(
                                     "{}",
                                     ui.success(&format!(
@@ -3863,17 +3860,8 @@ async fn handle_chat_command(session: &mut ChatSession, input: &str) -> Result<C
                                     ))
                                 );
                             }
-                            Ok(s) => {
-                                println!(
-                                    "{}",
-                                    ui.error(format!("npm update exited with code: {s}"))
-                                );
-                                println!(
-                                    "To update manually, run: npm install -g axiom-agent@latest"
-                                );
-                            }
                             Err(e) => {
-                                println!("{}", ui.error(format!("Failed to execute npm: {e}")));
+                                println!("{}", ui.error(e));
                                 println!(
                                     "To update manually, run: npm install -g axiom-agent@latest"
                                 );
@@ -3885,17 +3873,12 @@ async fn handle_chat_command(session: &mut ChatSession, input: &str) -> Result<C
                             println!(
                                 "{}",
                                 ui.success(&format!(
-                                    "Successfully updated Axiom to v{latest}! Please restart Axiom to use the new version."
+                                        "Successfully updated Axiom to v{latest}! Please restart Axiom to use the new version."
                                 ))
                             );
                         }
                         Err(err) => {
-                            let npm_cmd = if cfg!(windows) { "npm.cmd" } else { "npm" };
-                            let npm_success = std::process::Command::new(npm_cmd)
-                                .args(["install", "-g", "axiom-agent@latest"])
-                                .status()
-                                .is_ok_and(|s| s.success());
-                            if npm_success {
+                            if crate::update_commands::run_npm_global_update(binary_path.as_deref()).is_ok() {
                                 println!(
                                     "{}",
                                     ui.success(&format!(
