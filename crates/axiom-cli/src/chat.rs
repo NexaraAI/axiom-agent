@@ -2214,7 +2214,12 @@ async fn run_terminal_session(mut session: ChatSession) -> Result<()> {
         };
         let mut live_stream = TerminalStreamRenderer::new(ui);
         let turn_result = session
-            .send_user_message_live(final_prompt, &skill_cards, &mut approval, &mut live_stream)
+            .send_user_message_live(
+                final_prompt.clone(),
+                &skill_cards,
+                &mut approval,
+                &mut live_stream,
+            )
             .await;
         live_stream.finish_line();
         let streamed_visible = live_stream.visible_content;
