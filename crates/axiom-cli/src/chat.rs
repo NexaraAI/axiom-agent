@@ -3651,8 +3651,15 @@ async fn handle_chat_command(session: &mut ChatSession, input: &str) -> Result<C
             } else {
                 let active_var = session.active_variant();
                 let active_model = session.config.llm.active_model.as_deref().unwrap_or("none");
-                let active_prov = session.config.llm.active_provider.as_deref().unwrap_or("none");
-                println!("Active Variant: {active_var} (model: {active_model}, provider: {active_prov})");
+                let active_prov = session
+                    .config
+                    .llm
+                    .active_provider
+                    .as_deref()
+                    .unwrap_or("none");
+                println!(
+                    "Active Variant: {active_var} (model: {active_model}, provider: {active_prov})"
+                );
                 println!("Available variants: Default, low, medium, high");
                 println!("Use `/variant <Default|low|medium|high>` to switch.");
             }
@@ -3766,7 +3773,9 @@ async fn handle_chat_command(session: &mut ChatSession, input: &str) -> Result<C
                 println!();
                 println!(
                     "{}",
-                    ui.orchestrator_notice(&format!("Downloading and installing Axiom v{latest}..."))
+                    ui.orchestrator_notice(&format!(
+                        "Downloading and installing Axiom v{latest}..."
+                    ))
                 );
 
                 let binary_path = std::env::current_exe().ok();
@@ -3779,7 +3788,9 @@ async fn handle_chat_command(session: &mut ChatSession, input: &str) -> Result<C
                     InstallationMode::CargoDev => {
                         println!(
                             "{}",
-                            ui.warning("Running from Cargo development build. Auto-update is disabled for dev builds.")
+                            ui.warning(
+                                "Running from Cargo development build. Auto-update is disabled for dev builds."
+                            )
                         );
                     }
                     InstallationMode::NpmGlobal => {
@@ -3802,14 +3813,15 @@ async fn handle_chat_command(session: &mut ChatSession, input: &str) -> Result<C
                                     "{}",
                                     ui.error(&format!("npm update exited with code: {s}"))
                                 );
-                                println!("To update manually, run: npm install -g axiom-agent@latest");
+                                println!(
+                                    "To update manually, run: npm install -g axiom-agent@latest"
+                                );
                             }
                             Err(e) => {
+                                println!("{}", ui.error(&format!("Failed to execute npm: {e}")));
                                 println!(
-                                    "{}",
-                                    ui.error(&format!("Failed to execute npm: {e}"))
+                                    "To update manually, run: npm install -g axiom-agent@latest"
                                 );
-                                println!("To update manually, run: npm install -g axiom-agent@latest");
                             }
                         }
                     }
@@ -3846,7 +3858,9 @@ async fn handle_chat_command(session: &mut ChatSession, input: &str) -> Result<C
                                         "{}",
                                         ui.error(&format!("Automatic update failed: {err}"))
                                     );
-                                    println!("To update manually, run: npm install -g axiom-agent@latest");
+                                    println!(
+                                        "To update manually, run: npm install -g axiom-agent@latest"
+                                    );
                                 }
                             }
                         }
@@ -4472,7 +4486,9 @@ fn print_help() {
     println!("  /model list [FILTER]                Fetch catalog view of available models");
     println!("  /permission [velocity|full|strict]  Switch permission mode (alias: /mode)");
     println!("  /theme [axiom|blood|ash|high]       Switch visual color theme (alias: /themes)");
-    println!("  /update                             Check for and automatically install latest updates");
+    println!(
+        "  /update                             Check for and automatically install latest updates"
+    );
     println!("  /queue [add <task>|list|clear]      Manage sequential background task queue");
     println!("  /undo                               Restore latest workspace checkpoint");
     println!("  /checkpoints                        List recovery snapshots");
