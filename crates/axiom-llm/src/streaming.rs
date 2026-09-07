@@ -1186,7 +1186,11 @@ mod tests {
     async fn live_projection_extracts_unstructured_thinking_preambles_into_reasoning_delta() {
         let stream = ChatStream::from_chunks(vec![
             ChatChunk {
-                content_delta: "Here's a thinking process:\n\n1. Analyze user request.".to_string(),
+                content_delta: concat!(
+                    "Here's a thinking process:\n\n",
+                    "1. Analyze user request."
+                )
+                .to_string(),
                 ..ChatChunk::default()
             },
             ChatChunk {

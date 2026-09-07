@@ -1647,7 +1647,10 @@ impl ChatSession {
         } else if lower.contains("latest package") || lower.contains("latest library") {
             Some(format!("{trimmed} latest version documentation"))
         } else if lower.contains("minecraft")
-            && (lower.contains("mod") || lower.contains("plugin") || lower.contains("platform") || lower.contains("community"))
+            && (lower.contains("mod")
+                || lower.contains("plugin")
+                || lower.contains("platform")
+                || lower.contains("community"))
         {
             Some("Minecraft mod and plugin publishing platforms CurseForge Modrinth SpigotMC BuiltByBit".to_string())
         } else if lower.contains("find platform")

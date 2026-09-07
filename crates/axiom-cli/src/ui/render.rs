@@ -848,13 +848,17 @@ mod tests {
         let renderer = Renderer::from_config_with_terminal(&config, true);
 
         // Entire content is thinking
-        let thought_only = "Here's a thinking process:\n\n1. Analyze user input.\n2. Need platform list.";
+        let thought_only =
+            "Here's a thinking process:\n\n1. Analyze user input.\n2. Need platform list.";
         let rendered_thought = renderer.assistant(thought_only);
         assert!(rendered_thought.contains("💭 Thinking:"));
         assert!(!rendered_thought.contains("◆ Axiom:"));
 
         // Thinking followed by response
-        let thought_and_response = "Here's a thinking process:\n\nPlanning answer.\n\n**Response:**\nHere are the top platforms:\n1. Modrinth\n2. CurseForge";
+        let thought_and_response = concat!(
+            "Here's a thinking process:\n\nPlanning answer.\n\n",
+            "**Response:**\nHere are the top platforms:\n1. Modrinth\n2. CurseForge"
+        );
         let rendered_both = renderer.assistant(thought_and_response);
         assert!(rendered_both.contains("💭 Thinking:"));
         assert!(rendered_both.contains("◆ Axiom:"));

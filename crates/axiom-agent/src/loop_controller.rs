@@ -1876,7 +1876,9 @@ min_axiom_version = "0.1.0"
         };
 
         let obs = tool_observation(&custom_event);
-        assert!(obs.contains("The user responded to your clarification question (custom write-in reply):"));
+        assert!(obs.contains(
+            "The user responded to your clarification question (custom write-in reply):"
+        ));
         assert!(obs.contains("Modrinth and CurseForge"));
         assert!(obs.contains("IMPORTANT: Prioritize this user answer above all else"));
     }
