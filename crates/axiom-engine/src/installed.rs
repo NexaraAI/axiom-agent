@@ -181,11 +181,60 @@ pub fn load_installed_skills(skills_dir: impl AsRef<Path>) -> Result<Vec<Install
         }
     }
 
+    if let Ok(read_dir) = fs::read_dir(skills_dir) {
+        for entry in read_dir.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                let manifest_path = path.join("skill.toml");
+                let skill_id = path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or_default();
+                if !skill_id.is_empty()
+                    && !skills.iter().any(|s| s.manifest.id == skill_id)
+                    && manifest_path.exists()
+                {
+                    if let Ok(manifest) = SkillManifest::from_path(&manifest_path) {
+                        let record = InstalledSkillRecord {
+                            id: manifest.id.clone(),
+                            version: manifest.version.clone(),
+                            installed_at: "local".to_string(),
+                            updated_at: None,
+                            source: "local".to_string(),
+                            registry_url: None,
+                            manifest_url: None,
+                            checksum: None,
+                            enabled: true,
+                            state: SkillLifecycleState::Enabled,
+                            trust_level: TrustLevel::Trusted,
+                            last_checked_at: None,
+                            last_update_error: None,
+                            last_runtime_error: None,
+                            success_count: 0,
+                            failure_count: 0,
+                            last_used_at: None,
+                            average_latency_ms: None,
+                        };
+                        skills.push(InstalledSkill { record, manifest });
+                    }
+                }
+            }
+        }
+    }
+
     for core_id in [
         "file.read",
         "file.write",
+        "file.replace",
+        "subagent.run",
         "project.scan",
         "web.fetch",
+        "github.search",
+        "deep-research",
+        "github-research",
+        "humanized-codes",
+        "research-first",
+        "game-builder",
         "shell.powershell.safe",
         "shell.bash.safe",
         "shell.zsh.safe",
@@ -195,6 +244,7 @@ pub fn load_installed_skills(skills_dir: impl AsRef<Path>) -> Result<Vec<Install
         "git.diff",
         "skill.create",
         "question.ask",
+        "test.run",
     ] {
         if !skills.iter().any(|s| s.manifest.id == core_id) {
             if let Some(builtin) = crate::builtin_installed_skill(core_id) {

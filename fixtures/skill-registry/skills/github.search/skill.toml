@@ -1,0 +1,25 @@
+schema_version = "1.0"
+id = "github.search"
+name = "GitHub Search & Inspect"
+version = "0.1.0"
+description = "Search and inspect GitHub organizations, repositories, releases, and READMEs."
+category = "github"
+skill_type = "tool"
+risk_level = "low"
+permissions = ["network"]
+platforms = ["windows", "linux", "macos"]
+entrypoint = "builtin:github.search"
+author = "Axiom Agent"
+license = "MIT"
+min_axiom_version = "0.1.0"
+
+[llm_card]
+summary = "Search GitHub repositories, inspect organizations and users, and retrieve READMEs and releases."
+when_to_use = [
+    "User asks to inspect a GitHub organization, user, or repository",
+    "Searching for open-source repositories, libraries, or tools on GitHub",
+    "Fetching READMEs or release changelogs for a repository"
+]
+input_contract = "org (string), repo (string), query (string), type (string)"
+output_contract = "source, status, results"
+token_budget = 300

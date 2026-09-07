@@ -1,4 +1,5 @@
 use std::{
+    fs,
     path::{Path, PathBuf},
     time::Instant,
 };
@@ -297,22 +298,224 @@ async fn run_skill(skill_id: &str, args: Option<&str>) -> Result<()> {
     }
 }
 
+pub(crate) async fn install_skill_entry(skill_id: &str) -> Result<()> {
+    install_skill(skill_id, None, None).await
+}
+
+async fn install_skill_from_local_dir(source_dir: &Path) -> Result<()> {
+    let (config_path, config) = load_config()?;
+    let manifest_path = source_dir.join("skill.toml");
+    let skill_id = if manifest_path.exists() {
+        let content = fs::read_to_string(&manifest_path)?;
+        let parsed: toml::Value = toml::from_str(&content)?;
+        parsed
+            .get("id")
+            .and_then(|v| v.as_str())
+            .map(ToString::to_string)
+    } else {
+        None
+    }
+    .unwrap_or_else(|| {
+        source_dir
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("custom-skill")
+            .to_string()
+    });
+
+    let target_dir = skills_dir(&config_path, &config).join(&skill_id);
+    fs::create_dir_all(&target_dir)?;
+    for entry in fs::read_dir(source_dir)? {
+        let entry = entry?;
+        let dest = target_dir.join(entry.file_name());
+        if entry.file_type()?.is_file() {
+            fs::copy(entry.path(), dest)?;
+        }
+    }
+
+    let mut installed =
+        axiom_engine::InstalledSkills::load_from_dir(skills_dir(&config_path, &config))?;
+    let record = axiom_engine::InstalledSkillRecord {
+        id: skill_id.clone(),
+        version: semver::Version::new(1, 0, 0),
+        installed_at: "local".to_string(),
+        updated_at: None,
+        source: "local".to_string(),
+        registry_url: None,
+        manifest_url: None,
+        checksum: None,
+        enabled: true,
+        state: axiom_engine::SkillLifecycleState::Enabled,
+        trust_level: axiom_engine::TrustLevel::Trusted,
+        last_checked_at: None,
+        last_update_error: None,
+        last_runtime_error: None,
+        success_count: 0,
+        failure_count: 0,
+        last_used_at: None,
+        average_latency_ms: None,
+    };
+    installed.upsert(record);
+    installed.save_to_dir(skills_dir(&config_path, &config))?;
+
+    println!(
+        "Installed local skill {skill_id} from {}.",
+        source_dir.display()
+    );
+    Ok(())
+}
+
+async fn install_skill_from_github(repo_spec: &str) -> Result<()> {
+    let (config_path, config) = load_config()?;
+    let clean_spec = repo_spec
+        .strip_prefix("https://github.com/")
+        .or_else(|| repo_spec.strip_prefix("github:"))
+        .unwrap_or(repo_spec)
+        .trim_end_matches('/')
+        .trim_end_matches(".git");
+
+    let parts: Vec<&str> = clean_spec.split('/').collect();
+    if parts.len() < 2 {
+        bail!("invalid GitHub repository specifier. Use 'owner/repo' or 'https://github.com/owner/repo'");
+    }
+    let owner = parts[0];
+    let repo = parts[1];
+    let skill_id = repo.to_string();
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(15))
+        .build()?;
+
+    let branches = ["main", "master"];
+    let mut manifest_content = None;
+    let mut skill_md_content = None;
+
+    for branch in branches {
+        let toml_url =
+            format!("https://raw.githubusercontent.com/{owner}/{repo}/{branch}/skill.toml");
+        if let Ok(resp) = client
+            .get(&toml_url)
+            .header("User-Agent", "Axiom-Agent")
+            .send()
+            .await
+        {
+            if resp.status().is_success() {
+                manifest_content = resp.text().await.ok();
+                break;
+            }
+        }
+    }
+
+    for branch in branches {
+        let md_url = format!("https://raw.githubusercontent.com/{owner}/{repo}/{branch}/SKILL.md");
+        if let Ok(resp) = client
+            .get(&md_url)
+            .header("User-Agent", "Axiom-Agent")
+            .send()
+            .await
+        {
+            if resp.status().is_success() {
+                skill_md_content = resp.text().await.ok();
+                break;
+            }
+        }
+    }
+
+    if manifest_content.is_none() && skill_md_content.is_none() {
+        bail!("could not find skill.toml or SKILL.md in https://github.com/{owner}/{repo}");
+    }
+
+    let target_dir = skills_dir(&config_path, &config).join(&skill_id);
+    fs::create_dir_all(&target_dir)?;
+
+    if let Some(toml_text) = manifest_content {
+        fs::write(target_dir.join("skill.toml"), toml_text)?;
+    } else {
+        let default_toml = format!(
+            "schema_version = \"1.0\"\nid = \"{skill_id}\"\nname = \"{skill_id}\"\nversion = \"0.1.0\"\ndescription = \"Community skill from github.com/{owner}/{repo}\"\ncategory = \"community\"\nskill_type = \"prompt\"\nrisk_level = \"low\"\nentrypoint = \"SKILL.md\"\nauthor = \"{owner}\"\nlicense = \"MIT\"\nmin_axiom_version = \"0.1.0\"\n"
+        );
+        fs::write(target_dir.join("skill.toml"), default_toml)?;
+    }
+
+    if let Some(md_text) = skill_md_content {
+        fs::write(target_dir.join("SKILL.md"), md_text)?;
+    }
+
+    let mut installed =
+        axiom_engine::InstalledSkills::load_from_dir(skills_dir(&config_path, &config))?;
+    let record = axiom_engine::InstalledSkillRecord {
+        id: skill_id.clone(),
+        version: semver::Version::new(1, 0, 0),
+        installed_at: "github".to_string(),
+        updated_at: None,
+        source: format!("github:{owner}/{repo}"),
+        registry_url: None,
+        manifest_url: None,
+        checksum: None,
+        enabled: true,
+        state: axiom_engine::SkillLifecycleState::Enabled,
+        trust_level: axiom_engine::TrustLevel::Community,
+        last_checked_at: None,
+        last_update_error: None,
+        last_runtime_error: None,
+        success_count: 0,
+        failure_count: 0,
+        last_used_at: None,
+        average_latency_ms: None,
+    };
+    installed.upsert(record);
+    installed.save_to_dir(skills_dir(&config_path, &config))?;
+
+    println!("Installed skill {skill_id} from GitHub (https://github.com/{owner}/{repo}).");
+    Ok(())
+}
+
 async fn install_skill(
     skill_id: &str,
     registry: Option<&str>,
     from_local_registry: Option<&Path>,
 ) -> Result<()> {
+    let local_path = Path::new(skill_id);
+    if local_path.is_dir()
+        && (local_path.join("skill.toml").exists() || local_path.join("SKILL.md").exists())
+    {
+        return install_skill_from_local_dir(local_path).await;
+    }
+    if skill_id.starts_with("https://github.com/") || skill_id.starts_with("github:") {
+        return install_skill_from_github(skill_id).await;
+    }
+
     let (config_path, config) = load_config()?;
     let selection = load_registry_selection(
         &config,
         RegistryCommandSource::from_args(registry, from_local_registry)?,
     )
     .await?;
-    let entry = selection
-        .client
-        .index()
-        .skill_entry(skill_id)
-        .ok_or_else(|| anyhow!("skill is not in registry: {skill_id}"))?;
+
+    let entry = match selection.client.index().skill_entry(skill_id) {
+        Some(entry) => entry,
+        None => {
+            if let Some(builtin) = axiom_engine::builtin_installed_skill(skill_id) {
+                let target_dir = skills_dir(&config_path, &config).join(skill_id);
+                fs::create_dir_all(&target_dir)?;
+                let manifest_toml = toml::to_string_pretty(&builtin.manifest)?;
+                fs::write(target_dir.join("skill.toml"), manifest_toml)?;
+                let mut installed = axiom_engine::InstalledSkills::load_from_dir(skills_dir(
+                    &config_path,
+                    &config,
+                ))?;
+                installed.upsert(builtin.record.clone());
+                installed.save_to_dir(skills_dir(&config_path, &config))?;
+                println!(
+                    "Installed builtin skill {} (v{}).",
+                    builtin.record.id, builtin.record.version
+                );
+                return Ok(());
+            }
+            return Err(anyhow!("skill is not in registry: {skill_id}"));
+        }
+    };
+
     let (manifest, resource) = selection.client.fetch_skill_manifest(skill_id).await?;
     let assessment = assess_skill_lifecycle(
         &manifest,

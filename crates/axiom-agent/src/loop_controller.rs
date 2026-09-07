@@ -141,6 +141,8 @@ pub trait TransitionObserver {
 
 pub trait StreamObserver {
     fn on_stream_update(&mut self, update: &ChatStreamUpdate);
+    fn on_step_started(&mut self) {}
+    fn on_step_finished(&mut self) {}
 }
 
 impl<F> StreamObserver for F
@@ -446,6 +448,9 @@ impl<'a> AgentLoop<'a> {
                     streaming: request.stream,
                 },
             )?;
+            if let Some(observer) = self.stream_observer.as_deref_mut() {
+                observer.on_step_started();
+            }
             let stream_accumulator = Arc::new(Mutex::new(String::new()));
             let acc_sink = stream_accumulator.clone();
             let provider_call = async {
@@ -509,6 +514,9 @@ impl<'a> AgentLoop<'a> {
                     );
                 }
             };
+            if let Some(observer) = self.stream_observer.as_deref_mut() {
+                observer.on_step_finished();
+            }
             let response = match provider_result {
                 Ok(response) => response,
                 Err(error) => {

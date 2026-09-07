@@ -1,0 +1,25 @@
+schema_version = "1.0"
+id = "github-research"
+name = "GitHub Repository & Org Research"
+version = "0.1.0"
+description = "Inspect and analyze public GitHub organizations, repositories, architectures, and releases."
+category = "research"
+skill_type = "prompt"
+risk_level = "low"
+permissions = ["network"]
+platforms = ["windows", "linux", "macos"]
+entrypoint = "SKILL.md"
+author = "Axiom Agent"
+license = "MIT"
+min_axiom_version = "0.1.0"
+
+[llm_card]
+summary = "Inspects public GitHub organizations, repositories, architecture, and releases."
+when_to_use = [
+  "Researching public GitHub repositories, organizations, or users",
+  "Inspecting READMEs, releases, and changelogs",
+  "Auditing code structure and active open-source projects"
+]
+input_contract = "org, repo, query"
+output_contract = "github_profile, repo_analysis"
+token_budget = 350

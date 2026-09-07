@@ -366,6 +366,7 @@ impl ChatSession {
             "file.replace",
             "subagent.run",
             "web.fetch",
+            "github.search",
             "skill.create",
             "question.ask",
             platform_shell,
@@ -2149,13 +2150,12 @@ struct TerminalStreamRenderer {
 
 impl TerminalStreamRenderer {
     fn new(ui: Renderer) -> Self {
-        let spinner = Spinner::start("Thinking...", ui.primary_color());
         Self {
             ui,
             thinking_open: false,
             response_open: false,
             visible_content: false,
-            spinner: Some(spinner),
+            spinner: None,
         }
     }
 
@@ -2175,6 +2175,15 @@ impl TerminalStreamRenderer {
 }
 
 impl StreamObserver for TerminalStreamRenderer {
+    fn on_step_started(&mut self) {
+        self.finish_line();
+        self.spinner = Some(Spinner::start("Thinking...", self.ui.primary_color()));
+    }
+
+    fn on_step_finished(&mut self) {
+        self.finish_line();
+    }
+
     fn on_stream_update(&mut self, update: &ChatStreamUpdate) {
         if update.tool_call_active {
             if self.thinking_open {
@@ -2184,9 +2193,9 @@ impl StreamObserver for TerminalStreamRenderer {
             let tool_name = update.tool_name.as_deref().unwrap_or("tool");
             let bytes = update.tool_argument_bytes;
             let msg = if bytes > 0 {
-                format!("Composing arguments for {tool_name} ({bytes} bytes)...")
+                format!("Writing arguments for {tool_name} ({bytes} bytes)...")
             } else {
-                format!("Preparing {tool_name}...")
+                format!("Writing {tool_name}...")
             };
             if let Some(spinner) = self.spinner.as_ref() {
                 spinner.set_message(msg);
@@ -3188,6 +3197,29 @@ pub(crate) fn format_tool_result_summary(skill_id: &str, output: &serde_json::Va
             let url = output.get("url").and_then(Value::as_str).unwrap_or("url");
             let bytes = output.get("bytes").and_then(Value::as_u64).unwrap_or(0);
             format!("fetched `{url}` ({bytes} bytes)")
+        }
+        "github.search" => {
+            let mode = output
+                .get("mode")
+                .and_then(Value::as_str)
+                .unwrap_or("search");
+            let status = output.get("status").and_then(Value::as_u64).unwrap_or(200);
+            if let Some(results) = output.get("results") {
+                if let Some(arr) = results.as_array() {
+                    format!(
+                        "found {} GitHub result(s) (mode: {mode}, HTTP {status})",
+                        arr.len()
+                    )
+                } else if let Some(items) = results.get("items").and_then(Value::as_array) {
+                    format!("found {} GitHub repository result(s)", items.len())
+                } else if results.get("readme").is_some() {
+                    format!("retrieved GitHub README (HTTP {status})")
+                } else {
+                    format!("inspected GitHub {mode} (HTTP {status})")
+                }
+            } else {
+                format!("completed GitHub query (HTTP {status})")
+            }
         }
         "question.ask" => {
             let selected = output
@@ -4903,14 +4935,41 @@ async fn handle_chat_command(session: &mut ChatSession, input: &str) -> Result<C
             }
             Ok(CommandResult::Continue)
         }
-        "/skills" => {
+        "/skills" | "/skill" | "/skills list" | "/skill list" => {
             let cards = session.installed_skill_cards()?;
             if cards.is_empty() {
                 println!("No enabled skills installed.");
             } else {
-                println!("Installed enabled skills:");
+                println!("Installed enabled skills ({}):", cards.len());
                 for card in cards {
-                    println!("- {}: {}", card.id, card.summary);
+                    println!("  • {}: {}", card.id, card.summary);
+                }
+            }
+            Ok(CommandResult::Continue)
+        }
+        _ if input.starts_with("/skills install") || input.starts_with("/skill install") => {
+            let target = if let Some(t) = input.strip_prefix("/skills install") {
+                t.trim()
+            } else if let Some(t) = input.strip_prefix("/skill install") {
+                t.trim()
+            } else {
+                ""
+            };
+            if target.is_empty() {
+                println!("Usage: /skill install <skill_id | local_path | github:owner/repo>");
+                println!("Examples:");
+                println!("  /skill install deep-research");
+                println!("  /skill install github-research");
+                println!("  /skill install humanized-codes");
+                println!("  /skill install game-builder");
+                println!("  /skill install test.run");
+                println!("  /skill install ./path/to/custom-skill");
+                println!("  /skill install github:owner/repo");
+            } else {
+                println!("Installing skill '{target}'...");
+                match crate::skill_commands::install_skill_entry(target).await {
+                    Ok(()) => println!("✔ Skill '{target}' installed successfully! Type /skills to view active skills."),
+                    Err(e) => println!("✖ Failed to install skill '{target}': {e}"),
                 }
             }
             Ok(CommandResult::Continue)

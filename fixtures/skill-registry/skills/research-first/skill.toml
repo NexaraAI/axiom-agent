@@ -1,0 +1,25 @@
+schema_version = "1.0"
+id = "research-first"
+name = "Research First Protocol"
+version = "0.1.0"
+description = "Strict autonomous agent reasoning protocol requiring thorough online research and documentation inspection before taking action or answering questions."
+category = "research"
+skill_type = "prompt"
+risk_level = "low"
+permissions = []
+platforms = ["windows", "linux", "macos"]
+entrypoint = "SKILL.md"
+author = "Axiom Agent"
+license = "MIT"
+min_axiom_version = "0.1.0"
+
+[llm_card]
+summary = "Requires web research and documentation grounding before taking action or answering questions on unfamiliar topics, platforms, or APIs."
+when_to_use = [
+  "User asks about external platforms, libraries, frameworks, or tools",
+  "Working with unfamiliar or rapidly evolving APIs",
+  "Answering inquiries about ecosystem options, strategy, or best practices"
+]
+input_contract = "query, topic"
+output_contract = "grounded_research, synthesis"
+token_budget = 300

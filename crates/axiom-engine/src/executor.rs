@@ -152,6 +152,7 @@ impl ExecutorRegistry {
         registry.register(Box::new(SubagentRunExecutor));
         registry.register(Box::new(ProjectScanExecutor));
         registry.register(Box::new(WebFetchExecutor));
+        registry.register(Box::new(GitHubSearchExecutor));
         registry.register(Box::new(GitStatusExecutor));
         registry.register(Box::new(GitDiffExecutor));
         registry.register(Box::new(ShellExecutor::powershell()));
@@ -194,6 +195,7 @@ struct QuestionAskExecutor;
 struct TestRunExecutor;
 struct ProjectScanExecutor;
 struct WebFetchExecutor;
+struct GitHubSearchExecutor;
 struct GitStatusExecutor;
 struct GitDiffExecutor;
 pub struct ShellExecutor {
@@ -706,6 +708,83 @@ impl SkillExecutor for WebFetchExecutor {
 }
 
 #[async_trait(?Send)]
+impl SkillExecutor for GitHubSearchExecutor {
+    fn id(&self) -> &'static str {
+        "github.search"
+    }
+
+    fn descriptor(&self) -> ExecutorDescriptor {
+        ExecutorDescriptor {
+            id: self.id().to_string(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Search keyword or query to find GitHub repositories, topics, or code."
+                    },
+                    "org": {
+                        "type": "string",
+                        "description": "GitHub organization or username to inspect repositories, packages, or profile details."
+                    },
+                    "repo": {
+                        "type": "string",
+                        "description": "GitHub repository name (format: 'owner/repo' or 'repo' if org is provided) to inspect details, releases, or commits."
+                    },
+                    "type": {
+                        "type": "string",
+                        "enum": ["repos", "org_repos", "repo_detail", "releases", "readme"],
+                        "description": "Inspection mode: 'repos' (search repos), 'org_repos' (list org/user repos), 'repo_detail' (repo info), 'releases' (latest releases), 'readme' (repo README)."
+                    }
+                }
+            }),
+            output_schema: json!({
+                "type": "object",
+                "required": ["source", "status", "results"]
+            }),
+            permissions: vec![Permission::Network],
+            side_effects: vec![SideEffectClass::Network],
+            deterministic_fixture: json!({"org": "octocat"}),
+        }
+    }
+
+    async fn execute(
+        &self,
+        request: &ToolRequest,
+        context: &SkillExecutionContext,
+        approval: &mut dyn SkillApproval,
+    ) -> Result<Value, SkillExecutionError> {
+        let policy = SideEffectPolicy::backward_compatible(context.auto_approve_medium_risk);
+        let mut audit = crate::NoopSideEffectAuditSink;
+        self.execute_with_policy(request, context, approval, &policy, &mut audit)
+            .await
+    }
+
+    async fn execute_with_policy(
+        &self,
+        request: &ToolRequest,
+        context: &SkillExecutionContext,
+        approval: &mut dyn SkillApproval,
+        policy: &SideEffectPolicy,
+        audit: &mut dyn SideEffectAuditSink,
+    ) -> Result<Value, SkillExecutionError> {
+        let target = validated_github_target(request, context)?;
+        authorize_side_effect(
+            policy,
+            audit,
+            approval,
+            SideEffectRequest::new(
+                self.id(),
+                "http.get",
+                [SideEffectClass::Network],
+                Some(target),
+            ),
+        )?;
+        github_search(request, context).await
+    }
+}
+
+#[async_trait(?Send)]
 impl SkillExecutor for GitStatusExecutor {
     fn id(&self) -> &'static str {
         "git.status"
@@ -1155,25 +1234,51 @@ pub fn extract_tool_request(text: &str) -> Result<ToolRequest, SkillExecutionErr
     let (start, marker_len) = found.ok_or(SkillExecutionError::MissingToolBlock)?;
     let json_start = start + marker_len;
     let after_start = text[json_start..].trim_start();
-    let end = after_start
-        .find("```")
-        .ok_or(SkillExecutionError::MissingToolBlock)?;
-    let json_text = after_start[..end].trim();
+    let json_text = if let Some(end) = after_start.find("```") {
+        after_start[..end].trim()
+    } else {
+        after_start.trim()
+    };
 
-    let raw: serde_json::Value = serde_json::from_str(json_text)?;
+    let raw: serde_json::Value = repair_and_parse_json(json_text)?;
     normalize_tool_request_value(raw)
+}
+
+fn repair_and_parse_json(text: &str) -> Result<serde_json::Value, serde_json::Error> {
+    if let Ok(val) = serde_json::from_str(text) {
+        return Ok(val);
+    }
+    let mut cleaned = text.trim().to_string();
+    if cleaned.ends_with('>') {
+        cleaned.pop();
+        cleaned.push('}');
+    }
+    if let Ok(val) = serde_json::from_str(&cleaned) {
+        return Ok(val);
+    }
+    let open_braces = cleaned.chars().filter(|c| *c == '{').count();
+    let close_braces = cleaned.chars().filter(|c| *c == '}').count();
+    if open_braces > close_braces {
+        let quote_count = cleaned.chars().filter(|c| *c == '"').count();
+        if quote_count % 2 == 1 {
+            cleaned.push('"');
+        }
+        for _ in 0..(open_braces - close_braces) {
+            cleaned.push('}');
+        }
+    }
+    serde_json::from_str(&cleaned)
 }
 
 fn normalize_tool_request_value(
     raw: serde_json::Value,
 ) -> Result<ToolRequest, SkillExecutionError> {
     if let serde_json::Value::Object(map) = raw {
-        let skill_id = if let Some(id) = map.get("skill_id").and_then(serde_json::Value::as_str) {
+        let mut skill_id = if let Some(id) = map.get("skill_id").and_then(serde_json::Value::as_str)
+        {
             id.to_string()
         } else if let Some(name) = map.get("name").and_then(serde_json::Value::as_str) {
-            name.strip_prefix("axiom_")
-                .unwrap_or(name)
-                .replace('_', ".")
+            name.strip_prefix("axiom_").unwrap_or(name).to_string()
         } else if let Some(tool) = map.get("tool").and_then(serde_json::Value::as_str) {
             tool.to_string()
         } else {
@@ -1183,6 +1288,28 @@ fn normalize_tool_request_value(
                 message: "missing skill_id or name in tool request".to_string(),
             });
         };
+
+        if skill_id == "shell_run"
+            || skill_id == "shell.run"
+            || skill_id == "run_shell"
+            || skill_id == "exec"
+            || skill_id == "shell"
+        {
+            #[cfg(windows)]
+            {
+                skill_id = "shell.powershell.safe".to_string();
+            }
+            #[cfg(target_os = "macos")]
+            {
+                skill_id = "shell.zsh.safe".to_string();
+            }
+            #[cfg(not(any(windows, target_os = "macos")))]
+            {
+                skill_id = "shell.bash.safe".to_string();
+            }
+        } else if !skill_id.contains('.') && skill_id.contains('_') {
+            skill_id = skill_id.replace('_', ".");
+        }
 
         let arguments = if let Some(args) = map.get("arguments") {
             args.clone()
@@ -1304,6 +1431,42 @@ pub fn builtin_installed_skill(skill_id: &str) -> Option<InstalledSkill> {
             "Run Workspace Tests",
             "Auto-detects and executes project tests (Cargo, NPM, Pytest, Python syntax, HTML validation)",
             SkillType::Tool,
+            RiskLevel::Low,
+        ),
+        "github.search" => (
+            "Search GitHub Repositories & Entities",
+            "Search and inspect GitHub organizations, repositories, releases, and READMEs",
+            SkillType::Tool,
+            RiskLevel::Low,
+        ),
+        "humanized-codes" => (
+            "Humanized Clean Codes",
+            "Strict directives for clean, humanized, self-documenting code without AI comments",
+            SkillType::Prompt,
+            RiskLevel::Low,
+        ),
+        "research-first" => (
+            "Research First Protocol",
+            "Strict directives to research documentation and libraries before planning or coding",
+            SkillType::Prompt,
+            RiskLevel::Low,
+        ),
+        "deep-research" => (
+            "Deep Research Protocol",
+            "Exhaustive multi-source research synthesizing findings into comprehensive dossiers",
+            SkillType::Prompt,
+            RiskLevel::Low,
+        ),
+        "github-research" => (
+            "GitHub Repository & Org Research",
+            "Inspect and analyze public GitHub organizations, repositories, architectures, and releases",
+            SkillType::Prompt,
+            RiskLevel::Low,
+        ),
+        "game-builder" => (
+            "Interactive Game Builder",
+            "Protocols for creating and debugging fully playable, interactive browser canvas games",
+            SkillType::Prompt,
             RiskLevel::Low,
         ),
         _ => return None,
@@ -1776,17 +1939,15 @@ async fn web_fetch(
     request: &ToolRequest,
     context: &SkillExecutionContext,
 ) -> Result<Value, SkillExecutionError> {
+    if let Ok(query) = string_arg(request, "query") {
+        return execute_duckduckgo_search(&query, context).await;
+    }
     let raw_url = if let Ok(url) = string_arg(request, "url") {
         url
-    } else if let Ok(query) = string_arg(request, "query") {
-        let mut ddg = reqwest::Url::parse("https://html.duckduckgo.com/html/")
-            .map_err(|e| SkillExecutionError::InvalidUrl(e.to_string()))?;
-        ddg.query_pairs_mut().append_pair("q", &query);
-        ddg.to_string()
     } else {
         return Err(SkillExecutionError::MissingArgument {
             skill_id: "web.fetch".to_string(),
-            argument: "url",
+            argument: "url or query",
         });
     };
 
@@ -1798,26 +1959,20 @@ async fn web_fetch(
             && (current_url.path() == "/search" || current_url.path() == "/search/")
         {
             if let Some((_, query_val)) = current_url.query_pairs().find(|(k, _)| k == "q") {
-                let mut ddg_url = reqwest::Url::parse("https://html.duckduckgo.com/html/")
-                    .map_err(|e| SkillExecutionError::InvalidUrl(e.to_string()))?;
-                ddg_url.query_pairs_mut().append_pair("q", &query_val);
-                current_url = validate_web_url(ddg_url.as_str(), context)?;
+                return execute_duckduckgo_search(&query_val, context).await;
             }
-        } else if (host_lower == "duckduckgo.com" || host_lower == "www.duckduckgo.com")
-            && (current_url.path() == "/" || current_url.path() == "")
+        } else if (host_lower == "duckduckgo.com" || host_lower == "html.duckduckgo.com")
+            && (current_url.path() == "/"
+                || current_url.path() == "/html"
+                || current_url.path() == "/html/")
         {
             if let Some((_, query_val)) = current_url.query_pairs().find(|(k, _)| k == "q") {
-                let mut ddg_url = reqwest::Url::parse("https://html.duckduckgo.com/html/")
-                    .map_err(|e| SkillExecutionError::InvalidUrl(e.to_string()))?;
-                ddg_url.query_pairs_mut().append_pair("q", &query_val);
-                current_url = validate_web_url(ddg_url.as_str(), context)?;
+                return execute_duckduckgo_search(&query_val, context).await;
             }
         }
     }
 
     const MAX_WEB_REDIRECTS: usize = 5;
-    const DEFAULT_USER_AGENT: &str =
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36 (Axiom-Agent)";
 
     let mut final_response = None;
 
@@ -1862,7 +2017,7 @@ async fn web_fetch(
 
         let response = client
             .get(current_url.clone())
-            .header(reqwest::header::USER_AGENT, DEFAULT_USER_AGENT)
+            .header(reqwest::header::USER_AGENT, platform_user_agent())
             .header(
                 reqwest::header::ACCEPT,
                 "text/html,application/xhtml+xml,application/xml;q=0.9,application/json;q=0.8,*/*;q=0.7",
@@ -1941,6 +2096,7 @@ async fn web_fetch(
         "url": current_url.to_string(),
         "status": status,
         "content_type": content_type,
+        "bytes": bytes.len(),
         "text": text,
     }))
 }
@@ -2079,6 +2235,448 @@ fn extract_text_from_html(html: &str) -> String {
         }
     }
     cleaned.trim().to_string()
+}
+
+fn platform_user_agent() -> &'static str {
+    #[cfg(target_os = "windows")]
+    {
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36 (Axiom-Agent)"
+    }
+    #[cfg(target_os = "macos")]
+    {
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36 (Axiom-Agent)"
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+    {
+        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36 (Axiom-Agent)"
+    }
+}
+
+async fn execute_duckduckgo_search(
+    query: &str,
+    context: &SkillExecutionContext,
+) -> Result<Value, SkillExecutionError> {
+    let mut client_builder =
+        reqwest::Client::builder().timeout(Duration::from_secs(context.web_timeout_secs));
+    if !context.web_fetch_use_system_proxy {
+        client_builder = client_builder.no_proxy();
+    }
+    let client = client_builder
+        .build()
+        .map_err(|error| SkillExecutionError::Network(error.to_string()))?;
+
+    // DuckDuckGo blocks automated GET with CAPTCHA (HTTP 202).
+    // An HTTP POST to https://html.duckduckgo.com/html/ with form parameter "q" bypasses the CAPTCHA and returns HTTP 200 with all results.
+    let response_result = client
+        .post("https://html.duckduckgo.com/html/")
+        .header(reqwest::header::USER_AGENT, platform_user_agent())
+        .header(
+            reqwest::header::ACCEPT,
+            "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        )
+        .header(reqwest::header::ACCEPT_LANGUAGE, "en-US,en;q=0.9")
+        .form(&[("q", query)])
+        .send()
+        .await;
+
+    let mut parsed_results = Vec::new();
+    if let Ok(response) = response_result {
+        if response.status().is_success() {
+            if let Ok(html) = response.text().await {
+                parsed_results = parse_duckduckgo_results(&html);
+            }
+        }
+    }
+
+    if parsed_results.is_empty() {
+        if let Some(wiki_results) = fetch_wikipedia_search_fallback(query, context).await {
+            parsed_results = wiki_results;
+        }
+    }
+
+    let mut formatted = format!("## Web Search Results for: \"{query}\"\n\n");
+    if parsed_results.is_empty() {
+        formatted.push_str("No direct search results found for this query.");
+    } else {
+        for (i, (title, snippet, url)) in parsed_results.iter().enumerate() {
+            let num = i + 1;
+            let title_display = if title.is_empty() {
+                url.as_str()
+            } else {
+                title.as_str()
+            };
+            formatted.push_str(&format!(
+                "{num}. **[{title_display}]({url})**\n   {snippet}\n\n"
+            ));
+        }
+    }
+
+    let bytes_len = formatted.len();
+    Ok(json!({
+        "url": format!("https://html.duckduckgo.com/html/?q={query}"),
+        "status": 200,
+        "content_type": "text/markdown",
+        "bytes": bytes_len,
+        "text": formatted,
+    }))
+}
+
+fn parse_duckduckgo_results(html: &str) -> Vec<(String, String, String)> {
+    let mut results = Vec::new();
+    let blocks: Vec<&str> = html.split("class=\"result results_links").collect();
+    for block in blocks.into_iter().skip(1) {
+        let title = extract_tag_inner(block, "result__a");
+        let snippet = extract_tag_inner(block, "result__snippet");
+        let mut url = extract_href(block, "result__url");
+
+        if url.is_empty() {
+            let raw_href = extract_href(block, "result__a");
+            if let Some(pos) = raw_href.find("uddg=") {
+                let rest = &raw_href[pos + 5..];
+                let end = rest.find('&').unwrap_or(rest.len());
+                let encoded = &rest[..end];
+                url = decode_percent_encoded(encoded);
+            } else if !raw_href.is_empty() {
+                url = raw_href;
+            }
+        }
+
+        if !url.is_empty() || !title.is_empty() {
+            results.push((
+                clean_html_entities(&title),
+                clean_html_entities(&snippet),
+                url,
+            ));
+        }
+        if results.len() >= 10 {
+            break;
+        }
+    }
+    results
+}
+
+fn extract_tag_inner(block: &str, class_name: &str) -> String {
+    let class_marker = format!("class=\"{class_name}\"");
+    if let Some(pos) = block.find(&class_marker) {
+        let after = &block[pos..];
+        if let Some(tag_end) = after.find('>') {
+            let content = &after[tag_end + 1..];
+            if let Some(close_tag) = content.find("</") {
+                return extract_text_from_html(&content[..close_tag]);
+            }
+        }
+    }
+    String::new()
+}
+
+fn extract_href(block: &str, class_name: &str) -> String {
+    let class_marker = format!("class=\"{class_name}\"");
+    if let Some(pos) = block.find(&class_marker) {
+        let window_start = pos.saturating_sub(60);
+        let window_end = (pos + 120).min(block.len());
+        let window = &block[window_start..window_end];
+        if let Some(href_idx) = window.find("href=\"") {
+            let after_href = &window[href_idx + 6..];
+            if let Some(quote_idx) = after_href.find('"') {
+                return after_href[..quote_idx].trim().to_string();
+            }
+        }
+    }
+    String::new()
+}
+
+fn clean_html_entities(text: &str) -> String {
+    text.replace("&quot;", "\"")
+        .replace("&amp;", "&")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&#x27;", "'")
+        .replace("&#39;", "'")
+        .replace("&nbsp;", " ")
+        .trim()
+        .to_string()
+}
+
+fn decode_percent_encoded(s: &str) -> String {
+    let mut result = Vec::new();
+    let bytes = s.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            if let Ok(byte) = u8::from_str_radix(&s[i + 1..i + 3], 16) {
+                result.push(byte);
+                i += 3;
+                continue;
+            }
+        } else if bytes[i] == b'+' {
+            result.push(b' ');
+            i += 1;
+            continue;
+        }
+        result.push(bytes[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&result).to_string()
+}
+
+async fn fetch_wikipedia_search_fallback(
+    query: &str,
+    context: &SkillExecutionContext,
+) -> Option<Vec<(String, String, String)>> {
+    let mut client_builder =
+        reqwest::Client::builder().timeout(Duration::from_secs(context.web_timeout_secs));
+    if !context.web_fetch_use_system_proxy {
+        client_builder = client_builder.no_proxy();
+    }
+    let client = client_builder.build().ok()?;
+    let url = format!(
+        "https://en.wikipedia.org/w/api.php?action=opensearch&search={}&limit=5&namespace=0&format=json",
+        query
+    );
+    let resp = client
+        .get(&url)
+        .header(reqwest::header::USER_AGENT, "Axiom-Agent")
+        .send()
+        .await
+        .ok()?;
+    let json_data: Value = resp.json().await.ok()?;
+    let titles = json_data.get(1)?.as_array()?;
+    let snippets = json_data.get(2)?.as_array()?;
+    let urls = json_data.get(3)?.as_array()?;
+
+    let mut results = Vec::new();
+    for i in 0..titles.len() {
+        let title = titles
+            .get(i)
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string();
+        let snippet = snippets
+            .get(i)
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string();
+        let link = urls
+            .get(i)
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string();
+        if !link.is_empty() {
+            results.push((title, snippet, link));
+        }
+    }
+    if results.is_empty() {
+        None
+    } else {
+        Some(results)
+    }
+}
+
+fn validated_github_target(
+    request: &ToolRequest,
+    _context: &SkillExecutionContext,
+) -> Result<String, SkillExecutionError> {
+    let org = optional_string_arg(request, "org");
+    let repo = optional_string_arg(request, "repo");
+    let query = optional_string_arg(request, "query");
+
+    let target = if let Some(r) = repo {
+        format!("https://api.github.com/repos/{r}")
+    } else if let Some(o) = org {
+        format!("https://api.github.com/orgs/{o}")
+    } else if let Some(q) = query {
+        format!("https://api.github.com/search/repositories?q={q}")
+    } else {
+        "https://api.github.com".to_string()
+    };
+    Ok(target)
+}
+
+async fn github_search(
+    request: &ToolRequest,
+    context: &SkillExecutionContext,
+) -> Result<Value, SkillExecutionError> {
+    let org = optional_string_arg(request, "org");
+    let repo = optional_string_arg(request, "repo");
+    let query = optional_string_arg(request, "query");
+    let mode = optional_string_arg(request, "type").unwrap_or_else(|| {
+        if repo.is_some() {
+            "repo_detail".to_string()
+        } else if org.is_some() {
+            "org_repos".to_string()
+        } else {
+            "repos".to_string()
+        }
+    });
+
+    let (endpoint, query_params): (String, Vec<(&str, String)>) = match mode.as_str() {
+        "org_repos" => {
+            let target_org = org.as_deref().or(query.as_deref()).ok_or_else(|| {
+                SkillExecutionError::MissingArgument {
+                    skill_id: "github.search".to_string(),
+                    argument: "org or query",
+                }
+            })?;
+            (
+                format!("https://api.github.com/orgs/{target_org}/repos"),
+                vec![
+                    ("sort", "updated".to_string()),
+                    ("per_page", "30".to_string()),
+                ],
+            )
+        }
+        "releases" => {
+            let target_repo = if let Some(r) = repo.as_deref() {
+                if r.contains('/') {
+                    r.to_string()
+                } else if let Some(o) = org.as_deref() {
+                    format!("{o}/{r}")
+                } else {
+                    r.to_string()
+                }
+            } else {
+                return Err(SkillExecutionError::MissingArgument {
+                    skill_id: "github.search".to_string(),
+                    argument: "repo",
+                });
+            };
+            (
+                format!("https://api.github.com/repos/{target_repo}/releases"),
+                vec![("per_page", "5".to_string())],
+            )
+        }
+        "readme" => {
+            let target_repo = if let Some(r) = repo.as_deref() {
+                if r.contains('/') {
+                    r.to_string()
+                } else if let Some(o) = org.as_deref() {
+                    format!("{o}/{r}")
+                } else {
+                    r.to_string()
+                }
+            } else {
+                return Err(SkillExecutionError::MissingArgument {
+                    skill_id: "github.search".to_string(),
+                    argument: "repo",
+                });
+            };
+            (
+                format!("https://api.github.com/repos/{target_repo}/readme"),
+                vec![],
+            )
+        }
+        "repo_detail" => {
+            let target_repo = if let Some(r) = repo.as_deref() {
+                if r.contains('/') {
+                    r.to_string()
+                } else if let Some(o) = org.as_deref() {
+                    format!("{o}/{r}")
+                } else {
+                    r.to_string()
+                }
+            } else {
+                return Err(SkillExecutionError::MissingArgument {
+                    skill_id: "github.search".to_string(),
+                    argument: "repo",
+                });
+            };
+            (
+                format!("https://api.github.com/repos/{target_repo}"),
+                vec![],
+            )
+        }
+        _ => {
+            let search_query = query.as_deref().or(org.as_deref()).ok_or_else(|| {
+                SkillExecutionError::MissingArgument {
+                    skill_id: "github.search".to_string(),
+                    argument: "query or org",
+                }
+            })?;
+            (
+                "https://api.github.com/search/repositories".to_string(),
+                vec![
+                    ("q", search_query.to_string()),
+                    ("sort", "updated".to_string()),
+                    ("per_page", "20".to_string()),
+                ],
+            )
+        }
+    };
+
+    let mut client_builder =
+        reqwest::Client::builder().timeout(Duration::from_secs(context.web_timeout_secs));
+    if !context.web_fetch_use_system_proxy {
+        client_builder = client_builder.no_proxy();
+    }
+    let client = client_builder
+        .build()
+        .map_err(|error| SkillExecutionError::Network(error.to_string()))?;
+
+    let mut req_builder = client
+        .get(&endpoint)
+        .header(reqwest::header::USER_AGENT, "Axiom-Agent")
+        .header(
+            reqwest::header::ACCEPT,
+            if mode == "readme" {
+                "application/vnd.github.raw+json"
+            } else {
+                "application/vnd.github.v3+json"
+            },
+        );
+
+    for (k, v) in query_params {
+        req_builder = req_builder.query(&[(k, v)]);
+    }
+
+    let response = req_builder
+        .send()
+        .await
+        .map_err(|e| SkillExecutionError::Network(e.to_string()))?;
+
+    let status = response.status().as_u16();
+    if status == 404 && mode == "org_repos" {
+        if let Some(target_user) = org.as_deref().or(query.as_deref()) {
+            let user_url = format!("https://api.github.com/users/{target_user}/repos");
+            let user_resp = client
+                .get(&user_url)
+                .header(reqwest::header::USER_AGENT, "Axiom-Agent")
+                .header(reqwest::header::ACCEPT, "application/vnd.github.v3+json")
+                .query(&[("sort", "updated"), ("per_page", "30")])
+                .send()
+                .await;
+            if let Ok(resp) = user_resp {
+                if resp.status().is_success() {
+                    let text = resp.text().await.unwrap_or_default();
+                    if let Ok(json_val) = serde_json::from_str::<Value>(&text) {
+                        return Ok(json!({
+                            "source": "github",
+                            "mode": "user_repos",
+                            "status": 200,
+                            "results": json_val,
+                        }));
+                    }
+                }
+            }
+        }
+    }
+
+    let text = response
+        .text()
+        .await
+        .map_err(|e| SkillExecutionError::Network(e.to_string()))?;
+
+    let parsed_results = if mode == "readme" {
+        json!({ "readme": text })
+    } else {
+        serde_json::from_str::<Value>(&text).unwrap_or_else(|_| json!({ "raw": text }))
+    };
+
+    Ok(json!({
+        "source": "github",
+        "mode": mode,
+        "status": status,
+        "results": parsed_results,
+    }))
 }
 
 fn validated_web_target(
@@ -3243,6 +3841,31 @@ pub fn normalize_tool_arguments(request: &mut ToolRequest) {
                 }
             }
         }
+        "github.search" => {
+            if !map.contains_key("org") {
+                if let Some(org) = map
+                    .remove("organization")
+                    .or_else(|| map.remove("user"))
+                    .or_else(|| map.remove("owner"))
+                {
+                    map.insert("org".to_string(), org);
+                }
+            }
+            if !map.contains_key("repo") {
+                if let Some(repo) = map.remove("repository").or_else(|| map.remove("project")) {
+                    map.insert("repo".to_string(), repo);
+                }
+            }
+            if !map.contains_key("query") {
+                if let Some(query) = map
+                    .remove("q")
+                    .or_else(|| map.remove("search"))
+                    .or_else(|| map.remove("keyword"))
+                {
+                    map.insert("query".to_string(), query);
+                }
+            }
+        }
         "file.read" => {
             if !map.contains_key("path") {
                 if let Some(path) = map
@@ -3575,6 +4198,7 @@ mod tests {
                 "file.write",
                 "git.diff",
                 "git.status",
+                "github.search",
                 "project.scan",
                 "python.run",
                 "question.ask",
@@ -3593,7 +4217,7 @@ mod tests {
     #[test]
     fn every_builtin_executor_has_complete_schema_policy_and_fixture_metadata() {
         let descriptors = ExecutorRegistry::with_builtin_executors().descriptors();
-        assert_eq!(descriptors.len(), 16);
+        assert_eq!(descriptors.len(), 17);
         for descriptor in descriptors {
             assert!(descriptor.is_complete(), "incomplete: {}", descriptor.id);
             assert!(descriptor.input_schema.is_object());

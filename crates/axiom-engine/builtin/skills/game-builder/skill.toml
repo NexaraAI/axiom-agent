@@ -1,0 +1,27 @@
+schema_version = "1.0"
+id = "game-builder"
+name = "Interactive Game Builder"
+version = "0.1.0"
+description = "Protocols for creating, debugging, and testing fully playable, interactive browser canvas games."
+category = "gamedev"
+skill_type = "prompt"
+risk_level = "low"
+permissions = []
+platforms = ["windows", "linux", "macos"]
+entrypoint = "SKILL.md"
+author = "Axiom Agent"
+license = "MIT"
+min_axiom_version = "0.1.0"
+keywords = ["games", "canvas", "html5", "snake", "gamedev", "interactive", "web-game"]
+
+[llm_card]
+summary = "Guides building and debugging fully playable, polished browser canvas and web games."
+when_to_use = [
+  "Building, rewriting, or fixing web games (snake, tetris, pong, platformers)",
+  "Debugging canvas rendering, game loops, and input handlers",
+  "Adding sound, visual polish, high scores, and particle systems to games",
+  "Ensuring game restart, pause, and game-over flows work flawlessly"
+]
+input_contract = "game_type, requirements, code"
+output_contract = "playable_game, code"
+token_budget = 400

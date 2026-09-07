@@ -1,0 +1,25 @@
+schema_version = "1.0"
+id = "subagent.run"
+name = "Run Autonomous Subagent"
+version = "0.1.0"
+description = "Delegate subtasks to a specialized autonomous subagent."
+category = "orchestration"
+skill_type = "tool"
+risk_level = "low"
+permissions = []
+platforms = ["windows", "linux", "macos"]
+entrypoint = "builtin:subagent.run"
+author = "Axiom Agent"
+license = "MIT"
+min_axiom_version = "0.1.0"
+
+[llm_card]
+summary = "Delegate subtasks to a specialized autonomous subagent."
+when_to_use = [
+  "Complex tasks requiring modular breakdown",
+  "Parallel code exploration or verification",
+  "Specialized subtasks"
+]
+input_contract = "role (string), task (string)"
+output_contract = "role, summary, details"
+token_budget = 250

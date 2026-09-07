@@ -1,0 +1,27 @@
+schema_version = "1.0"
+id = "deep-research"
+name = "Deep Research Protocol"
+version = "0.1.0"
+description = "Exhaustive multi-source investigation and analysis protocol synthesizing technical and market findings into comprehensive dossiers."
+category = "research"
+skill_type = "prompt"
+risk_level = "low"
+permissions = []
+platforms = ["windows", "linux", "macos"]
+entrypoint = "SKILL.md"
+author = "Axiom Agent"
+license = "MIT"
+min_axiom_version = "0.1.0"
+keywords = ["deep-research", "multi-source", "dossier", "synthesis", "audit", "investigation"]
+
+[llm_card]
+summary = "Conducts deep multi-source research across search, GitHub, and registries, producing detailed research dossiers."
+when_to_use = [
+  "User asks for comprehensive research, investigation, or audit of an entity, repo, or technology",
+  "Formulating strategic roadmaps or ecosystem evaluations",
+  "Synthesizing multiple sources into an authoritative research markdown file",
+  "Analyzing competitive landscapes and technical ecosystems"
+]
+input_contract = "topic, entity, scope"
+output_contract = "research_dossier, markdown_report"
+token_budget = 400

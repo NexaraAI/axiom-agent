@@ -1,0 +1,25 @@
+schema_version = "1.0"
+id = "file.replace"
+name = "Replace File Content"
+version = "0.1.0"
+description = "Perform targeted search and replace of exact text blocks in workspace files."
+category = "filesystem"
+skill_type = "tool"
+risk_level = "medium"
+permissions = ["file_system_write"]
+platforms = ["windows", "linux", "macos"]
+entrypoint = "builtin:file.replace"
+author = "Axiom Agent"
+license = "MIT"
+min_axiom_version = "0.1.0"
+
+[llm_card]
+summary = "Search and replace a specific text block in a file without rewriting the entire file."
+when_to_use = [
+  "Editing specific lines or functions in existing code",
+  "Fixing bugs with minimal surgical edits",
+  "Updating configuration values or imports"
+]
+input_contract = "path (string), target (string), replacement (string)"
+output_contract = "status, replacements, bytes_written"
+token_budget = 250

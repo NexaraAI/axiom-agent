@@ -1,0 +1,25 @@
+schema_version = "1.0"
+id = "test.run"
+name = "Run Workspace Tests"
+version = "0.1.0"
+description = "Auto-detects and executes project tests (Cargo, NPM, Pytest, Python syntax, HTML validation)."
+category = "test"
+skill_type = "tool"
+risk_level = "low"
+permissions = ["file_system_read", "shell_run"]
+platforms = ["windows", "linux", "macos"]
+entrypoint = "builtin:test.run"
+author = "Axiom Agent"
+license = "MIT"
+min_axiom_version = "0.1.0"
+
+[llm_card]
+summary = "Auto-detects and executes project tests (Cargo, NPM, Pytest, Python syntax, HTML validation)."
+when_to_use = [
+  "Verifying code changes after modifying source files",
+  "Running project test suite (cargo test, npm test, pytest)",
+  "Checking syntax and validation of code files"
+]
+input_contract = "command (optional string)"
+output_contract = "status, exit_code, stdout, stderr"
+token_budget = 250

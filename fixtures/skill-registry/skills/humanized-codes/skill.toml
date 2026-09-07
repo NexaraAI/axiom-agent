@@ -1,0 +1,26 @@
+schema_version = "1.0"
+id = "humanized-codes"
+name = "Humanized Clean Codes"
+version = "0.1.0"
+description = "Strict directives for clean, humanized, self-documenting code without AI comments, enforcing sound architecture and automated formatting."
+category = "quality"
+skill_type = "prompt"
+risk_level = "low"
+permissions = []
+platforms = ["windows", "linux", "macos"]
+entrypoint = "SKILL.md"
+author = "Axiom Agent"
+license = "MIT"
+min_axiom_version = "0.1.0"
+
+[llm_card]
+summary = "Enforces humanized clean code without redundant comments, robust architecture, and automated linting/formatting."
+when_to_use = [
+  "Writing or refactoring source code in any language",
+  "Reviewing or cleaning AI boilerplate and comments",
+  "Enforcing architectural and type soundness",
+  "Ensuring code is formatted and linted with zero warnings"
+]
+input_contract = "code, requirements"
+output_contract = "clean_code, verification"
+token_budget = 350

@@ -425,6 +425,29 @@ impl Renderer {
     }
 
     pub(crate) fn assistant(&self, content: &str) -> String {
+        let raw_content = content.trim();
+        let cleaned = if raw_content.contains("```axiom-tool")
+            || raw_content.contains("```axiom_tool")
+        {
+            let mut s = raw_content.to_string();
+            while let Some(start) = s.find("```axiom-tool").or_else(|| s.find("```axiom_tool")) {
+                let rest = &s[start..];
+                if let Some(end) = rest[13..].find("```") {
+                    s.replace_range(start..start + 13 + end + 3, "");
+                } else {
+                    s.truncate(start);
+                }
+            }
+            s.trim().to_string()
+        } else {
+            raw_content.to_string()
+        };
+
+        if cleaned.is_empty() {
+            return String::new();
+        }
+        let content = cleaned.as_str();
+
         if let Some(rest) = content.strip_prefix("<think>") {
             if let Some((thought, answer)) = rest.split_once("</think>") {
                 let thought = thought.trim();

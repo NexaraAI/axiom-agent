@@ -146,6 +146,94 @@ static EMBEDDED_REGISTRY_FILES: &[EmbeddedRegistryFile] = &[
         relative_path: "skills/python.run/README.md",
         contents: include_bytes!("../../../fixtures/skill-registry/skills/python.run/README.md"),
     },
+    EmbeddedRegistryFile {
+        relative_path: "skills/github.search/skill.toml",
+        contents: include_bytes!(
+            "../../../fixtures/skill-registry/skills/github.search/skill.toml"
+        ),
+    },
+    EmbeddedRegistryFile {
+        relative_path: "skills/github.search/README.md",
+        contents: include_bytes!("../../../fixtures/skill-registry/skills/github.search/README.md"),
+    },
+    EmbeddedRegistryFile {
+        relative_path: "skills/deep-research/skill.toml",
+        contents: include_bytes!(
+            "../../../fixtures/skill-registry/skills/deep-research/skill.toml"
+        ),
+    },
+    EmbeddedRegistryFile {
+        relative_path: "skills/deep-research/README.md",
+        contents: include_bytes!("../../../fixtures/skill-registry/skills/deep-research/README.md"),
+    },
+    EmbeddedRegistryFile {
+        relative_path: "skills/github-research/skill.toml",
+        contents: include_bytes!(
+            "../../../fixtures/skill-registry/skills/github-research/skill.toml"
+        ),
+    },
+    EmbeddedRegistryFile {
+        relative_path: "skills/github-research/README.md",
+        contents: include_bytes!(
+            "../../../fixtures/skill-registry/skills/github-research/README.md"
+        ),
+    },
+    EmbeddedRegistryFile {
+        relative_path: "skills/humanized-codes/skill.toml",
+        contents: include_bytes!(
+            "../../../fixtures/skill-registry/skills/humanized-codes/skill.toml"
+        ),
+    },
+    EmbeddedRegistryFile {
+        relative_path: "skills/humanized-codes/README.md",
+        contents: include_bytes!(
+            "../../../fixtures/skill-registry/skills/humanized-codes/README.md"
+        ),
+    },
+    EmbeddedRegistryFile {
+        relative_path: "skills/research-first/skill.toml",
+        contents: include_bytes!(
+            "../../../fixtures/skill-registry/skills/research-first/skill.toml"
+        ),
+    },
+    EmbeddedRegistryFile {
+        relative_path: "skills/research-first/README.md",
+        contents: include_bytes!(
+            "../../../fixtures/skill-registry/skills/research-first/README.md"
+        ),
+    },
+    EmbeddedRegistryFile {
+        relative_path: "skills/game-builder/skill.toml",
+        contents: include_bytes!("../../../fixtures/skill-registry/skills/game-builder/skill.toml"),
+    },
+    EmbeddedRegistryFile {
+        relative_path: "skills/game-builder/README.md",
+        contents: include_bytes!("../../../fixtures/skill-registry/skills/game-builder/README.md"),
+    },
+    EmbeddedRegistryFile {
+        relative_path: "skills/test.run/skill.toml",
+        contents: include_bytes!("../../../fixtures/skill-registry/skills/test.run/skill.toml"),
+    },
+    EmbeddedRegistryFile {
+        relative_path: "skills/test.run/README.md",
+        contents: include_bytes!("../../../fixtures/skill-registry/skills/test.run/README.md"),
+    },
+    EmbeddedRegistryFile {
+        relative_path: "skills/file.replace/skill.toml",
+        contents: include_bytes!("../../../fixtures/skill-registry/skills/file.replace/skill.toml"),
+    },
+    EmbeddedRegistryFile {
+        relative_path: "skills/file.replace/README.md",
+        contents: include_bytes!("../../../fixtures/skill-registry/skills/file.replace/README.md"),
+    },
+    EmbeddedRegistryFile {
+        relative_path: "skills/subagent.run/skill.toml",
+        contents: include_bytes!("../../../fixtures/skill-registry/skills/subagent.run/skill.toml"),
+    },
+    EmbeddedRegistryFile {
+        relative_path: "skills/subagent.run/README.md",
+        contents: include_bytes!("../../../fixtures/skill-registry/skills/subagent.run/README.md"),
+    },
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

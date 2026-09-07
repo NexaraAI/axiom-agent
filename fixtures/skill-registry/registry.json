@@ -90,6 +90,78 @@
       "platforms": ["windows", "linux", "macos"],
       "manifest_url": "skills/python.run/skill.toml",
       "min_axiom_version": "0.1.0"
+    },
+    {
+      "id": "github.search",
+      "version": "0.1.0",
+      "category": "github",
+      "platforms": ["windows", "linux", "macos"],
+      "manifest_url": "skills/github.search/skill.toml",
+      "min_axiom_version": "0.1.0"
+    },
+    {
+      "id": "deep-research",
+      "version": "0.1.0",
+      "category": "research",
+      "platforms": ["windows", "linux", "macos"],
+      "manifest_url": "skills/deep-research/skill.toml",
+      "min_axiom_version": "0.1.0"
+    },
+    {
+      "id": "github-research",
+      "version": "0.1.0",
+      "category": "research",
+      "platforms": ["windows", "linux", "macos"],
+      "manifest_url": "skills/github-research/skill.toml",
+      "min_axiom_version": "0.1.0"
+    },
+    {
+      "id": "humanized-codes",
+      "version": "0.1.0",
+      "category": "quality",
+      "platforms": ["windows", "linux", "macos"],
+      "manifest_url": "skills/humanized-codes/skill.toml",
+      "min_axiom_version": "0.1.0"
+    },
+    {
+      "id": "research-first",
+      "version": "0.1.0",
+      "category": "research",
+      "platforms": ["windows", "linux", "macos"],
+      "manifest_url": "skills/research-first/skill.toml",
+      "min_axiom_version": "0.1.0"
+    },
+    {
+      "id": "game-builder",
+      "version": "0.1.0",
+      "category": "gamedev",
+      "platforms": ["windows", "linux", "macos"],
+      "manifest_url": "skills/game-builder/skill.toml",
+      "min_axiom_version": "0.1.0"
+    },
+    {
+      "id": "test.run",
+      "version": "0.1.0",
+      "category": "test",
+      "platforms": ["windows", "linux", "macos"],
+      "manifest_url": "skills/test.run/skill.toml",
+      "min_axiom_version": "0.1.0"
+    },
+    {
+      "id": "file.replace",
+      "version": "0.1.0",
+      "category": "filesystem",
+      "platforms": ["windows", "linux", "macos"],
+      "manifest_url": "skills/file.replace/skill.toml",
+      "min_axiom_version": "0.1.0"
+    },
+    {
+      "id": "subagent.run",
+      "version": "0.1.0",
+      "category": "orchestration",
+      "platforms": ["windows", "linux", "macos"],
+      "manifest_url": "skills/subagent.run/skill.toml",
+      "min_axiom_version": "0.1.0"
     }
   ],
   "bundles": [

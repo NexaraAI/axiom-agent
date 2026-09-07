@@ -4,6 +4,33 @@ All notable changes to Axiom are documented here. Versions follow semantic
 versioning. Stable releases document user-visible changes, configuration or
 proof migrations, security fixes, and upgrade actions.
 
+## 1.0.12
+
+This release introduces comprehensive skill installation and management (local paths, GitHub repositories, registry, and built-in catalogs), dedicated GitHub search and deep web research engines, multi-step thinking and writing state indicators, modular skills for clean humanized code and game building, and robust JSON tool-call repair.
+
+Install it:
+
+```bash
+npm install -g axiom-agent@1.0.12
+```
+
+### New Features & Improvements
+
+- **Skill Installation & Extensibility**:
+  - Added support for installing skills from local directories (`/skill install ./path/to/skill` or `axiom skill install ...`), GitHub repositories (`/skill install https://github.com/owner/repo` or `github:owner/repo`), and the built-in skill catalog.
+  - Added interactive slash commands: `/skill list`, `/skills list`, `/skill install <id>`, and `/skills install <id>`.
+  - Automatic dynamic skill loading from `.axiom/skills` directory and runtime skill discovery.
+- **Deep Research & GitHub Search**:
+  - Implemented `github.search` executor supporting repositories, organization repositories, releases, readmes, and repository detail modes.
+  - Implemented anti-bot resilient DuckDuckGo POST form search with automatic fallback to Wikipedia OpenSearch API.
+  - Added modular skills: `deep-research`, `github-research`, `humanized-codes`, `game-builder`, and `research-first`.
+  - Modularized domain-specific knowledge into addable/removable skills rather than monolithic system prompts.
+- **Interactive Thinking & Writing Status Indicators**:
+  - Added continuous multi-step thinking spinners across agent loop iterations, displaying live elapsed duration and buffering states.
+  - Dynamic tool composing and writing indicators (`Writing arguments for <tool>...`).
+  - Added robust JSON repair in `extract_tool_request` to automatically fix unclosed braces, trailing delimiters, and unclosed quotes.
+  - Sanitized raw tool execution blocks to prevent unparsed JSON from leaking into terminal output.
+
 ## 1.0.11
 
 This release fixes custom reply adaptation for interactive questions (`question.ask`), enforces a strict research-first protocol across all agent operations, eliminates overthinking loops on conversational queries, and prevents internal chain-of-thought preambles from leaking into chat output.
