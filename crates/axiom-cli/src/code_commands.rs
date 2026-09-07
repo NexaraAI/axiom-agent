@@ -1043,33 +1043,91 @@ impl CoderSession {
 
     fn provider_options(&self) -> Option<std::collections::BTreeMap<String, serde_json::Value>> {
         let mut opts = std::collections::BTreeMap::new();
+        let provider = self
+            .config
+            .llm
+            .active_provider
+            .as_deref()
+            .map(str::to_ascii_lowercase);
+        let prov = provider.as_deref().unwrap_or("");
+
         match self.config.llm.thinking {
-            Some(false) => {
-                opts.insert(
-                    "thinking".to_string(),
-                    serde_json::json!({ "type": "disabled" }),
-                );
-            }
-            Some(true) => {
-                let effort = self.config.llm.active_effort();
-                let effort = if effort == "none" { "medium" } else { effort };
-                opts.insert(
-                    "reasoning_effort".to_string(),
-                    serde_json::Value::String(effort.to_string()),
-                );
-                opts.insert(
-                    "thinking".to_string(),
-                    serde_json::json!({ "type": "enabled", "budget_tokens": 2048 }),
-                );
-            }
-            None => {
-                let effort = self.config.llm.active_effort();
-                if effort != "none" {
+            Some(false) => match prov {
+                "openrouter" => {
                     opts.insert(
-                        "reasoning_effort".to_string(),
-                        serde_json::Value::String(effort.to_string()),
+                        "reasoning".to_string(),
+                        serde_json::json!({ "effort": "none" }),
                     );
                 }
+                "groq" => {
+                    opts.insert(
+                        "reasoning_format".to_string(),
+                        serde_json::Value::String("hidden".to_string()),
+                    );
+                }
+                "openai" | "github-models" | "github" | "github_models" => {
+                    opts.insert(
+                        "reasoning_effort".to_string(),
+                        serde_json::Value::String("low".to_string()),
+                    );
+                }
+                _ => {
+                    opts.insert(
+                        "thinking".to_string(),
+                        serde_json::json!({ "type": "disabled" }),
+                    );
+                }
+            },
+            Some(true) => {
+                let effort = self.config.llm.reasoning_effort_for_variant();
+                let budget_tokens = self.config.llm.thinking_budget_tokens_for_variant();
+                match prov {
+                    "openrouter" => {
+                        opts.insert(
+                            "reasoning".to_string(),
+                            serde_json::json!({
+                                "effort": effort,
+                                "max_tokens": budget_tokens,
+                            }),
+                        );
+                    }
+                    "anthropic" => {
+                        opts.insert(
+                            "thinking".to_string(),
+                            serde_json::json!({ "type": "enabled", "budget_tokens": budget_tokens }),
+                        );
+                    }
+                    "openai" | "github-models" | "github" | "github_models" => {
+                        opts.insert(
+                            "reasoning_effort".to_string(),
+                            serde_json::Value::String(effort.to_string()),
+                        );
+                    }
+                    "groq" => {
+                        opts.insert(
+                            "reasoning_format".to_string(),
+                            serde_json::Value::String("parsed".to_string()),
+                        );
+                        opts.insert(
+                            "reasoning_effort".to_string(),
+                            serde_json::Value::String(effort.to_string()),
+                        );
+                    }
+                    _ => {
+                        opts.insert(
+                            "reasoning_effort".to_string(),
+                            serde_json::Value::String(effort.to_string()),
+                        );
+                        opts.insert(
+                            "thinking".to_string(),
+                            serde_json::json!({ "type": "enabled", "budget_tokens": budget_tokens }),
+                        );
+                    }
+                }
+            }
+            None => {
+                // Auto mode: Let the gateway / provider decide reasoning effort
+                // rather than forcing client-side fields that break streaming or cause HTTP 400s.
             }
         }
         if opts.is_empty() {

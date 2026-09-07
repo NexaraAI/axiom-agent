@@ -2,7 +2,11 @@
 
 class UnsupportedPlatformError extends Error {
   constructor(platform, arch) {
-    super(`Unsupported platform: ${platform}/${arch}`);
+    const detail =
+      arch === "arm"
+        ? `Axiom requires a 64-bit architecture (arm64 or x64). 32-bit ${platform}/${arch} is not supported.`
+        : `Unsupported platform: ${platform}/${arch}`;
+    super(detail);
     this.name = "UnsupportedPlatformError";
     this.platform = platform;
     this.arch = arch;
@@ -20,7 +24,7 @@ function resolvePlatform(platform = process.platform, arch = process.arch) {
     };
   }
 
-  if (platform === "linux" && arch === "x64") {
+  if ((platform === "linux" || platform === "android") && arch === "x64") {
     return {
       platform,
       arch,
@@ -50,7 +54,7 @@ function resolvePlatform(platform = process.platform, arch = process.arch) {
     };
   }
 
-  if (platform === "linux" && arch === "arm64") {
+  if ((platform === "linux" || platform === "android") && arch === "arm64") {
     return {
       platform,
       arch,

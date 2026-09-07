@@ -45,6 +45,10 @@ impl OpenAiCompatibleProvider {
         }
     }
 
+    pub fn ollama_cloud(api_key: Option<String>) -> Self {
+        crate::provider::ollama_cloud_provider(api_key)
+    }
+
     pub fn chat_endpoint(&self) -> String {
         format!("{}/chat/completions", self.base_url.trim_end_matches('/'))
     }

@@ -15,10 +15,11 @@ use axiom_agent::{
 };
 use axiom_coder::{list_checkpoints, WorkspaceCheckpoint};
 use axiom_core::{
-    atomic_write, current_utc_month, now_unix_seconds, usd_to_microusd, AxiomConfig,
-    CostLedgerEvent, CostLedgerStore, PermissionMode, PersistedSession, ProviderConfig,
-    SessionApproval, SessionCheckpoint, SessionId, SessionMessage, SessionStore, SessionTodoItem,
-    SessionUsage, CURRENT_IDENTITY_VERSION, CURRENT_SESSION_VERSION,
+    atomic_write, current_utc_month, now_unix_seconds, usd_to_microusd, validate_mode,
+    validate_permission, validate_variant, AgentWorkMode, AxiomConfig, CostLedgerEvent,
+    CostLedgerStore, PermissionMode, PersistedSession, ProviderConfig, SessionApproval,
+    SessionCheckpoint, SessionId, SessionMessage, SessionStore, SessionTodoItem, SessionUsage,
+    CURRENT_IDENTITY_VERSION, CURRENT_SESSION_VERSION,
 };
 use axiom_engine::{
     check_skill_update_statuses, current_axiom_version, execute_installed_tool_with_policy,
@@ -48,8 +49,8 @@ use rustyline::{
     hint::{Hint, Hinter},
     history::FileHistory,
     validate::{ValidationContext, ValidationResult, Validator},
-    Cmd, CompletionType, Config as ReadlineConfig, Context, Editor, Helper, KeyCode, KeyEvent,
-    Modifiers,
+    Cmd, CompletionType, ConditionalEventHandler, Config as ReadlineConfig, Context, Editor, Event,
+    EventHandler, Helper, KeyCode, KeyEvent, Modifiers,
 };
 use serde_json::Value;
 
@@ -362,6 +363,8 @@ impl ChatSession {
             "project.scan",
             "file.read",
             "file.write",
+            "file.replace",
+            "subagent.run",
             "web.fetch",
             "skill.create",
             "question.ask",
@@ -393,6 +396,7 @@ impl ChatSession {
             "low" | "light" => "low",
             "medium" => "medium",
             "high" | "max" => "high",
+            "xhigh" | "x-high" | "extra-high" | "extra_high" => "xhigh",
             _ => trimmed,
         };
         self.config.llm.variant = canonical.to_string();
@@ -433,36 +437,86 @@ impl ChatSession {
 
     pub(crate) fn provider_options(&self) -> Option<std::collections::BTreeMap<String, Value>> {
         let mut opts = std::collections::BTreeMap::new();
+        let provider = self.active_provider().map(|s| s.to_ascii_lowercase());
+        let prov = provider.as_deref().unwrap_or("");
+
         match self.config.llm.thinking {
-            Some(false) => {
-                opts.insert(
-                    "thinking".to_string(),
-                    serde_json::json!({ "type": "disabled" }),
-                );
-            }
+            Some(false) => match prov {
+                "openrouter" => {
+                    opts.insert(
+                        "reasoning".to_string(),
+                        serde_json::json!({ "effort": "none" }),
+                    );
+                }
+                "groq" => {
+                    opts.insert(
+                        "reasoning_format".to_string(),
+                        Value::String("hidden".to_string()),
+                    );
+                }
+                "openai" | "github-models" | "github" | "github_models" => {
+                    opts.insert(
+                        "reasoning_effort".to_string(),
+                        Value::String("low".to_string()),
+                    );
+                }
+                _ => {
+                    opts.insert(
+                        "thinking".to_string(),
+                        serde_json::json!({ "type": "disabled" }),
+                    );
+                }
+            },
             Some(true) => {
-                let variant = self.active_variant();
-                let normalized = variant.to_ascii_lowercase();
-                let effort = if normalized == "none" || normalized == "default" {
-                    "medium"
-                } else {
-                    &normalized
-                };
-                opts.insert(
-                    "reasoning_effort".to_string(),
-                    Value::String(effort.to_string()),
-                );
-                opts.insert(
-                    "thinking".to_string(),
-                    serde_json::json!({ "type": "enabled", "budget_tokens": 2048 }),
-                );
+                let effort = self.config.llm.reasoning_effort_for_variant();
+                let budget_tokens = self.config.llm.thinking_budget_tokens_for_variant();
+                match prov {
+                    "openrouter" => {
+                        opts.insert(
+                            "reasoning".to_string(),
+                            serde_json::json!({
+                                "effort": effort,
+                                "max_tokens": budget_tokens,
+                            }),
+                        );
+                    }
+                    "anthropic" => {
+                        opts.insert(
+                            "thinking".to_string(),
+                            serde_json::json!({ "type": "enabled", "budget_tokens": budget_tokens }),
+                        );
+                    }
+                    "openai" | "github-models" | "github" | "github_models" => {
+                        opts.insert(
+                            "reasoning_effort".to_string(),
+                            Value::String(effort.to_string()),
+                        );
+                    }
+                    "groq" => {
+                        opts.insert(
+                            "reasoning_format".to_string(),
+                            Value::String("parsed".to_string()),
+                        );
+                        opts.insert(
+                            "reasoning_effort".to_string(),
+                            Value::String(effort.to_string()),
+                        );
+                    }
+                    _ => {
+                        opts.insert(
+                            "reasoning_effort".to_string(),
+                            Value::String(effort.to_string()),
+                        );
+                        opts.insert(
+                            "thinking".to_string(),
+                            serde_json::json!({ "type": "enabled", "budget_tokens": budget_tokens }),
+                        );
+                    }
+                }
             }
             None => {
-                let variant = self.active_variant();
-                let normalized = variant.to_ascii_lowercase();
-                if normalized != "none" && normalized != "default" {
-                    opts.insert("reasoning_effort".to_string(), Value::String(normalized));
-                }
+                // Auto mode: Let the gateway / provider decide reasoning effort
+                // rather than forcing client-side fields that break streaming or cause HTTP 400s.
             }
         }
         if opts.is_empty() {
@@ -498,6 +552,17 @@ impl ChatSession {
                 self.config.coder.approval_mode = "safe".to_string();
             }
         }
+        self.save_config()?;
+        self.persist_session()?;
+        Ok(mode)
+    }
+
+    pub(crate) fn work_mode(&self) -> AgentWorkMode {
+        self.config.agent.work_mode
+    }
+
+    pub(crate) fn set_work_mode(&mut self, mode: AgentWorkMode) -> Result<AgentWorkMode> {
+        self.config.agent.work_mode = mode;
         self.save_config()?;
         self.persist_session()?;
         Ok(mode)
@@ -561,6 +626,94 @@ impl ChatSession {
 
     pub(crate) fn disable_proof_for_run(&mut self) {
         self.config.proof.enabled = false;
+    }
+
+    pub(crate) fn display_session_history(&self, ui: &Renderer) -> Result<()> {
+        let store = session_store_for_config(&self.config_path);
+        let sessions = store.list()?;
+        if sessions.is_empty() {
+            println!("{}", ui.warning("No saved sessions found."));
+            return Ok(());
+        }
+
+        println!(
+            "{}",
+            ui.primary("┌── Saved Axiom Sessions ────────────────────────────────────┐")
+        );
+        for (i, entry) in sessions.iter().enumerate() {
+            let is_current = entry.id == self.session_id;
+            let marker = if is_current {
+                "▶ (current)"
+            } else {
+                "           "
+            };
+            let num = i + 1;
+            let id_str = entry.id.as_str();
+            let id_short = if id_str.len() > 12 {
+                &id_str[..12]
+            } else {
+                id_str
+            };
+            println!(
+                "│ {:>2}. {:<12} {:<11} | {:>2} msgs | {:>5} tokens | workspace: {}",
+                num, id_short, marker, entry.message_count, entry.total_tokens, entry.workspace
+            );
+        }
+        println!(
+            "{}",
+            ui.primary("└── Use /history <number|id> or /resume <id> to switch ──────┘")
+        );
+        Ok(())
+    }
+
+    pub(crate) fn switch_to_session(&mut self, ui: &Renderer, target: &str) -> Result<()> {
+        let trimmed = target.trim();
+        if trimmed.is_empty() {
+            return self.display_session_history(ui);
+        }
+
+        let store = session_store_for_config(&self.config_path);
+        let sessions = store.list()?;
+
+        let target_id = if let Ok(num) = trimmed.parse::<usize>() {
+            if num == 0 || num > sessions.len() {
+                return Err(anyhow!(
+                    "Invalid session index: {num}. Must be between 1 and {}.",
+                    sessions.len()
+                ));
+            }
+            sessions[num - 1].id.as_str().to_string()
+        } else if let Some(entry) = sessions.iter().find(|s| s.id.as_str() == trimmed) {
+            entry.id.as_str().to_string()
+        } else if let Some(entry) = sessions.iter().find(|s| s.id.as_str().starts_with(trimmed)) {
+            entry.id.as_str().to_string()
+        } else {
+            return Err(anyhow!(
+                "Session not found matching '{trimmed}'. Use `/history` to list saved sessions."
+            ));
+        };
+
+        if target_id == self.session_id.as_str() {
+            println!(
+                "{}",
+                ui.status_line(&format!("Already active on session {target_id}."))
+            );
+            return Ok(());
+        }
+
+        let _ = self.persist_session();
+        let new_session = ChatSession::resume(&self.config_path, &target_id)?;
+        let msg_count = new_session.history.len();
+        let tokens = new_session.usage_ledger.total_tokens;
+        *self = new_session;
+
+        println!(
+            "{}",
+            ui.success(&format!(
+                "Switched to session {target_id} ({msg_count} messages, {tokens} tokens)."
+            ))
+        );
+        Ok(())
     }
 
     async fn send_user_message_live(
@@ -882,6 +1035,16 @@ impl ChatSession {
             system_messages.push(ChatMessage {
                 role: "system".to_string(),
                 content: skill_context,
+            });
+        }
+        if self.work_mode() == AgentWorkMode::Plan {
+            system_messages.push(ChatMessage {
+                role: "system".to_string(),
+                content: "WORK MODE DIRECTIVE: [PLAN MODE ACTIVE]\n\
+                    You are currently running in Plan Mode.\n\
+                    - Thoroughly analyze code, dependencies, and structure using read-only inspection tools (e.g. project.scan, file.read, git.status, git.diff).\n\
+                    - Formulate a precise, step-by-step implementation plan with file-by-file changes and verification strategies.\n\
+                    - DO NOT execute destructive file writes or modifications until the user reviews the plan and switches to Build mode (`/build`).".to_string(),
             });
         }
 
@@ -1621,6 +1784,7 @@ pub(crate) fn list_sessions() -> Result<()> {
 
 enum PromptRead {
     Line(String),
+    CommandPalette,
     Interrupted,
     EndOfInput,
 }
@@ -1643,11 +1807,14 @@ impl Hint for AxiomHint {
 }
 
 const COMMAND_HINTS: &[(&str, &str)] = &[
-    ("variant", " [Default|low|medium|high]"),
-    ("variants", " [Default|low|medium|high]"),
+    ("plan", ""),
+    ("build", ""),
+    ("variant", " [Default|low|medium|high|xhigh]"),
+    ("variants", " [Default|low|medium|high|xhigh]"),
     ("model", " [name]"),
+    ("models", " [filter]"),
     ("permission", " [velocity|full_machine|strict]"),
-    ("mode", " [velocity|full_machine|strict]"),
+    ("mode", " [plan|build|velocity|full_machine|strict]"),
     ("theme", " [axiom|blood_red|ash|high_contrast]"),
     ("update", ""),
     ("provider", " [name]"),
@@ -1657,9 +1824,14 @@ const COMMAND_HINTS: &[(&str, &str)] = &[
     ("clear", ""),
     ("checkpoints", ""),
     ("restore", " <checkpoint_id>"),
+    ("history", " [number|session_id]"),
+    ("sessions", " [number|session_id]"),
+    ("resume", " <session_id>"),
     ("proof", " [on|off|status|latest]"),
     ("multi", ""),
     ("commands", ""),
+    ("palette", ""),
+    ("menu", ""),
     ("help", ""),
     ("exit", ""),
 ];
@@ -1697,7 +1869,7 @@ impl Completer for AxiomCommandHelper {
         if let Some(sub) = rest.strip_prefix("mode ") {
             let start = pos - sub.len();
             let mut candidates = Vec::new();
-            for opt in &["velocity", "full_machine", "strict"] {
+            for opt in &["plan", "build", "velocity", "full_machine", "strict"] {
                 if opt.starts_with(sub) {
                     candidates.push(Pair {
                         display: opt.to_string(),
@@ -1728,7 +1900,7 @@ impl Completer for AxiomCommandHelper {
         {
             let start = pos - sub.len();
             let mut candidates = Vec::new();
-            for opt in &["Default", "low", "medium", "high"] {
+            for opt in &["Default", "low", "medium", "high", "xhigh"] {
                 if opt
                     .to_ascii_lowercase()
                     .starts_with(&sub.to_ascii_lowercase())
@@ -1784,6 +1956,36 @@ impl Completer for AxiomCommandHelper {
             return Ok((start, candidates));
         }
 
+        if let Some(sub) = rest
+            .strip_prefix("history ")
+            .or_else(|| rest.strip_prefix("sessions "))
+            .or_else(|| rest.strip_prefix("resume "))
+        {
+            let start = pos - sub.len();
+            let mut candidates = Vec::new();
+            if let Ok(config_path) = AxiomConfig::default_config_path() {
+                if let Ok(sessions) = session_store_for_config(&config_path).list() {
+                    for (i, s) in sessions.iter().enumerate() {
+                        let num = (i + 1).to_string();
+                        let id = s.id.as_str();
+                        if num.starts_with(sub) {
+                            candidates.push(Pair {
+                                display: format!("{num} ({})", &id[..id.len().min(8)]),
+                                replacement: num,
+                            });
+                        }
+                        if id.starts_with(sub) {
+                            candidates.push(Pair {
+                                display: id.to_string(),
+                                replacement: id.to_string(),
+                            });
+                        }
+                    }
+                }
+            }
+            return Ok((start, candidates));
+        }
+
         let mut candidates = Vec::new();
         for (cmd, desc) in COMMAND_HINTS {
             if cmd.starts_with(rest) {
@@ -1809,6 +2011,11 @@ impl Hinter for AxiomCommandHelper {
             return None;
         }
         let rest = &line[1..];
+        if rest.is_empty() {
+            return Some(AxiomHint(
+                " [type command or press Enter for menu]".to_string(),
+            ));
+        }
         if let Some(sub) = rest.strip_prefix("permission ") {
             for opt in &["velocity", "full_machine", "strict"] {
                 if let Some(suffix) = opt.strip_prefix(sub) {
@@ -1820,7 +2027,7 @@ impl Hinter for AxiomCommandHelper {
             return None;
         }
         if let Some(sub) = rest.strip_prefix("mode ") {
-            for opt in &["velocity", "full_machine", "strict"] {
+            for opt in &["plan", "build", "velocity", "full_machine", "strict"] {
                 if let Some(suffix) = opt.strip_prefix(sub) {
                     if !suffix.is_empty() {
                         return Some(AxiomHint(suffix.to_string()));
@@ -1833,7 +2040,7 @@ impl Hinter for AxiomCommandHelper {
             .strip_prefix("variant ")
             .or_else(|| rest.strip_prefix("variants "))
         {
-            for opt in &["Default", "low", "medium", "high"] {
+            for opt in &["Default", "low", "medium", "high", "xhigh"] {
                 if let Some(suffix) = opt.strip_prefix(sub) {
                     if !suffix.is_empty() {
                         return Some(AxiomHint(suffix.to_string()));
@@ -1867,11 +2074,9 @@ impl Highlighter for AxiomCommandHelper {
         prompt: &'p str,
         _default: bool,
     ) -> std::borrow::Cow<'b, str> {
-        if let Some(colored) = &self.colored_prompt {
-            std::borrow::Cow::Borrowed(colored.as_str())
-        } else {
-            std::borrow::Cow::Borrowed(prompt)
-        }
+        // Always return raw prompt without ANSI escape codes to ensure Rustyline
+        // accurately calculates visual column width and prevents cursor drifting or line-wrap collisions.
+        std::borrow::Cow::Borrowed(prompt)
     }
 
     fn highlight_hint<'h>(&self, hint: &'h str) -> std::borrow::Cow<'h, str> {
@@ -1887,9 +2092,29 @@ impl Validator for AxiomCommandHelper {
 
 impl Helper for AxiomCommandHelper {}
 
+#[derive(Clone)]
+struct PaletteTriggerHandler {
+    triggered: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl ConditionalEventHandler for PaletteTriggerHandler {
+    fn handle(
+        &self,
+        _evt: &Event,
+        _n: rustyline::RepeatCount,
+        _positive: bool,
+        _ctx: &rustyline::EventContext,
+    ) -> Option<Cmd> {
+        self.triggered
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        Some(Cmd::Interrupt)
+    }
+}
+
 struct TerminalInput {
     editor: Option<Editor<AxiomCommandHelper, FileHistory>>,
     history_path: PathBuf,
+    palette_triggered: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
 struct TerminalStreamRenderer {
@@ -1989,6 +2214,7 @@ impl TerminalInput {
             .parent()
             .unwrap_or_else(|| Path::new("."))
             .join("input-history.txt");
+        let palette_triggered = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         let editor = if io::stdin().is_terminal() && io::stdout().is_terminal() {
             let config = ReadlineConfig::builder()
                 .max_history_size(500)?
@@ -2004,6 +2230,30 @@ impl TerminalInput {
             let _ = editor.bind_sequence(KeyEvent(KeyCode::Enter, Modifiers::SHIFT), Cmd::Newline);
             let _ =
                 editor.bind_sequence(KeyEvent(KeyCode::Char('j'), Modifiers::CTRL), Cmd::Newline);
+
+            // Bind Ctrl+P, Ctrl+K, and F1 to open Command Palette popup
+            let handler_p = PaletteTriggerHandler {
+                triggered: palette_triggered.clone(),
+            };
+            let _ = editor.bind_sequence(
+                KeyEvent(KeyCode::Char('p'), Modifiers::CTRL),
+                EventHandler::Conditional(Box::new(handler_p)),
+            );
+            let handler_k = PaletteTriggerHandler {
+                triggered: palette_triggered.clone(),
+            };
+            let _ = editor.bind_sequence(
+                KeyEvent(KeyCode::Char('k'), Modifiers::CTRL),
+                EventHandler::Conditional(Box::new(handler_k)),
+            );
+            let handler_f1 = PaletteTriggerHandler {
+                triggered: palette_triggered.clone(),
+            };
+            let _ = editor.bind_sequence(
+                KeyEvent(KeyCode::F(1), Modifiers::NONE),
+                EventHandler::Conditional(Box::new(handler_f1)),
+            );
+
             if history_path.exists() && sanitize_terminal_history_file(&history_path) {
                 let _ = editor.load_history(&history_path);
             }
@@ -2014,6 +2264,7 @@ impl TerminalInput {
         Ok(Self {
             editor,
             history_path,
+            palette_triggered,
         })
     }
 
@@ -2024,7 +2275,16 @@ impl TerminalInput {
             }
             return Ok(match editor.readline(prompt) {
                 Ok(line) => PromptRead::Line(line),
-                Err(ReadlineError::Interrupted) => PromptRead::Interrupted,
+                Err(ReadlineError::Interrupted) => {
+                    if self
+                        .palette_triggered
+                        .swap(false, std::sync::atomic::Ordering::SeqCst)
+                    {
+                        PromptRead::CommandPalette
+                    } else {
+                        PromptRead::Interrupted
+                    }
+                }
                 Err(ReadlineError::Eof) => PromptRead::EndOfInput,
                 Err(error) => return Err(error.into()),
             });
@@ -2102,6 +2362,7 @@ async fn run_terminal_session(mut session: ChatSession) -> Result<()> {
             session.active_permission_mode(),
             &session.workspace_path().display().to_string(),
             session.session_id(),
+            session.work_mode().as_str(),
         )
     );
     if let Some((curr, latest)) = check_for_startup_update(&session.config).await {
@@ -2131,6 +2392,10 @@ async fn run_terminal_session(mut session: ChatSession) -> Result<()> {
             (queued, true)
         } else {
             let read_line = match input_reader.read(&ui.prompt_plain(), Some(&ui.prompt()))? {
+                PromptRead::CommandPalette => {
+                    handle_chat_command(&mut session, "/commands").await?;
+                    continue;
+                }
                 PromptRead::Line(line) => {
                     let cleaned = clean_pasted_input(&line);
                     let line_count = cleaned.lines().count();
@@ -2563,7 +2828,7 @@ struct DurableTransitionWriter {
 impl TransitionObserver for DurableTransitionWriter {
     fn on_transition(&mut self, checkpoint: &TransitionCheckpoint) -> Result<()> {
         if let AgentTransitionKind::ToolStarted { request, .. } = &checkpoint.transition.kind {
-            if request.skill_id == "file.write" {
+            if request.skill_id == "file.write" || request.skill_id == "file.replace" {
                 if let Some(path) = request
                     .arguments
                     .get("path")
@@ -2689,6 +2954,16 @@ impl TransitionObserver for DurableTransitionWriter {
                             .get("path")
                             .and_then(Value::as_str)
                             .map(|p| format!(" `{p}`")),
+                        "file.replace" => request
+                            .arguments
+                            .get("path")
+                            .and_then(Value::as_str)
+                            .map(|p| format!(" `{p}`")),
+                        "subagent.run" => request
+                            .arguments
+                            .get("role")
+                            .and_then(Value::as_str)
+                            .map(|r| format!(" [{r}]")),
                         "shell.powershell.safe"
                         | "shell.bash.safe"
                         | "shell.zsh.safe"
@@ -2809,11 +3084,48 @@ pub(crate) fn format_tool_result_summary(skill_id: &str, output: &serde_json::Va
             };
             format!("{action} `{path}` ({diff})")
         }
+        "file.replace" => {
+            let path = output.get("path").and_then(Value::as_str).unwrap_or("file");
+            let replacements = output
+                .get("replacements")
+                .and_then(Value::as_u64)
+                .unwrap_or(1);
+            let bytes = output
+                .get("bytes_written")
+                .and_then(Value::as_u64)
+                .unwrap_or(0);
+            format!("replaced {replacements} block(s) in `{path}` ({bytes} bytes)")
+        }
+        "subagent.run" => {
+            let role = output
+                .get("role")
+                .and_then(Value::as_str)
+                .unwrap_or("Subagent");
+            let summary = output
+                .get("summary")
+                .and_then(Value::as_str)
+                .unwrap_or("completed");
+            format!("[{role}] {summary}")
+        }
         "file.read" => {
             let path = output.get("path").and_then(Value::as_str).unwrap_or("file");
             let bytes = output.get("bytes").and_then(Value::as_u64).unwrap_or(0);
             let lines = output.get("lines").and_then(Value::as_u64).unwrap_or(0);
-            if lines > 0 {
+            let total = output
+                .get("total_lines")
+                .and_then(Value::as_u64)
+                .unwrap_or(lines);
+            let truncated = output
+                .get("truncated")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            if truncated && total > lines {
+                let offset = output.get("offset").and_then(Value::as_u64).unwrap_or(1);
+                format!(
+                    "read `{path}` (lines {offset}..{}, {total} total, {bytes} bytes)",
+                    offset + lines - 1
+                )
+            } else if lines > 0 {
                 format!("read `{path}` ({lines} lines, {bytes} bytes)")
             } else {
                 format!("read `{path}` ({bytes} bytes)")
@@ -3586,9 +3898,291 @@ async fn handle_chat_command(session: &mut ChatSession, input: &str) -> Result<C
     let input = normalized.as_str();
 
     match input {
-        "/" | "/commands" => {
-            let ui = Renderer::from_config(&session.config);
-            println!("{}", ui.command_palette());
+        "/" | "/commands" | "/palette" | "/menu" => {
+            let renderer = Renderer::from_config(&session.config);
+            if io::stdin().is_terminal() && io::stdout().is_terminal() {
+                let current_mode = session.config.agent.work_mode.as_str();
+                let current_variant = session.active_variant();
+                let current_thinking = session.thinking_display();
+                let current_perm = session.active_permission_mode();
+                let current_model = session.active_model().unwrap_or("none");
+                let current_theme = session.config.ui.theme.clone();
+
+                let options = vec![
+                    format!("Mode: Switch Work Mode [active: {current_mode}]"),
+                    format!("Variant: Select Reasoning Variant [active: {current_variant}]"),
+                    format!("Thinking: Toggle Reasoning Mode [active: {current_thinking}]"),
+                    format!("Permission: Switch Access Level [active: {current_perm}]"),
+                    format!("Models: Browse & Switch Models [active: {current_model}]"),
+                    format!("Theme: Change Visual Theme [active: {current_theme}]"),
+                    "Test: Run Workspace Test Suite (/test)".to_string(),
+                    format!(
+                        "Queue: Manage Task Queue ({} pending)",
+                        session.prompt_queue.len()
+                    ),
+                    "Proof: Execution & Audit Provenance (/proof)".to_string(),
+                    "Skills: View Active Agent Skills (/skills)".to_string(),
+                    "Checkpoints: List Recovery Snapshots (/checkpoints)".to_string(),
+                    "Clear: Clear Conversation History (/clear)".to_string(),
+                    "Help: View Full Reference & Keybindings (/help)".to_string(),
+                    "Exit: Leave Axiom Session (/exit)".to_string(),
+                ];
+
+                let result = crate::ui::interactive_select(
+                    "Axiom Command Palette",
+                    &options,
+                    0,
+                    false,
+                    &renderer,
+                );
+
+                if let crate::ui::SelectionResult::Selected { index, .. } = result {
+                    match index {
+                        0 => {
+                            let next_mode = match session.config.agent.work_mode {
+                                AgentWorkMode::Plan => AgentWorkMode::Build,
+                                AgentWorkMode::Build => AgentWorkMode::Plan,
+                            };
+                            session.config.agent.work_mode = next_mode;
+                            session.save_config()?;
+                            session.persist_session()?;
+                            println!(
+                                "{}",
+                                renderer.success(&format!(
+                                    "Switched work mode to '{}'.",
+                                    next_mode.as_str()
+                                ))
+                            );
+                        }
+                        1 => {
+                            let variants = ["Default", "low", "medium", "high", "xhigh"];
+                            let var_options: Vec<String> = variants
+                                .iter()
+                                .map(|&var| {
+                                    if let Some(ref prov) = session.config.llm.active_provider {
+                                        if let Some(model) =
+                                            session.config.llm.model_for_variant(prov, var)
+                                        {
+                                            return format!("{var} ({model})");
+                                        }
+                                    }
+                                    var.to_string()
+                                })
+                                .collect();
+                            let initial = match session.active_variant() {
+                                "low" => 1,
+                                "medium" => 2,
+                                "high" => 3,
+                                "xhigh" => 4,
+                                _ => 0,
+                            };
+                            let var_res = crate::ui::interactive_select(
+                                "Select variant",
+                                &var_options,
+                                initial,
+                                false,
+                                &renderer,
+                            );
+                            if let crate::ui::SelectionResult::Selected { index: vi, .. } = var_res
+                            {
+                                let chosen = variants.get(vi).copied().unwrap_or("Default");
+                                match session.set_variant(chosen) {
+                                    Ok(res) => {
+                                        session.persist_session()?;
+                                        println!("{}", res.display_message());
+                                    }
+                                    Err(err) => println!("{err}"),
+                                }
+                            }
+                        }
+                        2 => {
+                            let (next_val, label) = match session.config.llm.thinking {
+                                None => (Some(true), "on"),
+                                Some(true) => (Some(false), "off"),
+                                Some(false) => (None, "auto"),
+                            };
+                            session.config.llm.thinking = next_val;
+                            session.save_config()?;
+                            session.persist_session()?;
+                            println!(
+                                "{}",
+                                renderer.success(&format!(
+                                    "Thinking mode set to '{label}'. Active variant: {}.",
+                                    session.active_variant()
+                                ))
+                            );
+                        }
+                        3 => {
+                            let next_perm = match session.permission_mode() {
+                                PermissionMode::Velocity => "full_machine",
+                                PermissionMode::FullMachine => "strict",
+                                PermissionMode::Strict => "velocity",
+                            };
+                            match session.set_permission_mode(next_perm) {
+                                Ok(m) => println!(
+                                    "{}",
+                                    renderer.success(&format!(
+                                        "Permission mode switched to '{}' ({}).",
+                                        m.as_str(),
+                                        m.description()
+                                    ))
+                                ),
+                                Err(err) => println!("{err}"),
+                            }
+                        }
+                        4 => {
+                            if let Some(prov) = session.active_provider() {
+                                let prov = prov.to_string();
+                                match session.available_models(&prov).await {
+                                    Ok(models) if models.is_empty() => {
+                                        println!("No models returned by {prov}.");
+                                    }
+                                    Ok(models) => {
+                                        let (visible, total) = models_for_display(&models, None);
+                                        println!("Available models from {prov}:");
+                                        for model in &visible {
+                                            println!("- {}", model.id);
+                                        }
+                                        println!(
+                                            "models: {} shown of {total} matching",
+                                            visible.len()
+                                        );
+                                        if total > visible.len() {
+                                            println!(
+                                                "Catalog output is capped at {MAX_MODELS_DISPLAYED}; use `/models <filter>` to narrow it."
+                                            );
+                                        }
+                                    }
+                                    Err(err) => println!("Could not fetch models: {err}"),
+                                }
+                            } else {
+                                println!("{}", renderer.warning("No active provider configured."));
+                            }
+                        }
+                        5 => {
+                            let themes = ["axiom", "blood_red", "ash", "high_contrast"];
+                            let current_idx = themes
+                                .iter()
+                                .position(|&t| t == session.config.ui.theme.as_str())
+                                .unwrap_or(0);
+                            let next_theme = themes[(current_idx + 1) % themes.len()];
+                            session.config.ui.theme = next_theme.to_string();
+                            session.persist_session()?;
+                            println!(
+                                "{}",
+                                renderer.success(&format!("Switched theme to '{next_theme}'."))
+                            );
+                        }
+                        6 => {
+                            let context = session.execution_context();
+                            let request = axiom_engine::ToolRequest {
+                                skill_id: "test.run".to_string(),
+                                arguments: serde_json::json!({}),
+                            };
+                            let registry = axiom_engine::ExecutorRegistry::with_builtin_executors();
+                            if let Some(executor) = registry.get("test.run") {
+                                let mut approval = TerminalApprover {
+                                    mode: session.permission_mode(),
+                                };
+                                match executor.execute(&request, &context, &mut approval).await {
+                                    Ok(result) => {
+                                        let passed = result
+                                            .get("passed")
+                                            .and_then(Value::as_bool)
+                                            .unwrap_or(false);
+                                        let output = result
+                                            .get("output")
+                                            .and_then(Value::as_str)
+                                            .unwrap_or("No output");
+                                        let runner = result
+                                            .get("runner")
+                                            .and_then(Value::as_str)
+                                            .unwrap_or("unknown");
+                                        if passed {
+                                            println!(
+                                                "{}",
+                                                renderer.success(&format!(
+                                                    "Tests PASSED ({runner}):\n{output}"
+                                                ))
+                                            );
+                                        } else {
+                                            println!(
+                                                "{}",
+                                                renderer.error(&format!(
+                                                    "Tests FAILED ({runner}):\n{output}"
+                                                ))
+                                            );
+                                        }
+                                    }
+                                    Err(err) => println!("Failed to run tests: {err}"),
+                                }
+                            }
+                        }
+                        7 => {
+                            session.display_queue(&renderer);
+                        }
+                        8 => {
+                            println!(
+                                "Audit Proof Status: {}",
+                                if session.config.proof.enabled {
+                                    "enabled"
+                                } else {
+                                    "disabled"
+                                }
+                            );
+                            println!(
+                                "Format: {}, Retention: {} days",
+                                session.config.proof.default_format,
+                                session.config.proof.retention_days
+                            );
+                        }
+                        9 => {
+                            let cards = session.installed_skill_cards()?;
+                            if cards.is_empty() {
+                                println!("No enabled skills installed.");
+                            } else {
+                                println!("Installed enabled skills:");
+                                for card in cards {
+                                    println!("- {}: {}", card.id, card.summary);
+                                }
+                            }
+                        }
+                        10 => {
+                            let checkpoints = list_checkpoints(session.agent_checkpoints_dir())?;
+                            if checkpoints.is_empty() {
+                                println!("No agent recovery checkpoints in this session.");
+                            } else {
+                                println!("Agent recovery checkpoints:");
+                                for checkpoint in checkpoints {
+                                    println!(
+                                        "- {} ({} file(s))",
+                                        checkpoint.id,
+                                        checkpoint.files.len()
+                                    );
+                                }
+                            }
+                        }
+                        11 => {
+                            session.clear_history();
+                            session.persist_session()?;
+                            println!(
+                                "{}",
+                                renderer.success("Session conversation history cleared.")
+                            );
+                        }
+                        12 => {
+                            println!("{}", renderer.command_palette());
+                            print_help();
+                        }
+                        13 => {
+                            return Ok(CommandResult::Exit);
+                        }
+                        _ => {}
+                    }
+                }
+            } else {
+                println!("{}", renderer.command_palette());
+            }
             Ok(CommandResult::Continue)
         }
         "/exit" => Ok(CommandResult::Exit),
@@ -3644,6 +4238,28 @@ async fn handle_chat_command(session: &mut ChatSession, input: &str) -> Result<C
             }
             Ok(CommandResult::Continue)
         }
+        "/history" | "/sessions" => {
+            let ui = Renderer::from_config(&session.config);
+            session.display_session_history(&ui)?;
+            Ok(CommandResult::Continue)
+        }
+        _ if input.starts_with("/history ")
+            || input.starts_with("/sessions ")
+            || input.starts_with("/resume ") =>
+        {
+            let ui = Renderer::from_config(&session.config);
+            let target = if let Some(t) = input.strip_prefix("/history ") {
+                t.trim()
+            } else if let Some(t) = input.strip_prefix("/sessions ") {
+                t.trim()
+            } else {
+                input.strip_prefix("/resume ").unwrap_or("").trim()
+            };
+            if let Err(e) = session.switch_to_session(&ui, target) {
+                println!("{}", ui.error(e));
+            }
+            Ok(CommandResult::Continue)
+        }
         "/undo" => {
             let checkpoints = list_checkpoints(session.agent_checkpoints_dir())?;
             if let Some(latest) = checkpoints.last() {
@@ -3668,7 +4284,7 @@ async fn handle_chat_command(session: &mut ChatSession, input: &str) -> Result<C
         "/variant" | "/variants" => {
             if io::stdin().is_terminal() && io::stdout().is_terminal() {
                 let renderer = crate::ui::Renderer::from_config(&session.config);
-                let variants = ["Default", "low", "medium", "high"];
+                let variants = ["Default", "low", "medium", "high", "xhigh"];
                 let options: Vec<String> = variants
                     .iter()
                     .map(|&var| {
@@ -3684,6 +4300,7 @@ async fn handle_chat_command(session: &mut ChatSession, input: &str) -> Result<C
                     "low" => 1,
                     "medium" => 2,
                     "high" => 3,
+                    "xhigh" => 4,
                     _ => 0,
                 };
                 let result = crate::ui::interactive_select(
@@ -3715,8 +4332,8 @@ async fn handle_chat_command(session: &mut ChatSession, input: &str) -> Result<C
                 println!(
                     "Active Variant: {active_var} (model: {active_model}, provider: {active_prov})"
                 );
-                println!("Available variants: Default, low, medium, high");
-                println!("Use `/variant <Default|low|medium|high>` to switch.");
+                println!("Available variants: Default, low, medium, high, xhigh");
+                println!("Use `/variant <Default|low|medium|high|xhigh>` to switch.");
             }
             Ok(CommandResult::Continue)
         }
@@ -3728,13 +4345,43 @@ async fn handle_chat_command(session: &mut ChatSession, input: &str) -> Result<C
             } else {
                 ""
             };
-            match session.set_variant(target) {
-                Ok(res) => {
-                    session.persist_session()?;
-                    println!("{}", res.display_message());
+            match validate_variant(target) {
+                Ok(valid_var) => match session.set_variant(valid_var) {
+                    Ok(res) => {
+                        session.persist_session()?;
+                        println!("{}", res.display_message());
+                    }
+                    Err(error) => println!("{error}"),
+                },
+                Err(e) => {
+                    let ui = Renderer::from_config(&session.config);
+                    println!("{}", ui.error(e));
                 }
-                Err(error) => println!("{error}"),
             }
+            Ok(CommandResult::Continue)
+        }
+        "/plan" => {
+            session.set_work_mode(AgentWorkMode::Plan)?;
+            session.persist_session()?;
+            let ui = Renderer::from_config(&session.config);
+            println!(
+                "{}",
+                ui.orchestrator_notice(
+                    "Switched to Plan Mode. Axiom will plan changes before modifying files."
+                )
+            );
+            Ok(CommandResult::Continue)
+        }
+        "/build" => {
+            session.set_work_mode(AgentWorkMode::Build)?;
+            session.persist_session()?;
+            let ui = Renderer::from_config(&session.config);
+            println!(
+                "{}",
+                ui.orchestrator_notice(
+                    "Switched to Build Mode. Axiom will actively implement and execute changes."
+                )
+            );
             Ok(CommandResult::Continue)
         }
         "/thinking" | "/reasoning" => {
@@ -3975,16 +4622,38 @@ async fn handle_chat_command(session: &mut ChatSession, input: &str) -> Result<C
             } else {
                 ""
             };
-            match session.set_permission_mode(target) {
-                Ok(new_mode) => {
-                    let desc = new_mode.description();
-                    println!(
-                        "Switched permission mode to '{}' ({}).",
-                        new_mode.as_str(),
-                        desc
-                    );
+            if let Ok(work_mode) = validate_mode(target) {
+                session.set_work_mode(work_mode)?;
+                session.persist_session()?;
+                let ui = Renderer::from_config(&session.config);
+                let notice = match work_mode {
+                    AgentWorkMode::Plan => {
+                        "Switched to Plan Mode. Axiom will plan changes before modifying files."
+                    }
+                    AgentWorkMode::Build => {
+                        "Switched to Build Mode. Axiom will actively implement and execute changes."
+                    }
+                };
+                println!("{}", ui.orchestrator_notice(notice));
+                return Ok(CommandResult::Continue);
+            }
+
+            match validate_permission(target) {
+                Ok(valid_perm) => match session.set_permission_mode(valid_perm.as_str()) {
+                    Ok(new_mode) => {
+                        let desc = new_mode.description();
+                        println!(
+                            "Switched permission mode to '{}' ({}).",
+                            new_mode.as_str(),
+                            desc
+                        );
+                    }
+                    Err(error) => println!("{error}"),
+                },
+                Err(e) => {
+                    let ui = Renderer::from_config(&session.config);
+                    println!("{}", ui.error(e));
                 }
-                Err(error) => println!("{error}"),
             }
             Ok(CommandResult::Continue)
         }
@@ -4082,12 +4751,25 @@ async fn handle_chat_command(session: &mut ChatSession, input: &str) -> Result<C
             println!("Use `/model <name>` to switch, or `/model list` to see available models.");
             Ok(CommandResult::Continue)
         }
-        _ if input == "/model list" || input.starts_with("/model list ") => {
+        _ if input == "/model list"
+            || input.starts_with("/model list ")
+            || input == "/models"
+            || input.starts_with("/models ") =>
+        {
             let provider = session
                 .active_provider()
                 .ok_or_else(|| anyhow!("no active provider configured"))?
                 .to_string();
-            let filter = input.strip_prefix("/model list").map(str::trim);
+            let filter = if let Some(rest) = input.strip_prefix("/models") {
+                let trimmed = rest.trim();
+                if trimmed.is_empty() {
+                    None
+                } else {
+                    Some(trimmed)
+                }
+            } else {
+                input.strip_prefix("/model list").map(str::trim)
+            };
             match session.available_models(&provider).await {
                 Ok(models) if models.is_empty() => println!("No models returned by {provider}."),
                 Ok(models) => {
@@ -4099,7 +4781,7 @@ async fn handle_chat_command(session: &mut ChatSession, input: &str) -> Result<C
                     println!("models: {} shown of {total} matching", visible.len());
                     if total > visible.len() {
                         println!(
-                            "Catalog output is capped at {MAX_MODELS_DISPLAYED}; use `/model list <filter>` to narrow it."
+                            "Catalog output is capped at {MAX_MODELS_DISPLAYED}; use `/models <filter>` to narrow it."
                         );
                     }
                 }
@@ -4148,6 +4830,7 @@ async fn handle_chat_command(session: &mut ChatSession, input: &str) -> Result<C
                     session.active_permission_mode(),
                     &session.workspace_path().display().to_string(),
                     session.session_id(),
+                    session.work_mode().as_str(),
                 )
             );
             println!("Conversation cleared.");
@@ -4340,7 +5023,7 @@ async fn handle_chat_command(session: &mut ChatSession, input: &str) -> Result<C
                 }
             } else {
                 println!("Usage: /provider add <provider_name>");
-                println!("Available presets: groq, openrouter, gemini, github-models, opencode, gmicloud, nvidia, openai, ollama, lm-studio");
+                println!("Available presets: groq, openrouter, gemini, github-models, opencode, gmicloud, nvidia, openai, ollama, ollama_cloud, lm-studio");
             }
             Ok(CommandResult::Continue)
         }
@@ -4388,7 +5071,7 @@ async fn handle_chat_command(session: &mut ChatSession, input: &str) -> Result<C
                     Err(error) => println!("Failed to set up provider: {error}"),
                 }
             } else {
-                println!("Unknown preset '{preset_name}'. Supported: groq, openrouter, gemini, github-models, opencode, gmicloud, nvidia, openai, ollama, lm-studio");
+                println!("Unknown preset '{preset_name}'. Supported: groq, openrouter, gemini, github-models, opencode, gmicloud, nvidia, openai, ollama, ollama_cloud, lm-studio");
             }
             Ok(CommandResult::Continue)
         }
@@ -4506,7 +5189,9 @@ async fn handle_chat_command(session: &mut ChatSession, input: &str) -> Result<C
 
 fn print_help() {
     println!("Commands (prefix with '/'):");
-    println!("  /variant [Default|low|medium|high]  Configure model variant (alias: /variants)");
+    println!(
+        "  /variant [Default|low|medium|high|xhigh]  Configure model variant (alias: /variants)"
+    );
     println!(
         "  /thinking [on|off|auto]             Toggle reasoning/thinking mode (alias: /reasoning)"
     );
@@ -4515,6 +5200,7 @@ fn print_help() {
     );
     println!("  /model [name]                       Switch or view active LLM model");
     println!("  /model list [FILTER]                Fetch catalog view of available models");
+    println!("  /models [FILTER]                    Alias for `/model list [FILTER]`");
     println!("  /permission [velocity|full|strict]  Switch permission mode (alias: /mode)");
     println!("  /theme [axiom|blood|ash|high]       Switch visual color theme (alias: /themes)");
     println!(
@@ -4966,6 +5652,99 @@ mod tests {
         let _ = fs::remove_dir_all(dir);
     }
 
+    #[tokio::test]
+    async fn variant_switches_models_dynamically_per_provider() {
+        let dir = unique_temp_dir();
+        let config_path = dir.join("config.toml");
+        let mut config = AxiomConfig::default();
+        config.agent.first_run_completed = true;
+        config.llm.active_provider = Some("openrouter".to_string());
+        config.llm.active_model = Some("anthropic/claude-3.7-sonnet".to_string());
+        config.save_to_path(&config_path).expect("save config");
+        let mut session = ChatSession::load(&config_path).expect("load session");
+
+        handle_chat_command(&mut session, "/variant low")
+            .await
+            .expect("switch to low");
+        assert_eq!(session.active_variant(), "low");
+        assert_eq!(
+            session.active_model(),
+            Some("meta-llama/llama-3.3-70b-instruct")
+        );
+
+        handle_chat_command(&mut session, "/variant high")
+            .await
+            .expect("switch to high");
+        assert_eq!(session.active_variant(), "high");
+        assert_eq!(session.active_model(), Some("deepseek/deepseek-r1"));
+
+        handle_chat_command(&mut session, "/variant xhigh")
+            .await
+            .expect("switch to xhigh");
+        assert_eq!(session.active_variant(), "xhigh");
+        assert_eq!(
+            session.active_model(),
+            Some("anthropic/claude-3.7-sonnet:thinking")
+        );
+
+        handle_chat_command(&mut session, "/variant Default")
+            .await
+            .expect("switch to Default");
+        assert_eq!(session.active_variant(), "Default");
+        assert_eq!(session.active_model(), Some("anthropic/claude-3.7-sonnet"));
+
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn provider_options_adapts_to_specific_provider_schemas() {
+        let dir = unique_temp_dir();
+        let config_path = dir.join("config.toml");
+        let mut config = AxiomConfig::default();
+        config.agent.first_run_completed = true;
+        config.llm.active_provider = Some("openrouter".to_string());
+        config.llm.active_model = Some("anthropic/claude-3.7-sonnet".to_string());
+        config.save_to_path(&config_path).expect("save config");
+        let mut session = ChatSession::load(&config_path).expect("load session");
+
+        // In auto mode, gateway decides
+        assert!(session.provider_options().is_none());
+
+        // Explicit on for openrouter
+        handle_chat_command(&mut session, "/thinking on")
+            .await
+            .expect("turn on");
+        let opts = session.provider_options().expect("opts present");
+        assert!(opts.contains_key("reasoning"));
+        assert_eq!(opts.get("reasoning").unwrap()["effort"], "medium");
+        assert!(!opts.contains_key("thinking"));
+
+        // Explicit off for openrouter
+        handle_chat_command(&mut session, "/thinking off")
+            .await
+            .expect("turn off");
+        let opts = session.provider_options().expect("opts present");
+        assert!(opts.contains_key("reasoning"));
+        assert_eq!(opts.get("reasoning").unwrap()["effort"], "none");
+
+        // Groq schema adaptation
+        session.config.llm.active_provider = Some("groq".to_string());
+        handle_chat_command(&mut session, "/thinking on")
+            .await
+            .expect("turn on groq");
+        let opts = session.provider_options().expect("groq opts");
+        assert_eq!(opts.get("reasoning_format").unwrap(), "parsed");
+        assert_eq!(opts.get("reasoning_effort").unwrap(), "medium");
+
+        handle_chat_command(&mut session, "/thinking off")
+            .await
+            .expect("turn off groq");
+        let opts = session.provider_options().expect("groq off opts");
+        assert_eq!(opts.get("reasoning_format").unwrap(), "hidden");
+
+        let _ = fs::remove_dir_all(dir);
+    }
+
     #[test]
     fn extract_mcq_from_text_parses_assistant_questions() {
         let sample = "**Multiple-Choice Question**\n\nWhich of the following statements about the **DemonZ-Development Geo-Restrict** plugin is **false**?\n\nA. It can block or allow players based on their country (ISO-2 code).\nB. It supports ASN (Autonomous System Number) filtering to block entire ISPs.\nC. It includes built-in VPN/proxy detection using GeoIP and known proxy databases.\nD. It requires a paid \"Pro\" license to function on Paper 1.20.2 servers.\n\n*Pick the letter of the statement you think is false.*";
@@ -5055,6 +5834,16 @@ mod tests {
             .await
             .expect("slash command");
         assert_eq!(res2, CommandResult::Continue);
+
+        let res3 = handle_chat_command(&mut session, "/palette")
+            .await
+            .expect("palette alias");
+        assert_eq!(res3, CommandResult::Continue);
+
+        let res4 = handle_chat_command(&mut session, "/menu")
+            .await
+            .expect("menu alias");
+        assert_eq!(res4, CommandResult::Continue);
 
         let _ = fs::remove_dir_all(dir);
     }
@@ -5515,13 +6304,13 @@ mod tests {
     }
 
     #[test]
-    fn helper_highlight_prompt_returns_colored_prompt_when_configured() {
+    fn helper_highlight_prompt_returns_plain_prompt_to_prevent_cursor_drift() {
         let mut helper = AxiomCommandHelper::default();
         let plain = "│ axiom ❯ ";
         let colored = "\x1b[38;5;75m│\x1b[0m \x1b[38;5;75maxiom ❯\x1b[0m ";
         helper.colored_prompt = Some(colored.to_string());
         let highlighted = helper.highlight_prompt(plain, true);
-        assert_eq!(highlighted, colored);
+        assert_eq!(highlighted, plain);
     }
 
     static UNIQUE_DIR_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);

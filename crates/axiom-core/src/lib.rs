@@ -9,7 +9,8 @@ pub mod workspace;
 pub use atomic::atomic_write;
 pub use child_process::{run_command_bounded, BoundedCommandOutput};
 pub use config::{
-    AgentConfig, AxiomConfig, CoderConfig, ConfigMigrationResult, GatewayConfig, LlmConfig,
+    default_variant, validate_mode, validate_permission, validate_variant, AgentConfig,
+    AgentWorkMode, AxiomConfig, CoderConfig, ConfigMigrationResult, GatewayConfig, LlmConfig,
     NetworkConfig, PermissionMode, ProofConfig, ProviderConfig, SideEffectPolicyConfig,
     SkillsConfig, UiConfig, CURRENT_CONFIG_VERSION,
 };

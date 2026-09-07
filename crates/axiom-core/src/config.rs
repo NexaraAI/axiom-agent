@@ -1,6 +1,6 @@
 use std::{
     collections::BTreeMap,
-    fs,
+    fmt, fs,
     path::{Path, PathBuf},
 };
 
@@ -9,6 +9,34 @@ use serde::{Deserialize, Serialize};
 use crate::{atomic_write, AxiomError, Result};
 
 pub const CURRENT_CONFIG_VERSION: u32 = 3;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentWorkMode {
+    Plan,
+    Build,
+}
+
+impl Default for AgentWorkMode {
+    fn default() -> Self {
+        Self::Build
+    }
+}
+
+impl AgentWorkMode {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Plan => "plan",
+            Self::Build => "build",
+        }
+    }
+}
+
+impl fmt::Display for AgentWorkMode {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AxiomConfig {
@@ -48,6 +76,8 @@ pub struct AgentConfig {
     pub first_run_completed: bool,
     pub default_workspace: String,
     pub auto_update_policy: String,
+    #[serde(default)]
+    pub work_mode: AgentWorkMode,
     #[serde(default = "default_agent_loop_enabled")]
     pub loop_enabled: bool,
     #[serde(default = "default_agent_max_iterations")]
@@ -114,16 +144,59 @@ impl LlmConfig {
 
     pub fn model_for_variant(&self, provider: &str, variant: &str) -> Option<&str> {
         let normalized = variant.to_ascii_lowercase();
-        self.variant_models.get(provider).and_then(|variants| {
-            variants
-                .get(variant)
-                .or_else(|| variants.get(&normalized))
-                .map(String::as_str)
-        })
+        let prov_raw = provider.trim();
+        let prov_lower = prov_raw.to_ascii_lowercase();
+        let prov_hyphen = prov_lower.replace('_', "-");
+        let prov_underscore = prov_lower.replace('-', "_");
+
+        self.variant_models
+            .get(prov_raw)
+            .or_else(|| self.variant_models.get(&prov_lower))
+            .or_else(|| self.variant_models.get(&prov_hyphen))
+            .or_else(|| self.variant_models.get(&prov_underscore))
+            .and_then(|variants| {
+                variants
+                    .get(variant)
+                    .or_else(|| variants.get(&normalized))
+                    .map(String::as_str)
+            })
     }
 
     pub fn model_for_tier(&self, provider: &str, tier: &str) -> Option<&str> {
         self.model_for_variant(provider, tier)
+    }
+
+    pub fn parse_variant(variant: &str) -> Option<&'static str> {
+        match variant.trim().to_ascii_lowercase().as_str() {
+            "default" => Some("Default"),
+            "low" | "light" => Some("low"),
+            "medium" => Some("medium"),
+            "high" | "max" => Some("high"),
+            "xhigh" | "x-high" | "extra-high" | "extra_high" => Some("xhigh"),
+            _ => None,
+        }
+    }
+
+    pub fn reasoning_effort_for_variant(&self) -> &'static str {
+        let variant = self.active_variant();
+        let normalized = variant.to_ascii_lowercase();
+        match normalized.as_str() {
+            "none" | "default" => "medium",
+            "low" | "light" => "low",
+            "medium" => "medium",
+            "high" | "max" | "xhigh" => "high",
+            _ => "medium",
+        }
+    }
+
+    pub fn thinking_budget_tokens_for_variant(&self) -> u32 {
+        let variant = self.active_variant();
+        let normalized = variant.to_ascii_lowercase();
+        if normalized == "xhigh" {
+            8192
+        } else {
+            2048
+        }
     }
 }
 
@@ -144,6 +217,16 @@ pub enum ProviderConfig {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         models_url: Option<String>,
     },
+}
+
+impl ProviderConfig {
+    pub fn ollama_cloud(api_key_env: Option<String>) -> Self {
+        Self::OpenaiCompatible {
+            base_url: "https://api.ollama.com/v1".to_string(),
+            api_key_env: Some(api_key_env.unwrap_or_else(|| "OLLAMA_API_KEY".to_string())),
+            models_url: None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -468,6 +551,7 @@ impl Default for AxiomConfig {
                 first_run_completed: false,
                 default_workspace: "~/Axiom".to_string(),
                 auto_update_policy: "notify".to_string(),
+                work_mode: AgentWorkMode::Build,
                 loop_enabled: default_agent_loop_enabled(),
                 max_iterations: default_agent_max_iterations(),
                 max_tool_iterations: default_agent_max_tool_iterations(),
@@ -621,11 +705,11 @@ fn default_update_verify_checksums() -> bool {
     true
 }
 
-fn default_variant() -> String {
+pub fn default_variant() -> String {
     "Default".to_string()
 }
 
-fn default_variant_models() -> BTreeMap<String, BTreeMap<String, String>> {
+pub fn default_variant_models() -> BTreeMap<String, BTreeMap<String, String>> {
     BTreeMap::from([
         (
             "nvidia".to_string(),
@@ -647,6 +731,10 @@ fn default_variant_models() -> BTreeMap<String, BTreeMap<String, String>> {
                     "high".to_string(),
                     "nvidia/nemotron-4-340b-instruct".to_string(),
                 ),
+                (
+                    "xhigh".to_string(),
+                    "nvidia/nemotron-4-340b-instruct".to_string(),
+                ),
             ]),
         ),
         (
@@ -656,7 +744,101 @@ fn default_variant_models() -> BTreeMap<String, BTreeMap<String, String>> {
                 ("low".to_string(), "llama-3.1-8b-instant".to_string()),
                 ("light".to_string(), "llama-3.1-8b-instant".to_string()),
                 ("medium".to_string(), "llama-3.3-70b-versatile".to_string()),
-                ("high".to_string(), "llama-3.3-70b-versatile".to_string()),
+                (
+                    "high".to_string(),
+                    "deepseek-r1-distill-llama-70b".to_string(),
+                ),
+                (
+                    "xhigh".to_string(),
+                    "deepseek-r1-distill-llama-70b".to_string(),
+                ),
+            ]),
+        ),
+        (
+            "openrouter".to_string(),
+            BTreeMap::from([
+                (
+                    "default".to_string(),
+                    "anthropic/claude-3.7-sonnet".to_string(),
+                ),
+                (
+                    "low".to_string(),
+                    "meta-llama/llama-3.3-70b-instruct".to_string(),
+                ),
+                (
+                    "light".to_string(),
+                    "meta-llama/llama-3.3-70b-instruct".to_string(),
+                ),
+                (
+                    "medium".to_string(),
+                    "anthropic/claude-3.7-sonnet".to_string(),
+                ),
+                ("high".to_string(), "deepseek/deepseek-r1".to_string()),
+                (
+                    "xhigh".to_string(),
+                    "anthropic/claude-3.7-sonnet:thinking".to_string(),
+                ),
+            ]),
+        ),
+        (
+            "gemini".to_string(),
+            BTreeMap::from([
+                ("default".to_string(), "gemini-2.5-flash".to_string()),
+                ("low".to_string(), "gemini-2.5-flash".to_string()),
+                ("light".to_string(), "gemini-2.5-flash".to_string()),
+                ("medium".to_string(), "gemini-2.5-flash".to_string()),
+                ("high".to_string(), "gemini-2.5-pro".to_string()),
+                ("xhigh".to_string(), "gemini-2.5-pro".to_string()),
+            ]),
+        ),
+        (
+            "github-models".to_string(),
+            BTreeMap::from([
+                ("default".to_string(), "openai/gpt-4.1".to_string()),
+                ("low".to_string(), "meta/llama-3.3-70b-instruct".to_string()),
+                (
+                    "light".to_string(),
+                    "meta/llama-3.3-70b-instruct".to_string(),
+                ),
+                ("medium".to_string(), "openai/gpt-4.1".to_string()),
+                ("high".to_string(), "openai/o3-mini".to_string()),
+                ("xhigh".to_string(), "openai/o1".to_string()),
+            ]),
+        ),
+        (
+            "github".to_string(),
+            BTreeMap::from([
+                ("default".to_string(), "openai/gpt-4.1".to_string()),
+                ("low".to_string(), "meta/llama-3.3-70b-instruct".to_string()),
+                (
+                    "light".to_string(),
+                    "meta/llama-3.3-70b-instruct".to_string(),
+                ),
+                ("medium".to_string(), "openai/gpt-4.1".to_string()),
+                ("high".to_string(), "openai/o3-mini".to_string()),
+                ("xhigh".to_string(), "openai/o1".to_string()),
+            ]),
+        ),
+        (
+            "lm-studio".to_string(),
+            BTreeMap::from([
+                ("default".to_string(), "default".to_string()),
+                ("low".to_string(), "default".to_string()),
+                ("light".to_string(), "default".to_string()),
+                ("medium".to_string(), "default".to_string()),
+                ("high".to_string(), "default".to_string()),
+                ("xhigh".to_string(), "default".to_string()),
+            ]),
+        ),
+        (
+            "lmstudio".to_string(),
+            BTreeMap::from([
+                ("default".to_string(), "default".to_string()),
+                ("low".to_string(), "default".to_string()),
+                ("light".to_string(), "default".to_string()),
+                ("medium".to_string(), "default".to_string()),
+                ("high".to_string(), "default".to_string()),
+                ("xhigh".to_string(), "default".to_string()),
             ]),
         ),
         (
@@ -667,6 +849,7 @@ fn default_variant_models() -> BTreeMap<String, BTreeMap<String, String>> {
                 ("light".to_string(), "gpt-4o-mini".to_string()),
                 ("medium".to_string(), "gpt-4o".to_string()),
                 ("high".to_string(), "o3-mini".to_string()),
+                ("xhigh".to_string(), "o3-mini".to_string()),
             ]),
         ),
         (
@@ -680,6 +863,7 @@ fn default_variant_models() -> BTreeMap<String, BTreeMap<String, String>> {
                 ("light".to_string(), "claude-3-5-haiku-latest".to_string()),
                 ("medium".to_string(), "claude-3-7-sonnet-latest".to_string()),
                 ("high".to_string(), "claude-3-7-sonnet-latest".to_string()),
+                ("xhigh".to_string(), "claude-3-7-sonnet-latest".to_string()),
             ]),
         ),
         (
@@ -690,6 +874,7 @@ fn default_variant_models() -> BTreeMap<String, BTreeMap<String, String>> {
                 ("light".to_string(), "openai/gpt-4o-mini".to_string()),
                 ("medium".to_string(), "openai/gpt-4o".to_string()),
                 ("high".to_string(), "openai/o3-mini".to_string()),
+                ("xhigh".to_string(), "openai/o3-mini".to_string()),
             ]),
         ),
         (
@@ -706,6 +891,7 @@ fn default_variant_models() -> BTreeMap<String, BTreeMap<String, String>> {
                     "nemotron-3.5-lightning-free".to_string(),
                 ),
                 ("high".to_string(), "nemotron-3-ultra-free".to_string()),
+                ("xhigh".to_string(), "nemotron-3-ultra-free".to_string()),
             ]),
         ),
         (
@@ -722,6 +908,7 @@ fn default_variant_models() -> BTreeMap<String, BTreeMap<String, String>> {
                     "nemotron-3.5-lightning-free".to_string(),
                 ),
                 ("high".to_string(), "nemotron-3-ultra-free".to_string()),
+                ("xhigh".to_string(), "nemotron-3-ultra-free".to_string()),
             ]),
         ),
         (
@@ -745,6 +932,10 @@ fn default_variant_models() -> BTreeMap<String, BTreeMap<String, String>> {
                 ),
                 (
                     "high".to_string(),
+                    "deepseek-ai/DeepSeek-V4-Pro".to_string(),
+                ),
+                (
+                    "xhigh".to_string(),
                     "deepseek-ai/DeepSeek-V4-Pro".to_string(),
                 ),
             ]),
@@ -772,6 +963,43 @@ fn default_variant_models() -> BTreeMap<String, BTreeMap<String, String>> {
                     "high".to_string(),
                     "deepseek-ai/DeepSeek-V4-Pro".to_string(),
                 ),
+                (
+                    "xhigh".to_string(),
+                    "deepseek-ai/DeepSeek-V4-Pro".to_string(),
+                ),
+            ]),
+        ),
+        (
+            "ollama_cloud".to_string(),
+            BTreeMap::from([
+                ("default".to_string(), "llama3.3:70b".to_string()),
+                ("low".to_string(), "qwen2.5-coder:32b".to_string()),
+                ("light".to_string(), "qwen2.5-coder:32b".to_string()),
+                ("medium".to_string(), "llama3.3:70b".to_string()),
+                ("high".to_string(), "deepseek-r1:70b".to_string()),
+                ("xhigh".to_string(), "deepseek-r1:70b".to_string()),
+            ]),
+        ),
+        (
+            "ollama-cloud".to_string(),
+            BTreeMap::from([
+                ("default".to_string(), "llama3.3:70b".to_string()),
+                ("low".to_string(), "qwen2.5-coder:32b".to_string()),
+                ("light".to_string(), "qwen2.5-coder:32b".to_string()),
+                ("medium".to_string(), "llama3.3:70b".to_string()),
+                ("high".to_string(), "deepseek-r1:70b".to_string()),
+                ("xhigh".to_string(), "deepseek-r1:70b".to_string()),
+            ]),
+        ),
+        (
+            "ollama".to_string(),
+            BTreeMap::from([
+                ("default".to_string(), "llama3.2".to_string()),
+                ("low".to_string(), "llama3.2:1b".to_string()),
+                ("light".to_string(), "llama3.2:1b".to_string()),
+                ("medium".to_string(), "llama3.2".to_string()),
+                ("high".to_string(), "llama3.3:70b".to_string()),
+                ("xhigh".to_string(), "llama3.3:70b".to_string()),
             ]),
         ),
         (
@@ -782,6 +1010,7 @@ fn default_variant_models() -> BTreeMap<String, BTreeMap<String, String>> {
                 ("light".to_string(), "mock-model".to_string()),
                 ("medium".to_string(), "mock-model".to_string()),
                 ("high".to_string(), "mock-model".to_string()),
+                ("xhigh".to_string(), "mock-model".to_string()),
             ]),
         ),
     ])
@@ -1040,6 +1269,53 @@ impl AxiomConfig {
             validate_gateway_token_env_name(gateway_variable)?;
         }
         Ok(())
+    }
+}
+
+pub fn validate_variant(variant: &str) -> Result<&'static str> {
+    let trimmed = variant.trim();
+    if trimmed.eq_ignore_ascii_case("default") {
+        Ok("Default")
+    } else if trimmed.eq_ignore_ascii_case("low") {
+        Ok("low")
+    } else if trimmed.eq_ignore_ascii_case("medium") {
+        Ok("medium")
+    } else if trimmed.eq_ignore_ascii_case("high") {
+        Ok("high")
+    } else if trimmed.eq_ignore_ascii_case("xhigh") {
+        Ok("xhigh")
+    } else {
+        Err(AxiomError::InvalidConfig {
+            field: "variant",
+            message: format!(
+                "invalid variant `{variant}`; expected Default, low, medium, high, or xhigh"
+            ),
+        })
+    }
+}
+
+pub fn validate_mode(mode: &str) -> Result<AgentWorkMode> {
+    match mode.trim().to_ascii_lowercase().as_str() {
+        "plan" => Ok(AgentWorkMode::Plan),
+        "build" => Ok(AgentWorkMode::Build),
+        _ => Err(AxiomError::InvalidConfig {
+            field: "work_mode",
+            message: format!("invalid work mode `{mode}`; expected plan or build"),
+        }),
+    }
+}
+
+pub fn validate_permission(mode: &str) -> Result<PermissionMode> {
+    match mode.trim().to_ascii_lowercase().as_str() {
+        "velocity" => Ok(PermissionMode::Velocity),
+        "full_machine" => Ok(PermissionMode::FullMachine),
+        "strict" => Ok(PermissionMode::Strict),
+        _ => Err(AxiomError::InvalidConfig {
+            field: "permission_mode",
+            message: format!(
+                "invalid permission mode `{mode}`; expected velocity, full_machine, or strict"
+            ),
+        }),
     }
 }
 
@@ -1535,6 +1811,132 @@ format = "json"
             config.llm.model_for_variant("gmi", "medium"),
             Some("meta-llama/Llama-3.3-70B-Instruct")
         );
+        assert_eq!(
+            config.llm.model_for_variant("ollama_cloud", "default"),
+            Some("llama3.3:70b")
+        );
+        assert_eq!(
+            config.llm.model_for_variant("ollama_cloud", "low"),
+            Some("qwen2.5-coder:32b")
+        );
+        assert_eq!(
+            config.llm.model_for_variant("ollama_cloud", "high"),
+            Some("deepseek-r1:70b")
+        );
+        assert_eq!(
+            config.llm.model_for_variant("ollama_cloud", "xhigh"),
+            Some("deepseek-r1:70b")
+        );
+        assert_eq!(
+            config.llm.model_for_variant("openai", "xhigh"),
+            Some("o3-mini")
+        );
+        assert_eq!(
+            config.llm.model_for_variant("anthropic", "xhigh"),
+            Some("claude-3-7-sonnet-latest")
+        );
+        assert_eq!(
+            config.llm.model_for_variant("openrouter", "high"),
+            Some("deepseek/deepseek-r1")
+        );
+        assert_eq!(
+            config.llm.model_for_variant("openrouter", "xhigh"),
+            Some("anthropic/claude-3.7-sonnet:thinking")
+        );
+        assert_eq!(
+            config.llm.model_for_variant("gemini", "high"),
+            Some("gemini-2.5-pro")
+        );
+        assert_eq!(
+            config.llm.model_for_variant("github-models", "high"),
+            Some("openai/o3-mini")
+        );
+        assert_eq!(
+            config.llm.model_for_variant("github_models", "xhigh"),
+            Some("openai/o1")
+        );
+        assert_eq!(
+            config.llm.model_for_variant("groq", "high"),
+            Some("deepseek-r1-distill-llama-70b")
+        );
+        assert_eq!(
+            config.llm.model_for_variant("lm-studio", "default"),
+            Some("default")
+        );
+
+        config.llm.variant = "xhigh".to_string();
+        assert_eq!(config.llm.reasoning_effort_for_variant(), "high");
+        assert_eq!(config.llm.thinking_budget_tokens_for_variant(), 8192);
+    }
+
+    #[test]
+    fn strict_validation_helpers_accept_valid_inputs_and_reject_invalid() {
+        assert_eq!(validate_variant("Default").unwrap(), "Default");
+        assert_eq!(validate_variant("default").unwrap(), "Default");
+        assert_eq!(validate_variant("low").unwrap(), "low");
+        assert_eq!(validate_variant("medium").unwrap(), "medium");
+        assert_eq!(validate_variant("high").unwrap(), "high");
+        assert_eq!(validate_variant("xhigh").unwrap(), "xhigh");
+        assert!(validate_variant("max").is_err());
+        assert!(validate_variant("light").is_err());
+        assert!(validate_variant("unknown").is_err());
+
+        assert_eq!(validate_mode("plan").unwrap(), AgentWorkMode::Plan);
+        assert_eq!(validate_mode("build").unwrap(), AgentWorkMode::Build);
+        assert_eq!(validate_mode("PLAN").unwrap(), AgentWorkMode::Plan);
+        assert_eq!(validate_mode("BUILD").unwrap(), AgentWorkMode::Build);
+        assert!(validate_mode("run").is_err());
+        assert!(validate_mode("exec").is_err());
+
+        assert_eq!(
+            validate_permission("velocity").unwrap(),
+            PermissionMode::Velocity
+        );
+        assert_eq!(
+            validate_permission("full_machine").unwrap(),
+            PermissionMode::FullMachine
+        );
+        assert_eq!(
+            validate_permission("strict").unwrap(),
+            PermissionMode::Strict
+        );
+        assert!(validate_permission("fast").is_err());
+        assert!(validate_permission("safe").is_err());
+        assert!(validate_permission("unrestricted").is_err());
+        assert!(validate_permission("other").is_err());
+    }
+
+    #[test]
+    fn agent_work_mode_serialization_and_defaults() {
+        assert_eq!(AgentWorkMode::default(), AgentWorkMode::Build);
+        assert_eq!(AgentWorkMode::Plan.as_str(), "plan");
+        assert_eq!(AgentWorkMode::Build.as_str(), "build");
+
+        let default_config = AxiomConfig::default();
+        assert_eq!(default_config.agent.work_mode, AgentWorkMode::Build);
+
+        let serialized = serde_json::to_string(&AgentWorkMode::Plan).expect("serialize plan");
+        assert_eq!(serialized, "\"plan\"");
+        let deserialized: AgentWorkMode =
+            serde_json::from_str("\"plan\"").expect("deserialize plan");
+        assert_eq!(deserialized, AgentWorkMode::Plan);
+
+        let serialized_build =
+            serde_json::to_string(&AgentWorkMode::Build).expect("serialize build");
+        assert_eq!(serialized_build, "\"build\"");
+        let deserialized_build: AgentWorkMode =
+            serde_json::from_str("\"build\"").expect("deserialize build");
+        assert_eq!(deserialized_build, AgentWorkMode::Build);
+
+        let provider_config = ProviderConfig::ollama_cloud(None);
+        assert!(matches!(
+            provider_config,
+            ProviderConfig::OpenaiCompatible {
+                ref base_url,
+                api_key_env: Some(ref env),
+                ..
+            } if base_url == "https://api.ollama.com/v1" && env == "OLLAMA_API_KEY"
+        ));
     }
 
     fn unique_temp_dir() -> PathBuf {

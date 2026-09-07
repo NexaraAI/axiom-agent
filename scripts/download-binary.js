@@ -17,6 +17,26 @@ const TRUSTED_DOWNLOAD_HOSTS = new Set([
   "release-assets.githubusercontent.com"
 ]);
 
+function isTrustedDownloadHost(hostname) {
+  const host = String(hostname || "").toLowerCase();
+  if (TRUSTED_DOWNLOAD_HOSTS.has(host)) {
+    return true;
+  }
+  if (host.endsWith(".githubusercontent.com")) {
+    return true;
+  }
+  if (
+    host.endsWith(".s3.amazonaws.com") &&
+    (host.startsWith("github-") || host.includes("github"))
+  ) {
+    return true;
+  }
+  if (host.endsWith(".blob.core.windows.net")) {
+    return true;
+  }
+  return false;
+}
+
 function normalizeReleaseRepo(repo) {
   const normalized = String(repo || "")
     .trim()
@@ -103,7 +123,7 @@ function parseDownloadUrl(value) {
   if (parsed.protocol !== "https:" || parsed.username || parsed.password) {
     throw new Error("Axiom downloads require HTTPS URLs without embedded credentials.");
   }
-  if (!TRUSTED_DOWNLOAD_HOSTS.has(parsed.hostname.toLowerCase())) {
+  if (!isTrustedDownloadHost(parsed.hostname)) {
     throw new Error(`Axiom download host is not trusted: ${parsed.hostname}`);
   }
   return parsed;

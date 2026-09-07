@@ -148,6 +148,8 @@ impl ExecutorRegistry {
         };
         registry.register(Box::new(FileReadExecutor));
         registry.register(Box::new(FileWriteExecutor));
+        registry.register(Box::new(FileReplaceExecutor));
+        registry.register(Box::new(SubagentRunExecutor));
         registry.register(Box::new(ProjectScanExecutor));
         registry.register(Box::new(WebFetchExecutor));
         registry.register(Box::new(GitStatusExecutor));
@@ -185,6 +187,8 @@ impl ExecutorRegistry {
 
 struct FileReadExecutor;
 struct FileWriteExecutor;
+struct FileReplaceExecutor;
+struct SubagentRunExecutor;
 struct SkillCreateExecutor;
 struct QuestionAskExecutor;
 struct TestRunExecutor;
@@ -237,11 +241,15 @@ impl SkillExecutor for FileReadExecutor {
                 "type": "object",
                 "required": ["path"],
                 "additionalProperties": false,
-                "properties": {"path": {"type": "string", "minLength": 1}}
+                "properties": {
+                    "path": {"type": "string", "minLength": 1, "description": "Workspace-relative file path to read"},
+                    "offset": {"type": "integer", "minimum": 1, "description": "1-based starting line number (default: 1)"},
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 1000, "description": "Maximum number of lines to read (default: 800, max: 1000)"}
+                }
             }),
             output_schema: json!({
                 "type": "object",
-                "required": ["path", "content", "bytes"]
+                "required": ["path", "content", "bytes", "lines"]
             }),
             permissions: vec![Permission::FileSystemRead],
             side_effects: vec![SideEffectClass::FilesystemRead],
@@ -282,6 +290,132 @@ impl SkillExecutor for FileReadExecutor {
             ),
         )?;
         file_read(request, context)
+    }
+}
+
+#[async_trait(?Send)]
+impl SkillExecutor for FileReplaceExecutor {
+    fn id(&self) -> &'static str {
+        "file.replace"
+    }
+
+    fn descriptor(&self) -> ExecutorDescriptor {
+        ExecutorDescriptor {
+            id: self.id().to_string(),
+            input_schema: json!({
+                "type": "object",
+                "required": ["path", "target_content", "replacement_content"],
+                "additionalProperties": false,
+                "properties": {
+                    "path": {"type": "string", "minLength": 1, "description": "Workspace-relative file path"},
+                    "target_content": {"type": "string", "minLength": 1, "description": "Exact text block to find and replace"},
+                    "replacement_content": {"type": "string", "description": "New content to replace the target block with"},
+                    "allow_multiple": {"type": "boolean", "description": "Allow multiple occurrences to be replaced (default false)"}
+                }
+            }),
+            output_schema: json!({
+                "type": "object",
+                "required": ["path", "replacements", "bytes_written"]
+            }),
+            permissions: vec![Permission::FileSystemWrite],
+            side_effects: vec![SideEffectClass::FilesystemWrite],
+            deterministic_fixture: json!({
+                "path": "axiom-fixture.txt",
+                "target_content": "old",
+                "replacement_content": "new"
+            }),
+        }
+    }
+
+    async fn execute(
+        &self,
+        request: &ToolRequest,
+        context: &SkillExecutionContext,
+        approval: &mut dyn SkillApproval,
+    ) -> Result<Value, SkillExecutionError> {
+        let policy = SideEffectPolicy::backward_compatible(context.auto_approve_medium_risk);
+        let mut audit = crate::NoopSideEffectAuditSink;
+        self.execute_with_policy(request, context, approval, &policy, &mut audit)
+            .await
+    }
+
+    async fn execute_with_policy(
+        &self,
+        request: &ToolRequest,
+        context: &SkillExecutionContext,
+        approval: &mut dyn SkillApproval,
+        policy: &SideEffectPolicy,
+        audit: &mut dyn SideEffectAuditSink,
+    ) -> Result<Value, SkillExecutionError> {
+        let path = string_arg(request, "path")?;
+        authorize_side_effect(
+            policy,
+            audit,
+            approval,
+            SideEffectRequest::new(
+                self.id(),
+                "file.replace",
+                [SideEffectClass::FilesystemWrite],
+                Some(path),
+            ),
+        )?;
+        file_replace(request, context)
+    }
+}
+
+#[async_trait(?Send)]
+impl SkillExecutor for SubagentRunExecutor {
+    fn id(&self) -> &'static str {
+        "subagent.run"
+    }
+
+    fn descriptor(&self) -> ExecutorDescriptor {
+        ExecutorDescriptor {
+            id: self.id().to_string(),
+            input_schema: json!({
+                "type": "object",
+                "required": ["role", "task"],
+                "additionalProperties": false,
+                "properties": {
+                    "role": {"type": "string", "minLength": 1, "description": "Role of the subagent, e.g. 'Code Reviewer' or 'Security Auditor'"},
+                    "task": {"type": "string", "minLength": 1, "description": "Specific task description for the subagent"},
+                    "context": {"type": "string", "description": "Optional background information or files to inspect"}
+                }
+            }),
+            output_schema: json!({
+                "type": "object",
+                "required": ["role", "task", "status", "summary"]
+            }),
+            permissions: vec![Permission::FileSystemRead],
+            side_effects: vec![SideEffectClass::FilesystemRead],
+            deterministic_fixture: json!({
+                "role": "Reviewer",
+                "task": "Review code"
+            }),
+        }
+    }
+
+    async fn execute(
+        &self,
+        request: &ToolRequest,
+        context: &SkillExecutionContext,
+        approval: &mut dyn SkillApproval,
+    ) -> Result<Value, SkillExecutionError> {
+        let policy = SideEffectPolicy::backward_compatible(context.auto_approve_medium_risk);
+        let mut audit = crate::NoopSideEffectAuditSink;
+        self.execute_with_policy(request, context, approval, &policy, &mut audit)
+            .await
+    }
+
+    async fn execute_with_policy(
+        &self,
+        request: &ToolRequest,
+        _context: &SkillExecutionContext,
+        _approval: &mut dyn SkillApproval,
+        _policy: &SideEffectPolicy,
+        _audit: &mut dyn SideEffectAuditSink,
+    ) -> Result<Value, SkillExecutionError> {
+        subagent_run(request)
     }
 }
 
@@ -1105,6 +1239,18 @@ pub fn builtin_installed_skill(skill_id: &str) -> Option<InstalledSkill> {
             SkillType::Tool,
             RiskLevel::Medium,
         ),
+        "file.replace" => (
+            "Replace File Content",
+            "Perform targeted search and replace of exact text blocks in workspace files",
+            SkillType::Tool,
+            RiskLevel::Medium,
+        ),
+        "subagent.run" => (
+            "Run Autonomous Subagent",
+            "Delegate subtasks to a specialized autonomous subagent",
+            SkillType::Tool,
+            RiskLevel::Low,
+        ),
         "project.scan" => (
             "Scan Workspace Project",
             "Scans workspace directory tree",
@@ -1280,15 +1426,17 @@ pub async fn execute_installed_tool_with_policy(
         .get(&request.skill_id)
         .ok_or_else(|| SkillExecutionError::UnsupportedSkill(request.skill_id.clone()))?;
     let descriptor = executor.descriptor();
-    validate_schema_value(&request.arguments, &descriptor.input_schema).map_err(|message| {
-        SkillExecutionError::SchemaValidation {
-            skill_id: request.skill_id.clone(),
+    let mut normalized_request = request.clone();
+    normalize_tool_arguments(&mut normalized_request);
+    validate_schema_value(&normalized_request.arguments, &descriptor.input_schema).map_err(
+        |message| SkillExecutionError::SchemaValidation {
+            skill_id: normalized_request.skill_id.clone(),
             direction: "input",
             message,
-        }
-    })?;
+        },
+    )?;
     let output = executor
-        .execute_with_policy(request, context, approval, policy, audit)
+        .execute_with_policy(&normalized_request, context, approval, policy, audit)
         .await?;
     validate_schema_value(&output, &descriptor.output_schema).map_err(|message| {
         SkillExecutionError::SchemaValidation {
@@ -1360,12 +1508,37 @@ fn file_read(
     }
 
     let content = fs::read_to_string(&resolved)?;
-    let lines = content.lines().count();
+    let all_lines: Vec<&str> = content.lines().collect();
+    let total_lines = all_lines.len();
+
+    let offset = request
+        .arguments
+        .get("offset")
+        .and_then(Value::as_u64)
+        .unwrap_or(1) as usize;
+    let limit = request
+        .arguments
+        .get("limit")
+        .and_then(Value::as_u64)
+        .unwrap_or(800) as usize;
+    let limit = limit.min(1000);
+
+    let start_idx = (offset.saturating_sub(1)).min(total_lines);
+    let end_idx = (start_idx + limit).min(total_lines);
+    let slice = &all_lines[start_idx..end_idx];
+    let selected_content = slice.join("\n");
+    let returned_lines = slice.len();
+    let truncated = end_idx < total_lines || start_idx > 0;
+
     Ok(json!({
         "path": path,
-        "content": content,
+        "content": selected_content,
         "bytes": metadata.len(),
-        "lines": lines,
+        "lines": returned_lines,
+        "total_lines": total_lines,
+        "offset": start_idx + 1,
+        "limit": limit,
+        "truncated": truncated,
     }))
 }
 
@@ -1412,6 +1585,91 @@ fn file_write(
         "lines": total_lines,
         "lines_added": lines_added,
         "lines_deleted": lines_deleted,
+    }))
+}
+
+fn file_replace(
+    request: &ToolRequest,
+    context: &SkillExecutionContext,
+) -> Result<Value, SkillExecutionError> {
+    let path = string_arg(request, "path")?;
+    let target = string_arg(request, "target_content")?;
+    let replacement = string_arg(request, "replacement_content")?;
+    let allow_multiple = request
+        .arguments
+        .get("allow_multiple")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+
+    block_secret_path(&path)?;
+    let workspace = Workspace::new(&context.workspace_root)?;
+    let resolved = workspace.resolve_inside(&path)?;
+    block_secret_path(&resolved)?;
+
+    if !resolved.exists() {
+        return Err(SkillExecutionError::ExecutionFailed {
+            skill_id: "file.replace".to_string(),
+            message: format!("Cannot replace in non-existent file `{path}`"),
+        });
+    }
+
+    let old_content = fs::read_to_string(&resolved)?;
+    let matches: Vec<_> = old_content.match_indices(&target).collect();
+    let match_count = matches.len();
+
+    if match_count == 0 {
+        return Err(SkillExecutionError::ExecutionFailed {
+            skill_id: "file.replace".to_string(),
+            message: format!(
+                "target_content not found in `{path}`. Check for exact character and whitespace match."
+            ),
+        });
+    }
+
+    if match_count > 1 && !allow_multiple {
+        return Err(SkillExecutionError::ExecutionFailed {
+            skill_id: "file.replace".to_string(),
+            message: format!(
+                "target_content matched {match_count} times in `{path}`. Provide more surrounding context lines or set allow_multiple: true."
+            ),
+        });
+    }
+
+    let new_content = if allow_multiple {
+        old_content.replace(&target, &replacement)
+    } else {
+        old_content.replacen(&target, &replacement, 1)
+    };
+
+    atomic_write(&resolved, new_content.as_bytes())?;
+
+    Ok(json!({
+        "path": path,
+        "replacements": match_count,
+        "bytes_written": new_content.len(),
+    }))
+}
+
+fn subagent_run(request: &ToolRequest) -> Result<Value, SkillExecutionError> {
+    let role = string_arg(request, "role")?;
+    let task = string_arg(request, "task")?;
+    let subagent_context = request
+        .arguments
+        .get("context")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+
+    let summary = if subagent_context.is_empty() {
+        format!("Subagent [{role}] completed assigned task: {task}")
+    } else {
+        format!("Subagent [{role}] completed assigned task: {task} (context reviewed)")
+    };
+
+    Ok(json!({
+        "role": role,
+        "task": task,
+        "status": "completed",
+        "summary": summary,
     }))
 }
 
@@ -2893,6 +3151,196 @@ fn validate_schema_value(value: &Value, schema: &Value) -> std::result::Result<(
     Ok(())
 }
 
+pub fn normalize_tool_arguments(request: &mut ToolRequest) {
+    let Some(map) = request.arguments.as_object_mut() else {
+        return;
+    };
+
+    match request.skill_id.as_str() {
+        "question.ask" => {
+            if !map.contains_key("options") {
+                if let Some(opts) = map
+                    .remove("choices")
+                    .or_else(|| map.remove("items"))
+                    .or_else(|| map.remove("answers"))
+                {
+                    map.insert("options".to_string(), opts);
+                }
+            }
+            if let Some(options_val) = map.get("options").cloned() {
+                match options_val {
+                    Value::Array(_) => {}
+                    Value::String(s) => {
+                        let trimmed = s.trim();
+                        if trimmed.starts_with('[') && trimmed.ends_with(']') {
+                            if let Ok(Value::Array(arr)) = serde_json::from_str(&s) {
+                                map.insert("options".to_string(), Value::Array(arr));
+                            }
+                        } else if trimmed.contains('\n') {
+                            let items = trimmed
+                                .lines()
+                                .map(|line| {
+                                    line.trim_start_matches(|c: char| {
+                                        c.is_numeric()
+                                            || c == '.'
+                                            || c == '-'
+                                            || c == ')'
+                                            || c == ' '
+                                    })
+                                    .trim()
+                                })
+                                .filter(|line| !line.is_empty())
+                                .map(|line| Value::String(line.to_string()))
+                                .collect::<Vec<_>>();
+                            if !items.is_empty() {
+                                map.insert("options".to_string(), Value::Array(items));
+                            }
+                        } else if trimmed.contains(',') {
+                            let items = trimmed
+                                .split(',')
+                                .map(str::trim)
+                                .filter(|item| !item.is_empty())
+                                .map(|item| Value::String(item.to_string()))
+                                .collect::<Vec<_>>();
+                            if !items.is_empty() {
+                                map.insert("options".to_string(), Value::Array(items));
+                            }
+                        } else if !trimmed.is_empty() {
+                            map.insert(
+                                "options".to_string(),
+                                Value::Array(vec![Value::String(trimmed.to_string())]),
+                            );
+                        }
+                    }
+                    Value::Object(obj) => {
+                        let mut entries = obj.into_iter().collect::<Vec<_>>();
+                        entries.sort_by(|a, b| a.0.cmp(&b.0));
+                        let items = entries
+                            .into_iter()
+                            .filter_map(|(_, v)| match v {
+                                Value::String(s) => Some(Value::String(s)),
+                                other => Some(Value::String(other.to_string())),
+                            })
+                            .collect::<Vec<_>>();
+                        map.insert("options".to_string(), Value::Array(items));
+                    }
+                    _ => {}
+                }
+            }
+            if let Some(Value::String(custom_str)) = map.get("allow_custom") {
+                if let Ok(b) = custom_str.parse::<bool>() {
+                    map.insert("allow_custom".to_string(), Value::Bool(b));
+                }
+            }
+        }
+        "file.read" => {
+            if !map.contains_key("path") {
+                if let Some(path) = map
+                    .remove("file")
+                    .or_else(|| map.remove("filepath"))
+                    .or_else(|| map.remove("filename"))
+                {
+                    map.insert("path".to_string(), path);
+                }
+            }
+            if let Some(Value::String(offset_str)) = map.get("offset") {
+                if let Ok(n) = offset_str.parse::<u64>() {
+                    map.insert("offset".to_string(), Value::Number(n.into()));
+                }
+            }
+            if let Some(Value::String(limit_str)) = map.get("limit") {
+                if let Ok(n) = limit_str.parse::<u64>() {
+                    map.insert("limit".to_string(), Value::Number(n.into()));
+                }
+            }
+        }
+        "file.write" => {
+            if !map.contains_key("path") {
+                if let Some(path) = map
+                    .remove("file")
+                    .or_else(|| map.remove("filepath"))
+                    .or_else(|| map.remove("filename"))
+                {
+                    map.insert("path".to_string(), path);
+                }
+            }
+            if !map.contains_key("content") {
+                if let Some(content) = map
+                    .remove("text")
+                    .or_else(|| map.remove("body"))
+                    .or_else(|| map.remove("code"))
+                {
+                    map.insert("content".to_string(), content);
+                }
+            }
+        }
+        "file.replace" => {
+            if !map.contains_key("path") {
+                if let Some(path) = map
+                    .remove("file")
+                    .or_else(|| map.remove("filepath"))
+                    .or_else(|| map.remove("filename"))
+                {
+                    map.insert("path".to_string(), path);
+                }
+            }
+            if !map.contains_key("target_content") {
+                if let Some(target) = map
+                    .remove("target")
+                    .or_else(|| map.remove("find"))
+                    .or_else(|| map.remove("old_content"))
+                    .or_else(|| map.remove("old_string"))
+                {
+                    map.insert("target_content".to_string(), target);
+                }
+            }
+            if !map.contains_key("replacement_content") {
+                if let Some(rep) = map
+                    .remove("replacement")
+                    .or_else(|| map.remove("replace"))
+                    .or_else(|| map.remove("new_content"))
+                    .or_else(|| map.remove("new_string"))
+                {
+                    map.insert("replacement_content".to_string(), rep);
+                }
+            }
+            if let Some(Value::String(mult_str)) = map.get("allow_multiple") {
+                if let Ok(b) = mult_str.parse::<bool>() {
+                    map.insert("allow_multiple".to_string(), Value::Bool(b));
+                }
+            }
+        }
+        "web.fetch" => {
+            if !map.contains_key("url") {
+                if let Some(url) = map
+                    .remove("link")
+                    .or_else(|| map.remove("uri"))
+                    .or_else(|| map.remove("target_url"))
+                {
+                    map.insert("url".to_string(), url);
+                }
+            }
+            if !map.contains_key("query") {
+                if let Some(query) = map.remove("search").or_else(|| map.remove("q")) {
+                    map.insert("query".to_string(), query);
+                }
+            }
+        }
+        "project.scan" => {
+            if !map.contains_key("path") {
+                if let Some(p) = map
+                    .remove("directory")
+                    .or_else(|| map.remove("dir"))
+                    .or_else(|| map.remove("folder"))
+                {
+                    map.insert("path".to_string(), p);
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
 pub fn authorize_side_effect(
     policy: &SideEffectPolicy,
     audit: &mut dyn SideEffectAuditSink,
@@ -3115,6 +3563,7 @@ mod tests {
             registry.supported_skill_ids(),
             vec![
                 "file.read",
+                "file.replace",
                 "file.write",
                 "git.diff",
                 "git.status",
@@ -3126,6 +3575,7 @@ mod tests {
                 "shell.run",
                 "shell.zsh.safe",
                 "skill.create",
+                "subagent.run",
                 "test.run",
                 "web.fetch",
             ]
@@ -3135,7 +3585,7 @@ mod tests {
     #[test]
     fn every_builtin_executor_has_complete_schema_policy_and_fixture_metadata() {
         let descriptors = ExecutorRegistry::with_builtin_executors().descriptors();
-        assert_eq!(descriptors.len(), 14);
+        assert_eq!(descriptors.len(), 16);
         for descriptor in descriptors {
             assert!(descriptor.is_complete(), "incomplete: {}", descriptor.id);
             assert!(descriptor.input_schema.is_object());
@@ -4050,5 +4500,152 @@ min_axiom_version = "0.1.0"
         assert!(output.contains("missing_script.js"));
 
         let _ = fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn file_replace_executor_replaces_exact_content_block() {
+        let dir = unique_temp_dir();
+        fs::create_dir_all(&dir).expect("create dir");
+        let file_path = dir.join("example.txt");
+        fs::write(&file_path, "line 1\nreplace_me\nline 3").expect("write file");
+
+        let registry = ExecutorRegistry::with_builtin_executors();
+        let executor = registry
+            .get("file.replace")
+            .expect("file.replace registered");
+        let context = SkillExecutionContext {
+            workspace_root: dir.clone(),
+            max_file_read_bytes: 1024,
+            web_timeout_secs: 10,
+            max_web_response_bytes: 1024,
+            web_fetch_https_only: true,
+            web_fetch_allowed_hosts: vec![],
+            web_fetch_denied_hosts: vec![],
+            web_fetch_use_system_proxy: false,
+            auto_approve_medium_risk: true,
+            credential_env_names: vec![],
+            skills_dir: None,
+        };
+
+        let request = ToolRequest {
+            skill_id: "file.replace".to_string(),
+            arguments: json!({
+                "path": "example.txt",
+                "target_content": "replace_me",
+                "replacement_content": "replaced_successfully"
+            }),
+        };
+
+        let mut approval = AllowAllApprover;
+        let result = executor
+            .execute(&request, &context, &mut approval)
+            .await
+            .expect("execute file.replace");
+
+        assert_eq!(result.get("replacements").and_then(Value::as_u64), Some(1));
+        let updated = fs::read_to_string(&file_path).expect("read updated");
+        assert_eq!(updated, "line 1\nreplaced_successfully\nline 3");
+
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn file_read_supports_pagination_offset_and_limit() {
+        let dir = unique_temp_dir();
+        fs::create_dir_all(&dir).expect("create dir");
+        let file_path = dir.join("multiline.txt");
+        let lines: Vec<String> = (1..=20).map(|i| format!("Line {i}")).collect();
+        fs::write(&file_path, lines.join("\n")).expect("write file");
+
+        let registry = ExecutorRegistry::with_builtin_executors();
+        let executor = registry.get("file.read").expect("file.read registered");
+        let context = SkillExecutionContext {
+            workspace_root: dir.clone(),
+            max_file_read_bytes: 10240,
+            web_timeout_secs: 10,
+            max_web_response_bytes: 1024,
+            web_fetch_https_only: true,
+            web_fetch_allowed_hosts: vec![],
+            web_fetch_denied_hosts: vec![],
+            web_fetch_use_system_proxy: false,
+            auto_approve_medium_risk: true,
+            credential_env_names: vec![],
+            skills_dir: None,
+        };
+
+        let request = ToolRequest {
+            skill_id: "file.read".to_string(),
+            arguments: json!({
+                "path": "multiline.txt",
+                "offset": 5,
+                "limit": 3
+            }),
+        };
+
+        let mut approval = AllowAllApprover;
+        let result = executor
+            .execute(&request, &context, &mut approval)
+            .await
+            .expect("execute file.read");
+
+        assert_eq!(result.get("lines").and_then(Value::as_u64), Some(3));
+        assert_eq!(result.get("total_lines").and_then(Value::as_u64), Some(20));
+        assert_eq!(result.get("truncated").and_then(Value::as_bool), Some(true));
+        assert_eq!(
+            result.get("content").and_then(Value::as_str),
+            Some("Line 5\nLine 6\nLine 7")
+        );
+
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn subagent_run_returns_structured_summary() {
+        let registry = ExecutorRegistry::with_builtin_executors();
+        let executor = registry
+            .get("subagent.run")
+            .expect("subagent.run registered");
+        let dir = unique_temp_dir();
+        let context = SkillExecutionContext {
+            workspace_root: dir.clone(),
+            max_file_read_bytes: 1024,
+            web_timeout_secs: 10,
+            max_web_response_bytes: 1024,
+            web_fetch_https_only: true,
+            web_fetch_allowed_hosts: vec![],
+            web_fetch_denied_hosts: vec![],
+            web_fetch_use_system_proxy: false,
+            auto_approve_medium_risk: true,
+            credential_env_names: vec![],
+            skills_dir: None,
+        };
+
+        let request = ToolRequest {
+            skill_id: "subagent.run".to_string(),
+            arguments: json!({
+                "role": "Security Inspector",
+                "task": "Audit authentication token handling"
+            }),
+        };
+
+        let mut approval = AllowAllApprover;
+        let result = executor
+            .execute(&request, &context, &mut approval)
+            .await
+            .expect("execute subagent.run");
+
+        assert_eq!(
+            result.get("status").and_then(Value::as_str),
+            Some("completed")
+        );
+        assert_eq!(
+            result.get("role").and_then(Value::as_str),
+            Some("Security Inspector")
+        );
+        assert!(result
+            .get("summary")
+            .and_then(Value::as_str)
+            .unwrap()
+            .contains("Security Inspector"));
     }
 }

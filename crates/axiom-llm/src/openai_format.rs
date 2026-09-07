@@ -94,15 +94,16 @@ pub fn parse_chat_response(
             provider: provider.to_string(),
             body_summary: summarize_body(body),
         })?;
+    let message_tool_calls = message.tool_calls.as_deref().unwrap_or_default();
     ensure_count(
         provider,
         "tool-call count",
-        message.tool_calls.len(),
+        message_tool_calls.len(),
         MAX_TOOL_CALLS,
     )?;
-    let mut tool_calls = Vec::with_capacity(message.tool_calls.len());
+    let mut tool_calls = Vec::with_capacity(message_tool_calls.len());
     let mut total_argument_bytes = 0_usize;
-    for tool_call in &message.tool_calls {
+    for tool_call in message_tool_calls {
         if let Some(id) = tool_call.id.as_deref() {
             ensure_bytes(provider, "tool-call id", id.len(), MAX_TOOL_CALL_ID_BYTES)?;
         }
@@ -258,7 +259,7 @@ struct OpenAiMessage {
     #[serde(default)]
     reasoning: Option<String>,
     #[serde(default)]
-    tool_calls: Vec<OpenAiToolCall>,
+    tool_calls: Option<Vec<OpenAiToolCall>>,
 }
 
 #[derive(Debug, Deserialize)]

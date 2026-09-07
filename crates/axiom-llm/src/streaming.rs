@@ -164,7 +164,10 @@ impl ChatStream {
         while let Some(chunk) = match self.next_chunk().await {
             Ok(chunk) => chunk,
             Err(LlmError::StreamDisconnected { .. })
-                if !content.is_empty() || !tool_calls.is_empty() || !total_reasoning.is_empty() =>
+                if chunks_received > 0
+                    || !content.is_empty()
+                    || !tool_calls.is_empty()
+                    || !total_reasoning.is_empty() =>
             {
                 None
             }
@@ -572,6 +575,13 @@ impl HttpChatStream {
                     }
                 }
                 None if self.buffer.is_empty() => {
+                    if self.events_received > 0 {
+                        self.terminal_event_seen = true;
+                        return Ok(Some(ChatChunk {
+                            done: true,
+                            ..ChatChunk::default()
+                        }));
+                    }
                     return Err(LlmError::StreamDisconnected {
                         provider: self.provider.clone(),
                     });
@@ -592,11 +602,17 @@ impl HttpChatStream {
                     )?;
                     self.events_received += 1;
                     let event = std::mem::take(&mut self.buffer);
-                    if let Some(chunk) = parse_sse_event(&self.provider, &event)? {
-                        if chunk.done {
-                            self.terminal_event_seen = true;
-                            return Ok(Some(chunk));
-                        }
+                    if let Some(mut chunk) = parse_sse_event(&self.provider, &event)? {
+                        chunk.done = true;
+                        self.terminal_event_seen = true;
+                        return Ok(Some(chunk));
+                    }
+                    if self.events_received > 1 {
+                        self.terminal_event_seen = true;
+                        return Ok(Some(ChatChunk {
+                            done: true,
+                            ..ChatChunk::default()
+                        }));
                     }
                     return Err(LlmError::StreamDisconnected {
                         provider: self.provider.clone(),
@@ -711,14 +727,15 @@ fn parse_sse_event(provider: &str, event: &[u8]) -> Result<Option<ChatChunk>> {
                 )?;
                 chunk.content_delta.push_str(&content);
             }
+            let tool_calls = delta.tool_calls.unwrap_or_default();
             ensure_additional_count(
                 provider,
                 "SSE tool-call delta count",
                 chunk.tool_call_deltas.len(),
-                delta.tool_calls.len(),
+                tool_calls.len(),
                 MAX_TOOL_CALL_DELTAS_PER_EVENT,
             )?;
-            for call in delta.tool_calls {
+            for call in tool_calls {
                 let function = call.function.unwrap_or_default();
                 let name_delta = function.name.unwrap_or_default();
                 let arguments_delta = function.arguments.unwrap_or_default();
@@ -781,7 +798,7 @@ struct OpenAiStreamDelta {
     #[serde(default)]
     reasoning: Option<String>,
     #[serde(default)]
-    tool_calls: Vec<OpenAiStreamToolCall>,
+    tool_calls: Option<Vec<OpenAiStreamToolCall>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -823,6 +840,17 @@ mod tests {
         assert_eq!(content.model.as_deref(), Some("gpt-test"));
         assert!(!content.done);
         assert!(done.done);
+    }
+
+    #[test]
+    fn parses_sse_chunk_with_null_tool_calls_and_null_reasoning() {
+        let raw = br#"data: {"id":"test_id","object":"chat.completion.chunk","created":1788772609,"model":"big-pickle","choices":[{"index":0,"finish_reason":null,"delta":{"role":"assistant","content":"yo","reasoning_content":null,"tool_calls":null}}]}"#;
+        let chunk = parse_sse_event("opencode", raw)
+            .expect("parse event with null tool_calls")
+            .expect("chunk present");
+        assert_eq!(chunk.content_delta, "yo");
+        assert_eq!(chunk.model.as_deref(), Some("big-pickle"));
+        assert!(chunk.tool_call_deltas.is_empty());
     }
 
     #[tokio::test]

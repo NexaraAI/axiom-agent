@@ -246,6 +246,27 @@ pub fn validate_provider_endpoint(
     }
 }
 
+pub const OLLAMA_CLOUD_BASE_URL: &str = "https://api.ollama.com/v1";
+pub const OLLAMA_CLOUD_MODELS: &[&str] = &["llama3.3:70b", "qwen2.5-coder:32b", "deepseek-r1:70b"];
+pub const OLLAMA_CLOUD_API_KEY_ENV: &str = "OLLAMA_API_KEY";
+
+pub fn ollama_cloud_provider(api_key: Option<String>) -> crate::OpenAiCompatibleProvider {
+    let key = api_key.or_else(|| {
+        std::env::var(OLLAMA_CLOUD_API_KEY_ENV)
+            .ok()
+            .filter(|s| !s.trim().is_empty())
+    });
+    let mut provider = crate::OpenAiCompatibleProvider::new(
+        "ollama_cloud",
+        OLLAMA_CLOUD_BASE_URL,
+        Some(OLLAMA_CLOUD_API_KEY_ENV.to_string()),
+    );
+    if let Some(k) = key {
+        provider = provider.with_api_key(k);
+    }
+    provider
+}
+
 #[async_trait]
 pub trait LlmProvider: Send + Sync {
     async fn chat(&self, request: ChatRequest) -> Result<ChatResponse>;
@@ -430,5 +451,27 @@ mod tests {
                 Err(LlmError::UnsafeCredentialEnv { .. })
             ));
         }
+    }
+
+    #[test]
+    fn ollama_cloud_provider_configuration_and_models() {
+        assert!(validate_provider_endpoint("base_url", OLLAMA_CLOUD_BASE_URL, false).is_ok());
+        assert!(validate_credential_env_name(OLLAMA_CLOUD_API_KEY_ENV).is_ok());
+        assert_eq!(OLLAMA_CLOUD_BASE_URL, "https://api.ollama.com/v1");
+        assert_eq!(
+            OLLAMA_CLOUD_MODELS,
+            &["llama3.3:70b", "qwen2.5-coder:32b", "deepseek-r1:70b"]
+        );
+
+        let provider = ollama_cloud_provider(Some("test-secret-key".to_string()));
+        assert_eq!(provider.provider_name(), "ollama_cloud");
+        assert_eq!(
+            provider.chat_endpoint(),
+            "https://api.ollama.com/v1/chat/completions"
+        );
+        assert_eq!(
+            provider.models_endpoint(),
+            "https://api.ollama.com/v1/models"
+        );
     }
 }

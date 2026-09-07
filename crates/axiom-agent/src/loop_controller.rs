@@ -3,9 +3,9 @@ use std::time::Instant;
 
 use anyhow::{anyhow, Result};
 use axiom_engine::{
-    execute_installed_tool_with_policy, extract_tool_request, ExecutorRegistry, InstalledSkill,
-    RecordingSideEffectAuditSink, SideEffectDecision, SideEffectPolicy, SkillApproval,
-    SkillExecutionContext, SkillExecutionError, SkillExecutionResult, ToolRequest,
+    execute_installed_tool_with_policy, extract_tool_request, AllowAllApprover, ExecutorRegistry,
+    InstalledSkill, RecordingSideEffectAuditSink, SideEffectDecision, SideEffectPolicy,
+    SkillApproval, SkillExecutionContext, SkillExecutionError, SkillExecutionResult, ToolRequest,
 };
 use axiom_llm::{ChatMessage, ChatRequest, ChatStreamUpdate, ChatToolDefinition, LlmProvider};
 use serde::{Deserialize, Serialize};
@@ -650,108 +650,214 @@ impl<'a> AgentLoop<'a> {
                 )));
             }
 
-            for request in tool_requests {
-                if self.cancellation.is_cancelled() {
-                    return self.give_up(GiveUpReason::Cancelled, iteration, progress);
+            let run_parallel = tool_requests.len() > 1
+                && tool_requests.iter().all(|r| is_readonly_tool(&r.skill_id));
+
+            if run_parallel {
+                let mut futures = Vec::new();
+                for request in &tool_requests {
+                    let req = request.clone();
+                    let installed = self.installed_skills;
+                    let ctx = &self.execution_context;
+                    let policy = &self.side_effect_policy;
+                    futures.push(Box::pin(async move {
+                        let tool_started_at = Instant::now();
+                        let mut policy_audit = RecordingSideEffectAuditSink::default();
+                        let mut approver = AllowAllApprover;
+                        let tool_future = execute_installed_tool_with_policy(
+                            &req,
+                            installed,
+                            ctx,
+                            &mut approver,
+                            policy,
+                            &mut policy_audit,
+                        );
+                        let res = tool_future.await;
+                        (req, tool_started_at, policy_audit, res)
+                    }));
                 }
-                if progress.tool_events.len() >= self.caps.max_tool_iterations as usize {
-                    return self.give_up(
-                        GiveUpReason::MaxToolIterationsReached,
-                        iteration,
-                        progress,
-                    );
-                }
-                let tool_sequence = u32::try_from(progress.tool_events.len())
-                    .unwrap_or(u32::MAX)
-                    .saturating_add(1);
-                self.record_transition(
-                    &mut progress,
-                    AgentTransitionKind::ToolStarted {
-                        iteration,
-                        tool_sequence,
+
+                let results = SimpleJoinAll::new(futures).await;
+                for (request, tool_started_at, policy_audit, tool_result) in results {
+                    if self.cancellation.is_cancelled() {
+                        return self.give_up(GiveUpReason::Cancelled, iteration, progress);
+                    }
+                    if progress.tool_events.len() >= self.caps.max_tool_iterations as usize {
+                        return self.give_up(
+                            GiveUpReason::MaxToolIterationsReached,
+                            iteration,
+                            progress,
+                        );
+                    }
+                    let tool_sequence = u32::try_from(progress.tool_events.len())
+                        .unwrap_or(u32::MAX)
+                        .saturating_add(1);
+                    self.record_transition(
+                        &mut progress,
+                        AgentTransitionKind::ToolStarted {
+                            iteration,
+                            tool_sequence,
+                            request: request.clone(),
+                        },
+                    )?;
+                    let status = match tool_result {
+                        Ok(result) => {
+                            consecutive_tool_errors = 0;
+                            ToolExecutionStatus::Succeeded(result)
+                        }
+                        Err(error) => {
+                            consecutive_tool_errors += 1;
+                            ToolExecutionStatus::Failed(error.to_string())
+                        }
+                    };
+                    progress
+                        .policy_decisions
+                        .extend(policy_audit.into_decisions());
+                    let event = ToolExecutionEvent {
                         request: request.clone(),
-                    },
-                )?;
-                let tool_started_at = Instant::now();
-                let mut policy_audit = RecordingSideEffectAuditSink::default();
-                let tool_future = execute_installed_tool_with_policy(
-                    &request,
-                    self.installed_skills,
-                    &self.execution_context,
-                    &mut *self.approval,
-                    &self.side_effect_policy,
-                    &mut policy_audit,
-                );
-                let tool_result = tokio::select! {
-                    res = tool_future => Some(res),
-                    _ = self.cancellation.cancelled() => None,
-                };
-                let status = match tool_result {
-                    Some(Ok(result)) => {
-                        consecutive_tool_errors = 0;
-                        ToolExecutionStatus::Succeeded(result)
+                        latency_ms: tool_started_at
+                            .elapsed()
+                            .as_millis()
+                            .min(u128::from(u64::MAX)) as u64,
+                        status,
+                    };
+                    let observation = tool_observation(&event);
+                    let observation_message = ChatMessage {
+                        role: "user".to_string(),
+                        content: observation.clone(),
+                    };
+                    progress.tool_events.push(event.clone());
+                    if tool_sequence > 1 && messages.last().is_some_and(|m| m.role == "user") {
+                        let last = messages.last_mut().expect("last message exists");
+                        last.content.push_str("\n\n");
+                        last.content.push_str(&observation);
+                        if let Some(last_delta) = progress
+                            .history_delta
+                            .last_mut()
+                            .filter(|m| m.role == "user")
+                        {
+                            last_delta.content = last.content.clone();
+                        }
+                    } else {
+                        messages.push(observation_message.clone());
+                        progress.history_delta.push(observation_message.clone());
                     }
-                    Some(Err(error)) => {
-                        consecutive_tool_errors += 1;
-                        ToolExecutionStatus::Failed(error.to_string())
-                    }
-                    None => {
-                        consecutive_tool_errors += 1;
-                        ToolExecutionStatus::Failed("Tool execution cancelled by user".to_string())
-                    }
-                };
-                progress
-                    .policy_decisions
-                    .extend(policy_audit.into_decisions());
-                let event = ToolExecutionEvent {
-                    request: request.clone(),
-                    latency_ms: tool_started_at
-                        .elapsed()
-                        .as_millis()
-                        .min(u128::from(u64::MAX)) as u64,
-                    status,
-                };
-                let observation = tool_observation(&event);
-                let observation_message = ChatMessage {
-                    role: "user".to_string(),
-                    content: observation.clone(),
-                };
-                progress.tool_events.push(event.clone());
-                if tool_sequence > 1 && messages.last().is_some_and(|m| m.role == "user") {
-                    let last = messages.last_mut().expect("last message exists");
-                    last.content.push_str("\n\n");
-                    last.content.push_str(&observation);
-                    if let Some(last_delta) = progress
-                        .history_delta
-                        .last_mut()
-                        .filter(|m| m.role == "user")
-                    {
-                        last_delta.content = last.content.clone();
-                    }
-                } else {
-                    messages.push(observation_message.clone());
-                    progress.history_delta.push(observation_message.clone());
+                    self.record_transition(
+                        &mut progress,
+                        AgentTransitionKind::ToolCompleted {
+                            iteration,
+                            tool_sequence,
+                            event,
+                            observation: observation_message,
+                        },
+                    )?;
                 }
-                self.record_transition(
-                    &mut progress,
-                    AgentTransitionKind::ToolCompleted {
-                        iteration,
-                        tool_sequence,
-                        event,
-                        observation: observation_message,
-                    },
-                )?;
-
-                if self.cancellation.is_cancelled() {
-                    return self.give_up(GiveUpReason::Cancelled, iteration, progress);
-                }
-
-                if consecutive_tool_errors >= self.caps.max_consecutive_tool_errors {
-                    return self.give_up(
-                        GiveUpReason::ConsecutiveToolErrorsReached,
-                        iteration,
-                        progress,
+            } else {
+                for request in tool_requests {
+                    if self.cancellation.is_cancelled() {
+                        return self.give_up(GiveUpReason::Cancelled, iteration, progress);
+                    }
+                    if progress.tool_events.len() >= self.caps.max_tool_iterations as usize {
+                        return self.give_up(
+                            GiveUpReason::MaxToolIterationsReached,
+                            iteration,
+                            progress,
+                        );
+                    }
+                    let tool_sequence = u32::try_from(progress.tool_events.len())
+                        .unwrap_or(u32::MAX)
+                        .saturating_add(1);
+                    self.record_transition(
+                        &mut progress,
+                        AgentTransitionKind::ToolStarted {
+                            iteration,
+                            tool_sequence,
+                            request: request.clone(),
+                        },
+                    )?;
+                    let tool_started_at = Instant::now();
+                    let mut policy_audit = RecordingSideEffectAuditSink::default();
+                    let tool_future = execute_installed_tool_with_policy(
+                        &request,
+                        self.installed_skills,
+                        &self.execution_context,
+                        &mut *self.approval,
+                        &self.side_effect_policy,
+                        &mut policy_audit,
                     );
+                    let tool_result = tokio::select! {
+                        res = tool_future => Some(res),
+                        _ = self.cancellation.cancelled() => None,
+                    };
+                    let status = match tool_result {
+                        Some(Ok(result)) => {
+                            consecutive_tool_errors = 0;
+                            ToolExecutionStatus::Succeeded(result)
+                        }
+                        Some(Err(error)) => {
+                            consecutive_tool_errors += 1;
+                            ToolExecutionStatus::Failed(error.to_string())
+                        }
+                        None => {
+                            consecutive_tool_errors += 1;
+                            ToolExecutionStatus::Failed(
+                                "Tool execution cancelled by user".to_string(),
+                            )
+                        }
+                    };
+                    progress
+                        .policy_decisions
+                        .extend(policy_audit.into_decisions());
+                    let event = ToolExecutionEvent {
+                        request: request.clone(),
+                        latency_ms: tool_started_at
+                            .elapsed()
+                            .as_millis()
+                            .min(u128::from(u64::MAX)) as u64,
+                        status,
+                    };
+                    let observation = tool_observation(&event);
+                    let observation_message = ChatMessage {
+                        role: "user".to_string(),
+                        content: observation.clone(),
+                    };
+                    progress.tool_events.push(event.clone());
+                    if tool_sequence > 1 && messages.last().is_some_and(|m| m.role == "user") {
+                        let last = messages.last_mut().expect("last message exists");
+                        last.content.push_str("\n\n");
+                        last.content.push_str(&observation);
+                        if let Some(last_delta) = progress
+                            .history_delta
+                            .last_mut()
+                            .filter(|m| m.role == "user")
+                        {
+                            last_delta.content = last.content.clone();
+                        }
+                    } else {
+                        messages.push(observation_message.clone());
+                        progress.history_delta.push(observation_message.clone());
+                    }
+                    self.record_transition(
+                        &mut progress,
+                        AgentTransitionKind::ToolCompleted {
+                            iteration,
+                            tool_sequence,
+                            event,
+                            observation: observation_message,
+                        },
+                    )?;
+
+                    if self.cancellation.is_cancelled() {
+                        return self.give_up(GiveUpReason::Cancelled, iteration, progress);
+                    }
+
+                    if consecutive_tool_errors >= self.caps.max_consecutive_tool_errors {
+                        return self.give_up(
+                            GiveUpReason::ConsecutiveToolErrorsReached,
+                            iteration,
+                            progress,
+                        );
+                    }
                 }
             }
 
@@ -971,6 +1077,67 @@ fn cap_kind(reason: &GiveUpReason) -> Option<AgentCapKind> {
         GiveUpReason::ConsecutiveToolErrorsReached => Some(AgentCapKind::ConsecutiveToolErrors),
         GiveUpReason::Cancelled | GiveUpReason::ProviderFailed(_) => None,
     }
+}
+
+struct SimpleJoinAll<F: std::future::Future> {
+    futures: Vec<Option<F>>,
+    results: Vec<Option<F::Output>>,
+}
+
+impl<F: std::future::Future> SimpleJoinAll<F> {
+    fn new(futures: Vec<F>) -> Self {
+        let len = futures.len();
+        Self {
+            futures: futures.into_iter().map(Some).collect(),
+            results: (0..len).map(|_| None).collect(),
+        }
+    }
+}
+
+impl<F: std::future::Future + Unpin> std::future::Future for SimpleJoinAll<F>
+where
+    F::Output: Unpin,
+{
+    type Output = Vec<F::Output>;
+
+    fn poll(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Self::Output> {
+        let this = self.get_mut();
+        let mut all_done = true;
+        let len = this.futures.len();
+        for i in 0..len {
+            if let Some(fut) = this.futures[i].as_mut() {
+                match std::pin::Pin::new(fut).poll(cx) {
+                    std::task::Poll::Ready(output) => {
+                        this.results[i] = Some(output);
+                        this.futures[i] = None;
+                    }
+                    std::task::Poll::Pending => {
+                        all_done = false;
+                    }
+                }
+            }
+        }
+        if all_done {
+            let res = this
+                .results
+                .iter_mut()
+                .map(|opt| opt.take().expect("future completed"))
+                .collect();
+            std::task::Poll::Ready(res)
+        } else {
+            std::task::Poll::Pending
+        }
+    }
+}
+
+fn is_readonly_tool(skill_id: &str) -> bool {
+    matches!(
+        skill_id,
+        "file.read" | "project.scan" | "git.status" | "git.diff" | "web.fetch"
+    )
 }
 
 fn tool_observation(event: &ToolExecutionEvent) -> String {

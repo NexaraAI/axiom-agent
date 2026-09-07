@@ -129,7 +129,7 @@ pub(crate) async fn respond_with_session(session: &mut ChatSession, text: &str) 
                 Err(error) => format!("Variant switch failed: {error:#}"),
             },
             None => format!(
-                "Current variant: {} (model: {})\nAvailable: Default, low, medium, high",
+                "Current variant: {} (model: {})\nAvailable: Default, low, medium, high, xhigh",
                 session.active_variant(),
                 session.active_model().unwrap_or("none")
             ),
@@ -431,7 +431,7 @@ const HELP_TEXT: &str = "Axiom gateway bot.\n\
     Just write normally to chat.\n\
     /status — active provider, model, variant, thinking, and permission\n\
     /thinking [on|off|auto] — toggle thinking/reasoning tokens\n\
-    /variant [Default|low|medium|high] — select model variant\n\
+    /variant [Default|low|medium|high|xhigh] — select model variant\n\
     /permission [velocity|full_machine|strict] — switch permission mode\n\
     /theme [axiom|blood_red|ash|high_contrast] — switch visual color theme\n\
     /update — check for updates\n\

@@ -4,6 +4,41 @@ All notable changes to Axiom are documented here. Versions follow semantic
 versioning. Stable releases document user-visible changes, configuration or
 proof migrations, security fixes, and upgrade actions.
 
+## 1.0.10
+
+This release introduces an interactive Command Palette (`/commands`, `/palette`, `/menu`, `/`) with full keyboard navigation and quick controls, gateway-decided reasoning effort in auto mode, provider-specific reasoning schema adaptations (OpenRouter, Anthropic, OpenAI, Groq), dynamic endpoint model switching across all variants (Default, low, medium, high, xhigh), and a first-class `/models` catalog discovery alias.
+
+Install it:
+
+```bash
+npm install -g axiom-agent@1.0.10
+```
+
+### New Features & Improvements
+
+- **Interactive Command Palette (`/commands`, `/palette`, `/menu`, `/`)**:
+  - Added an interactive TUI card with arrow-key and enter navigation providing instant access to essential controls:
+    - Work Mode toggle (Plan Mode vs Build Mode)
+    - Model Variant selection (`Default`, `low`, `medium`, `high`, `xhigh`)
+    - Reasoning/Thinking mode toggle (`auto`, `on`, `off`)
+    - Permission Mode switch (`velocity`, `full_machine`, `strict`)
+    - Model catalog viewer and switcher
+    - Visual theme changer (`axiom`, `blood_red`, `ash`, `high_contrast`)
+    - Workspace test execution (`/test`)
+    - Task queue, Audit Proof, Skills, Checkpoints, and Session Clear.
+- **Gateway-Decided Reasoning & Auto Mode**:
+  - In auto mode (`thinking: None`), synthetic `reasoning_effort` and `thinking` parameters are omitted, allowing gateways (OpenCode Zen, OpenRouter, Gemini, Ollama) to decide reasoning effort naturally without HTTP 400 or SSE stream parse errors.
+- **Provider-Specific Reasoning Adaptations**:
+  - OpenRouter: unified `"reasoning": { "effort": "...", "max_tokens": ... }` and `"effort": "none"`.
+  - Anthropic: `"thinking": { "type": "enabled", "budget_tokens": ... }` and `"type": "disabled"`.
+  - OpenAI / GitHub Models: `"reasoning_effort": "..."`.
+  - Groq: `"reasoning_format": "parsed"` and `"reasoning_effort": "..."`.
+- **Dynamic Endpoint Variant Switching**:
+  - Configured concrete endpoint models for every supported provider (`openrouter`, `gemini`, `github-models`, `groq`, `opencode`, `gmicloud`, `nvidia`, `openai`, `ollama`, `ollama_cloud`, `lm-studio`).
+  - Switching variants (`/variant <low|medium|high|xhigh|Default>`) now actively switches models according to provider capabilities rather than staying on the active model.
+- **Model Catalog Alias (`/models`)**:
+  - Added `/models` and `/models <filter>` as direct aliases for `/model list [FILTER]` with autocomplete hints.
+
 ## 1.0.9
 
 This release fixes terminal cursor desynchronization and text collision during multiline prompt typing and line wrapping, and adds native Shift+Enter and Alt+Enter multiline keybindings.

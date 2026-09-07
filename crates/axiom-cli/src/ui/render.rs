@@ -78,6 +78,7 @@ impl Renderer {
         mode: &str,
         workspace: &str,
         session_id: &str,
+        work_mode: &str,
     ) -> String {
         let effort_val = if effort.is_empty() { "medium" } else { effort };
         let version = env!("CARGO_PKG_VERSION");
@@ -142,13 +143,18 @@ impl Renderer {
 
         out.push(self.border(&card_empty));
 
-        // Status line
+        // Status line with Work Mode badge
         let status_role = self.smoke("Agent ·");
         let status_model = self.bone(model);
         let status_variant = self.paint(self.palette.warning, &format!("[variant: {effort_val}]"));
+        let work_mode_badge = match work_mode.trim().to_ascii_lowercase().as_str() {
+            "plan" => self.paint(Color::Fixed(208), "[PLAN MODE]"),
+            _ => self.paint(Color::Fixed(75), "[BUILD MODE]"),
+        };
         let status_provider = self.smoke(&format!("· {provider}"));
-        let status_content =
-            format!("{status_role} {status_model} {status_variant} {status_provider}");
+        let status_content = format!(
+            "{status_role} {status_model} {status_variant} {work_mode_badge} {status_provider}"
+        );
         out.push(pad_card_line(&self.border("│"), &status_content, 58));
 
         out.push(self.border(&card_empty));
@@ -160,7 +166,7 @@ impl Renderer {
             "strict" => self.ember("strict"),
             _ => self.green("velocity"),
         };
-        let mode_label = self.smoke("mode:");
+        let mode_label = self.smoke("perm:");
         let session_line_content = if !session_id.is_empty() {
             let session_label = self.smoke("session:");
             let session_val = self.smoke(session_id);
@@ -171,15 +177,16 @@ impl Renderer {
         out.push(pad_card_line(&self.border("│"), &session_line_content, 58));
         out.push(self.border(&card_empty));
 
-        // Keybindings hints
-        let kb_tab = self.smoke("tab");
-        let kb_tab_label = self.ash("skills");
-        let kb_cancel = self.smoke("ctrl+c");
-        let kb_cancel_label = self.ash("cancel / esc");
-        let kb_slash = self.smoke("/");
-        let kb_slash_label = self.ash("commands");
+        // Navigation buttons & shortcuts row
+        let btn_palette = self.paint(Color::Fixed(215), "Ctrl+P");
+        let btn_palette_lbl = self.smoke("palette");
+        let btn_plan = self.paint(Color::Fixed(208), "/plan");
+        let btn_build = self.paint(Color::Fixed(75), "/build");
+        let btn_var = self.smoke("/variant");
+        let btn_slash = self.smoke("/");
+        let btn_slash_lbl = self.ash("commands");
         let kb_content = format!(
-            "{kb_tab} {kb_tab_label}   {kb_cancel} {kb_cancel_label}   {kb_slash} {kb_slash_label}"
+            "{btn_palette} {btn_palette_lbl}  {btn_plan}  {btn_build}  {btn_var}  {btn_slash} {btn_slash_lbl}"
         );
         out.push(pad_card_line(&self.border("│"), &kb_content, 58));
 
@@ -214,8 +221,18 @@ impl Renderer {
         let commands = [
             (
                 "/variant",
-                "Select variant (Default, low, medium, high)",
+                "Select variant (Default, low, medium, high, xhigh)",
                 true,
+            ),
+            (
+                "/plan",
+                "Switch to Plan Mode (plan before modifying files)",
+                false,
+            ),
+            (
+                "/build",
+                "Switch to Build Mode (active implementation and execution)",
+                false,
             ),
             ("/thinking", "Toggle thinking mode on, off, or auto", false),
             ("/model", "Configure or inspect the active model", false),
@@ -234,6 +251,16 @@ impl Renderer {
             ("/checkpoints", "List saved session checkpoints", false),
             ("/undo", "Restore latest workspace checkpoint", false),
             ("/restore", "Restore workspace to a checkpoint", false),
+            (
+                "/history",
+                "List past sessions or switch (/history <id>)",
+                false,
+            ),
+            (
+                "/resume",
+                "Resume conversation from a previous session",
+                false,
+            ),
             ("/clear", "Clear conversation history", false),
             ("/help", "Show detailed help and command reference", false),
             ("/exit", "Leave the Axiom session", false),
@@ -772,9 +799,11 @@ mod tests {
                 mode,
                 "/home/user/project",
                 "session-12345678-abcdef01",
+                "build",
             );
-            assert!(banner.contains(&format!("mode: {mode}")));
+            assert!(banner.contains(&format!("perm: {mode}")));
             assert!(banner.contains("session: session-12345678-abcdef01"));
+            assert!(banner.contains("[BUILD MODE]"));
         }
     }
 

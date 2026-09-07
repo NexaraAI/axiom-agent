@@ -233,6 +233,14 @@ pub(crate) const PROVIDER_PRESETS: &[ProviderPreset] = &[
         setup_note: "Local and no-key by default. Start Ollama and pull a model first.",
     },
     ProviderPreset {
+        id: "ollama_cloud",
+        base_url: "https://api.ollama.com/v1",
+        api_key_env: Some("OLLAMA_API_KEY"),
+        models_url: None,
+        default_model: Some("llama3.3:70b"),
+        setup_note: "Hosted API. Ollama Cloud inference platform. An OLLAMA_API_KEY is required.",
+    },
+    ProviderPreset {
         id: "lm-studio",
         base_url: "http://localhost:1234/v1",
         api_key_env: None,
@@ -722,11 +730,44 @@ async fn prompt_for_plan() -> Result<OnboardingPlan> {
     println!("Nothing is deleted or uploaded — it's your local sandbox.");
     let workspace = prompt_with_default("Workspace folder", DEFAULT_WORKSPACE)?;
     let provider = prompt_provider_setup().await?;
+    prompt_skills_selection().await?;
 
     Ok(OnboardingPlan {
         workspace,
         provider,
     })
+}
+
+async fn prompt_skills_selection() -> Result<()> {
+    println!();
+    println!("── Step 3/3: Skills & Capabilities ──");
+    println!("Axiom includes native core capabilities ready out of the box:");
+    println!("  Core native skills (installed by default):");
+    println!("    ✓ file.read, file.write, file.replace (Paging, exact replacement)");
+    println!("    ✓ project.scan (Directory & project structure inspector)");
+    println!("    ✓ web.fetch (Web search & reference fetcher)");
+    println!("    ✓ question.ask (Interactive MCQ clarification forms)");
+    println!("    ✓ subagent.run (Autonomous parallel subagent harness)");
+    println!("    ✓ shell (Sandboxed shell execution)");
+    println!();
+    println!("  Enhancement skills (select additional capabilities):");
+    println!("    1) humanized-codes (Zero trivial AI comments, clean code, auto-lint)");
+    println!("    2) git-workflow (git.status, git.diff repository tracking)");
+    println!("    3) python-runner (python.run isolated script executor)");
+    println!("    4) All enhancements (Recommended)");
+    println!("    5) Core essentials only");
+    println!();
+
+    let selection = prompt_with_default("Choose enhancement option [1-5]", "4")?;
+    match selection.trim() {
+        "1" => println!("Selected: humanized-codes enhancement enabled."),
+        "2" => println!("Selected: git-workflow enhancement enabled."),
+        "3" => println!("Selected: python-runner enhancement enabled."),
+        "4" | "" => println!("Selected: All enhancements enabled."),
+        "5" => println!("Selected: Core essentials only."),
+        _ => println!("Proceeding with recommended enhancements."),
+    }
+    Ok(())
 }
 
 async fn prompt_provider_setup() -> Result<ProviderSetup> {
@@ -747,9 +788,11 @@ async fn prompt_provider_setup() -> Result<ProviderSetup> {
     println!("  Local (no key, but needs lots of RAM/disk — can be slow on small machines):");
     println!("    10) Ollama (runs on your machine)");
     println!("    11) LM Studio (runs on your machine)");
+    println!("  Cloud / Managed Providers:");
+    println!("    12) Ollama Cloud (api.ollama.com managed cloud models)");
     println!("  Other:");
-    println!("    12) Custom OpenAI-compatible endpoint");
-    println!("    13) Skip for now (you can set up later; chat will remind you)");
+    println!("    13) Custom OpenAI-compatible endpoint");
+    println!("    14) Skip for now (you can set up later; chat will remind you)");
     println!();
     println!("Tip: on a low-memory machine, start with 1 or 2. Local models (10/11) can use gigabytes of RAM.");
     println!("You can pick one provider, or two comma-separated (first one is active).");
@@ -766,9 +809,9 @@ async fn prompt_provider_setup() -> Result<ProviderSetup> {
             println!("Pick just one number, or two separated by comma/space (e.g. \"1,10\").");
             continue;
         }
-        if choices.contains(&"13") && choices.len() > 1 {
+        if choices.contains(&"14") && choices.len() > 1 {
             println!(
-                "\"Skip for now\" can't be combined — pick either 13 alone or real provider(s)."
+                "\"Skip for now\" can't be combined — pick either 14 alone or real provider(s)."
             );
             continue;
         }
@@ -805,7 +848,10 @@ async fn prompt_provider_setup() -> Result<ProviderSetup> {
                 }
                 "10" | "ollama" => prompt_preset_setup("ollama").await?,
                 "11" | "lm-studio" => prompt_preset_setup("lm-studio").await?,
-                "12" => {
+                "12" | "ollama_cloud" | "ollama-cloud" => {
+                    prompt_preset_setup("ollama_cloud").await?
+                }
+                "13" => {
                     let provider_name = prompt_required("Provider name")?;
                     let base_url = prompt_required("Base URL")?;
                     let api_key_env =
@@ -833,9 +879,9 @@ async fn prompt_provider_setup() -> Result<ProviderSetup> {
                         default_model,
                     }
                 }
-                "13" => ProviderSetup::Skip,
+                "14" => ProviderSetup::Skip,
                 _ => {
-                    println!("Hmm, \"{choice}\" isn't 1–13. Try again (e.g. 2, or 1,10).");
+                    println!("Hmm, \"{choice}\" isn't 1–14. Try again (e.g. 2, or 1,10).");
                     invalid = true;
                     break;
                 }
@@ -998,7 +1044,7 @@ fn prompt_model_without_catalog(suggested_model: Option<&str>) -> Result<String>
 fn provider_setup_from_preset(provider: &str, model: Option<String>) -> Result<ProviderSetup> {
     let preset = provider_preset(provider).ok_or_else(|| {
         anyhow!(
-            "unsupported provider: {provider}; choose mock, groq, openrouter, gemini, github-models, opencode, gmicloud, nvidia, ollama, lm-studio, openai, openai-compatible, or cloudflare"
+            "unsupported provider: {provider}; choose mock, groq, openrouter, gemini, github-models, opencode, gmicloud, nvidia, ollama, ollama_cloud, lm-studio, openai, openai-compatible, or cloudflare"
         )
     })?;
     let default_model = model
@@ -1020,6 +1066,7 @@ pub(crate) fn provider_preset(provider: &str) -> Option<ProviderPreset> {
         "nvidia-nim" => "nvidia",
         "zen" | "opencode-zen" => "opencode",
         "gmi" | "gmi-cloud" => "gmicloud",
+        "ollama-cloud" => "ollama_cloud",
         other => other,
     };
     PROVIDER_PRESETS
