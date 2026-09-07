@@ -723,13 +723,10 @@ mod tests {
 
     #[test]
     fn opencode_injects_session_header() {
-        let provider = OpenAiCompatibleProvider::new(
-            "opencode",
-            "https://opencode.ai/zen/v1",
-            None,
-        )
-        .with_api_key("sk-test")
-        .with_session_id("session-123");
+        let provider =
+            OpenAiCompatibleProvider::new("opencode", "https://opencode.ai/zen/v1", None)
+                .with_api_key("sk-test")
+                .with_session_id("session-123");
 
         let request = provider
             .build_chat_request(&sample_request())
@@ -737,9 +734,6 @@ mod tests {
             .build()
             .expect("should finalize");
 
-        assert_eq!(
-            request.headers()["x-opencode-session"],
-            "session-123"
-        );
+        assert_eq!(request.headers()["x-opencode-session"], "session-123");
     }
 }

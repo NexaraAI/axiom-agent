@@ -676,10 +676,7 @@ fn default_variant_models() -> BTreeMap<String, BTreeMap<String, String>> {
                     "medium".to_string(),
                     "nemotron-3.5-lightning-free".to_string(),
                 ),
-                (
-                    "high".to_string(),
-                    "nemotron-3-ultra-free".to_string(),
-                ),
+                ("high".to_string(), "nemotron-3-ultra-free".to_string()),
             ]),
         ),
         (
@@ -695,10 +692,7 @@ fn default_variant_models() -> BTreeMap<String, BTreeMap<String, String>> {
                     "medium".to_string(),
                     "nemotron-3.5-lightning-free".to_string(),
                 ),
-                (
-                    "high".to_string(),
-                    "nemotron-3-ultra-free".to_string(),
-                ),
+                ("high".to_string(), "nemotron-3-ultra-free".to_string()),
             ]),
         ),
         (

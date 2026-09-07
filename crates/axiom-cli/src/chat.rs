@@ -99,6 +99,33 @@ pub(crate) fn models_for_display<'a>(
     (visible, total)
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct VariantSwitchResult {
+    pub canonical_variant: String,
+    pub active_model: Option<String>,
+    pub mapped: bool,
+    pub provider: Option<String>,
+}
+
+impl VariantSwitchResult {
+    pub(crate) fn display_message(&self) -> String {
+        let model = self.active_model.as_deref().unwrap_or("none");
+        if self.mapped {
+            format!(
+                "Switched variant to '{}' (model: {model}).",
+                self.canonical_variant
+            )
+        } else if let Some(ref prov) = self.provider {
+            format!(
+                "Switched variant to '{}' (model: {model}). Note: Provider '{prov}' has no specific model mapped for variant '{}'; using active model.",
+                self.canonical_variant, self.canonical_variant
+            )
+        } else {
+            format!("Switched variant to '{}'.", self.canonical_variant)
+        }
+    }
+}
+
 impl ChatSession {
     pub(crate) fn load(config_path: impl AsRef<Path>) -> Result<Self> {
         let config_path = config_path.as_ref().to_path_buf();
@@ -352,33 +379,6 @@ impl ChatSession {
 
         Ok(cards)
     }
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct VariantSwitchResult {
-    pub canonical_variant: String,
-    pub active_model: Option<String>,
-    pub mapped: bool,
-    pub provider: Option<String>,
-}
-
-impl VariantSwitchResult {
-    pub(crate) fn display_message(&self) -> String {
-        let model = self.active_model.as_deref().unwrap_or("none");
-        if self.mapped {
-            format!(
-                "Switched variant to '{}' (model: {model}).",
-                self.canonical_variant
-            )
-        } else if let Some(ref prov) = self.provider {
-            format!(
-                "Switched variant to '{}' (model: {model}). Note: Provider '{prov}' has no specific model mapped for variant '{}'; using active model.",
-                self.canonical_variant, self.canonical_variant
-            )
-        } else {
-            format!("Switched variant to '{}'.", self.canonical_variant)
-        }
-    }
-}
 
     pub(crate) fn active_variant(&self) -> &str {
         self.config.llm.active_variant()
