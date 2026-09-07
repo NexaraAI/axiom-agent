@@ -48,7 +48,8 @@ use rustyline::{
     hint::{Hint, Hinter},
     history::FileHistory,
     validate::{ValidationContext, ValidationResult, Validator},
-    CompletionType, Config as ReadlineConfig, Context, Editor, Helper,
+    Cmd, CompletionType, Config as ReadlineConfig, Context, Editor, Helper, KeyCode, KeyEvent,
+    Modifiers,
 };
 use serde_json::Value;
 
@@ -1611,7 +1612,9 @@ enum PromptRead {
 }
 
 #[derive(Default, Clone)]
-struct AxiomCommandHelper;
+struct AxiomCommandHelper {
+    colored_prompt: Option<String>,
+}
 
 struct AxiomHint(String);
 
@@ -1845,6 +1848,18 @@ impl Hinter for AxiomCommandHelper {
 }
 
 impl Highlighter for AxiomCommandHelper {
+    fn highlight_prompt<'b, 's: 'b, 'p: 'b>(
+        &'s self,
+        prompt: &'p str,
+        _default: bool,
+    ) -> std::borrow::Cow<'b, str> {
+        if let Some(colored) = &self.colored_prompt {
+            std::borrow::Cow::Borrowed(colored.as_str())
+        } else {
+            std::borrow::Cow::Borrowed(prompt)
+        }
+    }
+
     fn highlight_hint<'h>(&self, hint: &'h str) -> std::borrow::Cow<'h, str> {
         std::borrow::Cow::Owned(format!("\x1b[90m{hint}\x1b[0m"))
     }
@@ -1970,7 +1985,10 @@ impl TerminalInput {
                 .completion_type(CompletionType::List)
                 .build();
             let mut editor = Editor::<AxiomCommandHelper, FileHistory>::with_config(config)?;
-            editor.set_helper(Some(AxiomCommandHelper));
+            editor.set_helper(Some(AxiomCommandHelper::default()));
+            let _ = editor.bind_sequence(KeyEvent(KeyCode::Enter, Modifiers::ALT), Cmd::Newline);
+            let _ = editor.bind_sequence(KeyEvent(KeyCode::Enter, Modifiers::SHIFT), Cmd::Newline);
+            let _ = editor.bind_sequence(KeyEvent(KeyCode::Char('j'), Modifiers::CTRL), Cmd::Newline);
             if history_path.exists() && sanitize_terminal_history_file(&history_path) {
                 let _ = editor.load_history(&history_path);
             }
@@ -1984,8 +2002,11 @@ impl TerminalInput {
         })
     }
 
-    fn read(&mut self, prompt: &str) -> Result<PromptRead> {
+    fn read(&mut self, prompt: &str, colored_prompt: Option<&str>) -> Result<PromptRead> {
         if let Some(editor) = self.editor.as_mut() {
+            if let Some(helper) = editor.helper_mut() {
+                helper.colored_prompt = colored_prompt.map(str::to_string);
+            }
             return Ok(match editor.readline(prompt) {
                 Ok(line) => PromptRead::Line(line),
                 Err(ReadlineError::Interrupted) => PromptRead::Interrupted,
@@ -1994,7 +2015,8 @@ impl TerminalInput {
             });
         }
 
-        print!("{prompt}");
+        let display = colored_prompt.unwrap_or(prompt);
+        print!("{display}");
         io::stdout().flush()?;
         let mut line = String::new();
         if io::stdin().read_line(&mut line)? == 0 {
@@ -2093,7 +2115,7 @@ async fn run_terminal_session(mut session: ChatSession) -> Result<()> {
             );
             (queued, true)
         } else {
-            let read_line = match input_reader.read(&ui.prompt())? {
+            let read_line = match input_reader.read(&ui.prompt_plain(), Some(&ui.prompt()))? {
                 PromptRead::Line(line) => {
                     let cleaned = clean_pasted_input(&line);
                     let line_count = cleaned.lines().count();
@@ -5463,6 +5485,24 @@ mod tests {
         assert!(reloaded.providers.contains_key("ollama"));
 
         let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn helper_highlight_prompt_preserves_plain_prompt_when_not_colored() {
+        let helper = AxiomCommandHelper::default();
+        let prompt = "│ axiom ❯ ";
+        let highlighted = helper.highlight_prompt(prompt, true);
+        assert_eq!(highlighted, prompt);
+    }
+
+    #[test]
+    fn helper_highlight_prompt_returns_colored_prompt_when_configured() {
+        let mut helper = AxiomCommandHelper::default();
+        let plain = "│ axiom ❯ ";
+        let colored = "\x1b[38;5;75m│\x1b[0m \x1b[38;5;75maxiom ❯\x1b[0m ";
+        helper.colored_prompt = Some(colored.to_string());
+        let highlighted = helper.highlight_prompt(plain, true);
+        assert_eq!(highlighted, colored);
     }
 
     static UNIQUE_DIR_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);

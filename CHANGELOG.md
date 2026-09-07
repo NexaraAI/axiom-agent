@@ -4,6 +4,24 @@ All notable changes to Axiom are documented here. Versions follow semantic
 versioning. Stable releases document user-visible changes, configuration or
 proof migrations, security fixes, and upgrade actions.
 
+## 1.0.9
+
+This release fixes terminal cursor desynchronization and text collision during multiline prompt typing and line wrapping, and adds native Shift+Enter and Alt+Enter multiline keybindings.
+
+Install it:
+
+```bash
+npm install -g axiom-agent@1.0.9
+```
+
+### Bug Fixes & Improvements
+
+- **Terminal Line Wrapping & Multiline Text Collision Fix**:
+  - Separated raw ANSI escape sequences from Rustyline's base prompt width calculation using `Highlighter::highlight_prompt`.
+  - Fixed issue where the styled prompt (`│ axiom ❯ `) caused Rustyline to miscalculate visual prompt width by counting non-printing ANSI escape codes as visible columns, causing text to wrap prematurely and overwrite earlier lines when typing past 1 line.
+  - Added native `Shift+Enter`, `Alt+Enter`, and `Ctrl+J` keybindings to insert newlines directly in the chat prompt for seamless multiline input.
+  - Added unit test coverage for plain prompt width invariant and highlighter styling.
+
 ## 1.0.8
 
 This release adds automated in-session package updates via `/update`, robust model variant switching with verified OpenCode Zen free models (`nemotron-3.5-lightning-free`, `nemotron-3-ultra-free`, `mimo-v2.5-free`), mandatory `x-opencode-session` session header support for OpenCode Zen, and Windows executable file-lock tolerance during updates.

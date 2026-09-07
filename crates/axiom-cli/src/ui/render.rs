@@ -332,6 +332,10 @@ impl Renderer {
         }
     }
 
+    pub(crate) fn prompt_plain(&self) -> String {
+        "│ axiom ❯ ".to_string()
+    }
+
     pub(crate) fn orchestrator_notice(&self, message: &str) -> String {
         format!("{} {}", self.primary("⟡ Orchestrator:"), self.bone(message))
     }
@@ -688,6 +692,19 @@ mod tests {
             Renderer::from_config_with_terminal(&config, false).prompt(),
             "│ axiom ❯ "
         );
+    }
+
+    #[test]
+    fn prompt_plain_is_always_uncolored_and_fixed_length() {
+        let mut config = AxiomConfig::default();
+        config.ui.color = true;
+        let renderer_colored = Renderer::from_config_with_terminal(&config, true);
+        assert_eq!(renderer_colored.prompt_plain(), "│ axiom ❯ ");
+        assert_eq!(renderer_colored.prompt_plain().chars().count(), 10);
+
+        config.ui.color = false;
+        let renderer_plain = Renderer::from_config_with_terminal(&config, false);
+        assert_eq!(renderer_plain.prompt_plain(), "│ axiom ❯ ");
     }
 
     #[test]
