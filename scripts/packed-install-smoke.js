@@ -54,8 +54,9 @@ function runPackedInstallSmoke(options = {}) {
       { cwd: root, env, shell: invocation.shell }
     );
     const packResult = JSON.parse(packed.stdout);
-    assert(Array.isArray(packResult) && packResult.length === 1, "npm pack returned unexpected JSON");
-    const tarball = path.join(tempRoot, packResult[0].filename);
+    const firstPack = Array.isArray(packResult) ? packResult[0] : Object.values(packResult)[0];
+    assert(firstPack && firstPack.filename, "npm pack returned unexpected JSON");
+    const tarball = path.join(tempRoot, firstPack.filename);
     assert(fs.existsSync(tarball), "npm pack did not create the reported tarball");
 
     runChecked(

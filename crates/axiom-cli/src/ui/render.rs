@@ -70,6 +70,7 @@ impl Renderer {
         self.palette.primary
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn dashboard_banner(
         &self,
         provider: &str,

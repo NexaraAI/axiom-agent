@@ -4108,7 +4108,7 @@ async fn handle_chat_command(session: &mut ChatSession, input: &str) -> Result<C
                                         } else {
                                             println!(
                                                 "{}",
-                                                renderer.error(&format!(
+                                                renderer.error(format!(
                                                     "Tests FAILED ({runner}):\n{output}"
                                                 ))
                                             );

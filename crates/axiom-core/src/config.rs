@@ -10,17 +10,12 @@ use crate::{atomic_write, AxiomError, Result};
 
 pub const CURRENT_CONFIG_VERSION: u32 = 3;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum AgentWorkMode {
     Plan,
+    #[default]
     Build,
-}
-
-impl Default for AgentWorkMode {
-    fn default() -> Self {
-        Self::Build
-    }
 }
 
 impl AgentWorkMode {

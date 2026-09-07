@@ -3217,9 +3217,9 @@ pub fn normalize_tool_arguments(request: &mut ToolRequest) {
                         entries.sort_by(|a, b| a.0.cmp(&b.0));
                         let items = entries
                             .into_iter()
-                            .filter_map(|(_, v)| match v {
-                                Value::String(s) => Some(Value::String(s)),
-                                other => Some(Value::String(other.to_string())),
+                            .map(|(_, v)| match v {
+                                Value::String(s) => Value::String(s),
+                                other => Value::String(other.to_string()),
                             })
                             .collect::<Vec<_>>();
                         map.insert("options".to_string(), Value::Array(items));
@@ -3326,15 +3326,13 @@ pub fn normalize_tool_arguments(request: &mut ToolRequest) {
                 }
             }
         }
-        "project.scan" => {
-            if !map.contains_key("path") {
-                if let Some(p) = map
-                    .remove("directory")
-                    .or_else(|| map.remove("dir"))
-                    .or_else(|| map.remove("folder"))
-                {
-                    map.insert("path".to_string(), p);
-                }
+        "project.scan" if !map.contains_key("path") => {
+            if let Some(p) = map
+                .remove("directory")
+                .or_else(|| map.remove("dir"))
+                .or_else(|| map.remove("folder"))
+            {
+                map.insert("path".to_string(), p);
             }
         }
         _ => {}
