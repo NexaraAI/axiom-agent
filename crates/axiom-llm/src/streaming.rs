@@ -466,7 +466,7 @@ impl ControlBlockProjector {
                 }
                 ProjectorMode::Normal => {
                     if self.trim_leading_newlines {
-                        let trim_len = self
+                        let trim_len: usize = self
                             .pending
                             .chars()
                             .take_while(|c| *c == '\r' || *c == '\n')
@@ -551,7 +551,7 @@ impl ControlBlockProjector {
         match self.mode {
             ProjectorMode::Normal => {
                 if self.trim_leading_newlines {
-                    let trim_len = self
+                    let trim_len: usize = self
                         .pending
                         .chars()
                         .take_while(|c| *c == '\r' || *c == '\n')
