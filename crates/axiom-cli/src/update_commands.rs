@@ -112,7 +112,7 @@ async fn check() -> Result<CheckContext> {
     Ok(context)
 }
 
-async fn install() -> Result<()> {
+pub(crate) async fn install() -> Result<()> {
     let (config_path, mut config) = load_config()?;
     let binary_path = std::env::current_exe()?;
     let mode = detect_installation_mode(&binary_path);
@@ -128,6 +128,22 @@ async fn install() -> Result<()> {
             false,
         );
         return Ok(());
+    }
+
+    if mode == InstallationMode::NpmGlobal {
+        println!("Axiom was installed via npm. Running npm update...");
+        let npm_cmd = if cfg!(windows) { "npm.cmd" } else { "npm" };
+        let status = std::process::Command::new(npm_cmd)
+            .args(["install", "-g", "axiom-agent@latest"])
+            .status();
+        match status {
+            Ok(s) if s.success() => {
+                println!("Axiom updated successfully via npm. Please restart your session.");
+                return Ok(());
+            }
+            Ok(s) => bail!("npm update failed with exit code: {s}"),
+            Err(e) => bail!("failed to run npm: {e}"),
+        }
     }
 
     let context = check_context(&config).await?;

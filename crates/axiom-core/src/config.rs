@@ -666,21 +666,39 @@ fn default_variant_models() -> BTreeMap<String, BTreeMap<String, String>> {
         (
             "opencode".to_string(),
             BTreeMap::from([
-                ("default".to_string(), "claude-3-7-sonnet".to_string()),
-                ("low".to_string(), "deepseek-v4-flash-free".to_string()),
-                ("light".to_string(), "deepseek-v4-flash-free".to_string()),
-                ("medium".to_string(), "big-pickle".to_string()),
-                ("high".to_string(), "claude-3-7-sonnet".to_string()),
+                (
+                    "default".to_string(),
+                    "nemotron-3.5-lightning-free".to_string(),
+                ),
+                ("low".to_string(), "mimo-v2.5-free".to_string()),
+                ("light".to_string(), "mimo-v2.5-free".to_string()),
+                (
+                    "medium".to_string(),
+                    "nemotron-3.5-lightning-free".to_string(),
+                ),
+                (
+                    "high".to_string(),
+                    "nemotron-3-ultra-free".to_string(),
+                ),
             ]),
         ),
         (
             "zen".to_string(),
             BTreeMap::from([
-                ("default".to_string(), "claude-3-7-sonnet".to_string()),
-                ("low".to_string(), "deepseek-v4-flash-free".to_string()),
-                ("light".to_string(), "deepseek-v4-flash-free".to_string()),
-                ("medium".to_string(), "big-pickle".to_string()),
-                ("high".to_string(), "claude-3-7-sonnet".to_string()),
+                (
+                    "default".to_string(),
+                    "nemotron-3.5-lightning-free".to_string(),
+                ),
+                ("low".to_string(), "mimo-v2.5-free".to_string()),
+                ("light".to_string(), "mimo-v2.5-free".to_string()),
+                (
+                    "medium".to_string(),
+                    "nemotron-3.5-lightning-free".to_string(),
+                ),
+                (
+                    "high".to_string(),
+                    "nemotron-3-ultra-free".to_string(),
+                ),
             ]),
         ),
         (
@@ -1480,11 +1498,11 @@ format = "json"
 
         assert_eq!(
             config.llm.model_for_variant("opencode", "default"),
-            Some("claude-3-7-sonnet")
+            Some("nemotron-3.5-lightning-free")
         );
         assert_eq!(
             config.llm.model_for_variant("zen", "medium"),
-            Some("big-pickle")
+            Some("nemotron-3.5-lightning-free")
         );
         assert_eq!(
             config.llm.model_for_variant("gmicloud", "default"),

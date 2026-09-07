@@ -125,12 +125,13 @@ pub(crate) async fn respond_with_session(session: &mut ChatSession, text: &str) 
         },
         BotCommand::Variant { name } => match name {
             Some(variant) => match session.set_variant(&variant) {
-                Ok(v) => format!("Variant switched to {v}."),
+                Ok(res) => res.display_message(),
                 Err(error) => format!("Variant switch failed: {error:#}"),
             },
             None => format!(
-                "Current variant: {}\nAvailable: Default, low, medium, high",
-                session.active_variant()
+                "Current variant: {} (model: {})\nAvailable: Default, low, medium, high",
+                session.active_variant(),
+                session.active_model().unwrap_or("none")
             ),
         },
         BotCommand::Permission { mode } => match mode {

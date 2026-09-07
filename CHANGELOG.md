@@ -4,6 +4,30 @@ All notable changes to Axiom are documented here. Versions follow semantic
 versioning. Stable releases document user-visible changes, configuration or
 proof migrations, security fixes, and upgrade actions.
 
+## 1.0.8
+
+This release adds automated in-session package updates via `/update`, robust model variant switching with verified OpenCode Zen free models (`nemotron-3.5-lightning-free`, `nemotron-3-ultra-free`, `mimo-v2.5-free`), mandatory `x-opencode-session` session header support for OpenCode Zen, and Windows executable file-lock tolerance during updates.
+
+Install it:
+
+```bash
+npm install -g axiom-agent@1.0.8
+```
+
+### New Features & Improvements
+
+- **Automated `/update` Command**:
+  - Typing `/update` inside chat now automatically detects the latest version from GitHub releases and performs the upgrade in place (`npm install -g axiom-agent@latest` for npm installations or native staged updater for standalone binaries).
+  - Also added npm global installation handling to `axiom update install` CLI command.
+- **Robust Model Variant Switching (`/variant`)**:
+  - `/variant` menu and command now show the exact mapped model ID for each variant (e.g. `Switched variant to 'high' (model: nemotron-3-ultra-free)`).
+  - Clarified variant behavior when a provider does not define a specific variant model (preserves current model with clear informative notification).
+  - Updated default variant model mappings for `opencode` and `zen` to verified, available free models: `nemotron-3.5-lightning-free` (default & medium), `mimo-v2.5-free` (low & light), and `nemotron-3-ultra-free` (high).
+- **OpenCode Zen Session Routing**:
+  - Injected mandatory `x-opencode-session` header across all OpenCode Zen chat completion and model discovery requests.
+- **Windows File Lock Tolerance During Updates**:
+  - Made binary replacement in npm installer tolerate locked process files on Windows so updates complete cleanly while Axiom is open.
+
 ## 1.0.7
 
 This release introduces OpenCode Zen and GMI Cloud provider presets, an interactive thinking/reasoning mode toggle with automated 400 parameter fallback, instant turn cancellation with cross-platform child process termination guards, live syntax-highlighted code creation animation, an autonomous auto-testing engine, and runtime provider management with live model discovery.

@@ -37,7 +37,10 @@ use axiom_proof::{
     new_approval, new_tool_call, AgentRuntimeProof, CheckpointProof, FileReadProof, FileWriteProof,
     LensSelectionRecord, PolicyDecisionProof, ProofMode, ProofRecorder, SkillCardProof,
 };
-use axiom_upd::{parse_version, UpdateDirs, UpdatePolicy, UpdateState};
+use axiom_upd::{
+    detect_installation_mode, parse_version, InstallationMode, UpdateDirs, UpdatePolicy,
+    UpdateState,
+};
 use rustyline::{
     completion::{Completer, Pair},
     error::ReadlineError,
@@ -350,11 +353,38 @@ impl ChatSession {
         Ok(cards)
     }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct VariantSwitchResult {
+    pub canonical_variant: String,
+    pub active_model: Option<String>,
+    pub mapped: bool,
+    pub provider: Option<String>,
+}
+
+impl VariantSwitchResult {
+    pub(crate) fn display_message(&self) -> String {
+        let model = self.active_model.as_deref().unwrap_or("none");
+        if self.mapped {
+            format!(
+                "Switched variant to '{}' (model: {model}).",
+                self.canonical_variant
+            )
+        } else if let Some(ref prov) = self.provider {
+            format!(
+                "Switched variant to '{}' (model: {model}). Note: Provider '{prov}' has no specific model mapped for variant '{}'; using active model.",
+                self.canonical_variant, self.canonical_variant
+            )
+        } else {
+            format!("Switched variant to '{}'.", self.canonical_variant)
+        }
+    }
+}
+
     pub(crate) fn active_variant(&self) -> &str {
         self.config.llm.active_variant()
     }
 
-    pub(crate) fn set_variant(&mut self, variant: &str) -> Result<String> {
+    pub(crate) fn set_variant(&mut self, variant: &str) -> Result<VariantSwitchResult> {
         let trimmed = variant.trim();
         let normalized = trimmed.to_ascii_lowercase();
         let canonical = match normalized.as_str() {
@@ -365,13 +395,21 @@ impl ChatSession {
             _ => trimmed,
         };
         self.config.llm.variant = canonical.to_string();
-        if let Some(ref provider) = self.config.llm.active_provider {
-            if let Some(model) = self.config.llm.model_for_variant(provider, canonical) {
+        let mut mapped = false;
+        let provider = self.config.llm.active_provider.clone();
+        if let Some(ref prov) = provider {
+            if let Some(model) = self.config.llm.model_for_variant(prov, canonical) {
                 self.config.llm.active_model = Some(model.to_string());
+                mapped = true;
             }
         }
         self.save_config()?;
-        Ok(canonical.to_string())
+        Ok(VariantSwitchResult {
+            canonical_variant: canonical.to_string(),
+            active_model: self.config.llm.active_model.clone(),
+            mapped,
+            provider,
+        })
     }
 
     pub(crate) fn thinking_display(&self) -> &'static str {
@@ -3575,12 +3613,18 @@ async fn handle_chat_command(session: &mut ChatSession, input: &str) -> Result<C
         "/variant" | "/variants" => {
             if io::stdin().is_terminal() && io::stdout().is_terminal() {
                 let renderer = crate::ui::Renderer::from_config(&session.config);
-                let options = vec![
-                    "Default".to_string(),
-                    "low".to_string(),
-                    "medium".to_string(),
-                    "high".to_string(),
-                ];
+                let variants = ["Default", "low", "medium", "high"];
+                let options: Vec<String> = variants
+                    .iter()
+                    .map(|&var| {
+                        if let Some(ref prov) = session.config.llm.active_provider {
+                            if let Some(model) = session.config.llm.model_for_variant(prov, var) {
+                                return format!("{var} ({model})");
+                            }
+                        }
+                        var.to_string()
+                    })
+                    .collect();
                 let initial = match session.active_variant() {
                     "low" => 1,
                     "medium" => 2,
@@ -3594,18 +3638,21 @@ async fn handle_chat_command(session: &mut ChatSession, input: &str) -> Result<C
                     false,
                     &renderer,
                 );
-                if let crate::ui::SelectionResult::Selected { text, .. } = result {
-                    match session.set_variant(&text) {
-                        Ok(new_var) => {
+                if let crate::ui::SelectionResult::Selected { index, .. } = result {
+                    let chosen = variants.get(index).copied().unwrap_or("Default");
+                    match session.set_variant(chosen) {
+                        Ok(res) => {
                             session.persist_session()?;
-                            println!("Switched variant to '{new_var}'.");
+                            println!("{}", res.display_message());
                         }
                         Err(error) => println!("{error}"),
                     }
                 }
             } else {
                 let active_var = session.active_variant();
-                println!("Active Variant: {active_var}");
+                let active_model = session.config.llm.active_model.as_deref().unwrap_or("none");
+                let active_prov = session.config.llm.active_provider.as_deref().unwrap_or("none");
+                println!("Active Variant: {active_var} (model: {active_model}, provider: {active_prov})");
                 println!("Available variants: Default, low, medium, high");
                 println!("Use `/variant <Default|low|medium|high>` to switch.");
             }
@@ -3620,9 +3667,9 @@ async fn handle_chat_command(session: &mut ChatSession, input: &str) -> Result<C
                 ""
             };
             match session.set_variant(target) {
-                Ok(new_var) => {
+                Ok(res) => {
                     session.persist_session()?;
-                    println!("Switched variant to '{new_var}'.");
+                    println!("{}", res.display_message());
                 }
                 Err(error) => println!("{error}"),
             }
@@ -3717,9 +3764,94 @@ async fn handle_chat_command(session: &mut ChatSession, input: &str) -> Result<C
                     println!("{line}");
                 }
                 println!();
-                println!("  To upgrade to v{latest}:");
-                println!("    npm install -g axiom-agent@latest");
-                println!();
+                println!(
+                    "{}",
+                    ui.orchestrator_notice(&format!("Downloading and installing Axiom v{latest}..."))
+                );
+
+                let binary_path = std::env::current_exe().ok();
+                let mode = binary_path
+                    .as_ref()
+                    .map(detect_installation_mode)
+                    .unwrap_or(InstallationMode::Unknown);
+
+                match mode {
+                    InstallationMode::CargoDev => {
+                        println!(
+                            "{}",
+                            ui.warning("Running from Cargo development build. Auto-update is disabled for dev builds.")
+                        );
+                    }
+                    InstallationMode::NpmGlobal => {
+                        let npm_cmd = if cfg!(windows) { "npm.cmd" } else { "npm" };
+                        println!("Executing `{npm_cmd} install -g axiom-agent@latest`...");
+                        let status = std::process::Command::new(npm_cmd)
+                            .args(["install", "-g", "axiom-agent@latest"])
+                            .status();
+                        match status {
+                            Ok(s) if s.success() => {
+                                println!(
+                                    "{}",
+                                    ui.success(&format!(
+                                        "Successfully updated Axiom to v{latest}! Please restart Axiom to use the new version."
+                                    ))
+                                );
+                            }
+                            Ok(s) => {
+                                println!(
+                                    "{}",
+                                    ui.error(&format!("npm update exited with code: {s}"))
+                                );
+                                println!("To update manually, run: npm install -g axiom-agent@latest");
+                            }
+                            Err(e) => {
+                                println!(
+                                    "{}",
+                                    ui.error(&format!("Failed to execute npm: {e}"))
+                                );
+                                println!("To update manually, run: npm install -g axiom-agent@latest");
+                            }
+                        }
+                    }
+                    _ => {
+                        let mut updated = false;
+                        match crate::update_commands::install().await {
+                            Ok(()) => {
+                                println!(
+                                    "{}",
+                                    ui.success(&format!(
+                                        "Successfully updated Axiom to v{latest}! Please restart Axiom to use the new version."
+                                    ))
+                                );
+                                updated = true;
+                            }
+                            Err(err) => {
+                                let npm_cmd = if cfg!(windows) { "npm.cmd" } else { "npm" };
+                                if let Ok(s) = std::process::Command::new(npm_cmd)
+                                    .args(["install", "-g", "axiom-agent@latest"])
+                                    .status()
+                                {
+                                    if s.success() {
+                                        println!(
+                                            "{}",
+                                            ui.success(&format!(
+                                                "Successfully updated Axiom to v{latest}! Please restart Axiom to use the new version."
+                                            ))
+                                        );
+                                        updated = true;
+                                    }
+                                }
+                                if !updated {
+                                    println!(
+                                        "{}",
+                                        ui.error(&format!("Automatic update failed: {err}"))
+                                    );
+                                    println!("To update manually, run: npm install -g axiom-agent@latest");
+                                }
+                            }
+                        }
+                    }
+                }
             } else {
                 println!(
                     "{}",
@@ -4340,7 +4472,7 @@ fn print_help() {
     println!("  /model list [FILTER]                Fetch catalog view of available models");
     println!("  /permission [velocity|full|strict]  Switch permission mode (alias: /mode)");
     println!("  /theme [axiom|blood|ash|high]       Switch visual color theme (alias: /themes)");
-    println!("  /update                             Check for latest updates from GitHub");
+    println!("  /update                             Check for and automatically install latest updates");
     println!("  /queue [add <task>|list|clear]      Manage sequential background task queue");
     println!("  /undo                               Restore latest workspace checkpoint");
     println!("  /checkpoints                        List recovery snapshots");

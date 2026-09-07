@@ -262,7 +262,11 @@ function replaceInstalledFile(stagedPath, destination, finalize = () => {}) {
   }
 
   if (hadExisting) {
-    fs.rmSync(backupPath, { force: true });
+    try {
+      fs.rmSync(backupPath, { force: true });
+    } catch (_) {
+      // On Windows, the previous binary may still be locked in memory by a running process.
+    }
   }
   return destination;
 }
