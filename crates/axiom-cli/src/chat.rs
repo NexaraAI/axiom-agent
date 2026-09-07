@@ -1205,15 +1205,29 @@ impl ChatSession {
     fn cost_ledger_store(&self) -> CostLedgerStore {
         CostLedgerStore::new(crate::cost_commands::cost_ledger_path(&self.config_path))
     }
-
     fn side_effect_policy(&self) -> Result<SideEffectPolicy> {
-        Ok(SideEffectPolicy {
+        let mode = self.config.policy.permission_mode();
+        let mut policy = SideEffectPolicy {
             filesystem_read: parse_policy_action(&self.config.policy.filesystem_read)?,
             filesystem_write: parse_policy_action(&self.config.policy.filesystem_write)?,
             network: parse_policy_action(&self.config.policy.network)?,
             process: parse_policy_action(&self.config.policy.process)?,
             git: parse_policy_action(&self.config.policy.git)?,
-        })
+        };
+        if mode == PermissionMode::Velocity {
+            if policy.filesystem_write == PolicyAction::Ask {
+                policy.filesystem_write = PolicyAction::Allow;
+            }
+            if policy.network == PolicyAction::Ask {
+                policy.network = PolicyAction::Allow;
+            }
+            if policy.process == PolicyAction::Ask {
+                policy.process = PolicyAction::Allow;
+            }
+        } else if mode == PermissionMode::FullMachine {
+            policy = SideEffectPolicy::allow_all();
+        }
+        Ok(policy)
     }
 
     fn build_provider(&self, provider_name: &str) -> Result<Box<dyn LlmProvider>> {

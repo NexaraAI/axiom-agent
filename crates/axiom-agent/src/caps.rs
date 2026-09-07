@@ -15,7 +15,7 @@ impl Default for AgentCaps {
             max_tool_iterations: 20,
             max_tokens: 200_000,
             max_cost_usd: 1.0,
-            max_wall_seconds: 300,
+            max_wall_seconds: 1800,
             max_consecutive_tool_errors: 3,
         }
     }

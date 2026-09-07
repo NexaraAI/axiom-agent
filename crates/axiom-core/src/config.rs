@@ -582,7 +582,7 @@ fn default_agent_max_cost_usd() -> f64 {
 }
 
 fn default_agent_max_wall_seconds() -> u64 {
-    300
+    1800
 }
 
 fn default_agent_max_consecutive_tool_errors() -> u32 {
@@ -993,7 +993,6 @@ impl AxiomConfig {
                 message: "expected full_machine, velocity, or strict".to_string(),
             });
         }
-        self.policy.ensure_mode_consistency();
         for (field, value) in [
             ("policy.filesystem_read", &self.policy.filesystem_read),
             ("policy.filesystem_write", &self.policy.filesystem_write),

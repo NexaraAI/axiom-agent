@@ -827,7 +827,10 @@ impl<'a> AgentLoop<'a> {
                 .is_some_and(|m| m.role == "assistant");
             if !already_recorded {
                 let note = if !partial.trim().is_empty() {
-                    format!("{}\n\n[Turn interrupted by error: {err}]", partial.trim_end())
+                    format!(
+                        "{}\n\n[Turn interrupted by error: {err}]",
+                        partial.trim_end()
+                    )
                 } else {
                     format!("[Turn interrupted by error: {err}]")
                 };
@@ -1606,7 +1609,9 @@ mod tests {
         assert_eq!(completion.history_delta[0].role, "user");
         assert_eq!(completion.history_delta[0].content, "do something");
         assert_eq!(completion.history_delta[1].role, "assistant");
-        assert!(completion.history_delta[1].content.contains("[Turn interrupted by error:"));
+        assert!(completion.history_delta[1]
+            .content
+            .contains("[Turn interrupted by error:"));
     }
 
     fn installed_tool(skill_id: &str) -> InstalledSkill {

@@ -6,13 +6,28 @@ use axiom_engine::{
 use axiom_proof::{PolicyDecisionProof, ProofRecorder};
 
 pub(crate) fn configured_policy(config: &AxiomConfig) -> Result<SideEffectPolicy> {
-    Ok(SideEffectPolicy {
+    let mode = config.policy.permission_mode();
+    let mut policy = SideEffectPolicy {
         filesystem_read: parse_action(&config.policy.filesystem_read)?,
         filesystem_write: parse_action(&config.policy.filesystem_write)?,
         network: parse_action(&config.policy.network)?,
         process: parse_action(&config.policy.process)?,
         git: parse_action(&config.policy.git)?,
-    })
+    };
+    if mode == axiom_core::PermissionMode::Velocity {
+        if policy.filesystem_write == PolicyAction::Ask {
+            policy.filesystem_write = PolicyAction::Allow;
+        }
+        if policy.network == PolicyAction::Ask {
+            policy.network = PolicyAction::Allow;
+        }
+        if policy.process == PolicyAction::Ask {
+            policy.process = PolicyAction::Allow;
+        }
+    } else if mode == axiom_core::PermissionMode::FullMachine {
+        policy = SideEffectPolicy::allow_all();
+    }
+    Ok(policy)
 }
 
 pub(crate) fn record_audit(proof: &mut ProofRecorder, audit: RecordingSideEffectAuditSink) {
