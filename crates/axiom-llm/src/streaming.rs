@@ -367,6 +367,7 @@ struct ProjectedDeltas {
 struct ControlBlockProjector {
     pending: String,
     mode: ProjectorMode,
+    trim_leading_newlines: bool,
 }
 
 impl ControlBlockProjector {
@@ -435,6 +436,7 @@ impl ControlBlockProjector {
                         self.mode = if is_hidden {
                             ProjectorMode::HiddenControlBlock
                         } else {
+                            self.trim_leading_newlines = true;
                             ProjectorMode::Normal
                         };
                         continue;
@@ -463,6 +465,21 @@ impl ControlBlockProjector {
                     break;
                 }
                 ProjectorMode::Normal => {
+                    if self.trim_leading_newlines {
+                        let trim_len = self
+                            .pending
+                            .chars()
+                            .take_while(|c| *c == '\r' || *c == '\n')
+                            .map(|c| c.len_utf8())
+                            .sum();
+                        if trim_len > 0 {
+                            self.pending.drain(..trim_len);
+                        }
+                        if !self.pending.is_empty() {
+                            self.trim_leading_newlines = false;
+                        }
+                    }
+
                     let hidden_match = Self::HIDDEN_OPENERS
                         .iter()
                         .filter_map(|opener| {
@@ -533,6 +550,17 @@ impl ControlBlockProjector {
         let mut deltas = ProjectedDeltas::default();
         match self.mode {
             ProjectorMode::Normal => {
+                if self.trim_leading_newlines {
+                    let trim_len = self
+                        .pending
+                        .chars()
+                        .take_while(|c| *c == '\r' || *c == '\n')
+                        .map(|c| c.len_utf8())
+                        .sum();
+                    if trim_len > 0 {
+                        self.pending.drain(..trim_len);
+                    }
+                }
                 deltas.visible = std::mem::take(&mut self.pending);
             }
             ProjectorMode::ThinkingBlock => {
