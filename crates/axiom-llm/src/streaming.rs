@@ -371,8 +371,19 @@ struct ControlBlockProjector {
 
 impl ControlBlockProjector {
     const HIDDEN_OPENERS: [&'static str; 2] = ["```axiom-tool", "```axiom-todo"];
-    const THINK_OPENER: &'static str = "<think>";
-    const THINK_CLOSER: &'static str = "</think>";
+    const THINK_OPENERS: [&'static str; 4] = [
+        "<think>",
+        "Here's a thinking process:",
+        "Here is a thinking process:",
+        "Thinking Process:",
+    ];
+    const THINK_CLOSERS: [&'static str; 5] = [
+        "</think>",
+        "\n\n---\n\n",
+        "\n\n**Response:**",
+        "\n\n**Final Answer:**",
+        "\n\n### Response",
+    ];
 
     fn push(&mut self, delta: &str) -> ProjectedDeltas {
         self.pending.push_str(delta);
@@ -392,13 +403,55 @@ impl ControlBlockProjector {
                     break;
                 }
                 ProjectorMode::ThinkingBlock => {
-                    if let Some(end) = self.pending.find(Self::THINK_CLOSER) {
+                    let closer_match = Self::THINK_CLOSERS
+                        .iter()
+                        .filter_map(|closer| {
+                            self.pending.find(closer).map(|idx| (idx, *closer, false))
+                        })
+                        .min_by_key(|(idx, _, _)| *idx);
+                    let hidden_match = Self::HIDDEN_OPENERS
+                        .iter()
+                        .filter_map(|opener| {
+                            self.pending.find(opener).map(|idx| (idx, *opener, true))
+                        })
+                        .min_by_key(|(idx, _, _)| *idx);
+
+                    let earliest = match (closer_match, hidden_match) {
+                        (Some(c), Some(h)) => {
+                            if c.0 <= h.0 {
+                                Some(c)
+                            } else {
+                                Some(h)
+                            }
+                        }
+                        (Some(c), None) => Some(c),
+                        (None, Some(h)) => Some(h),
+                        (None, None) => None,
+                    };
+
+                    if let Some((end, marker, is_hidden)) = earliest {
                         deltas.reasoning.push_str(&self.pending[..end]);
-                        self.pending.drain(..end + Self::THINK_CLOSER.len());
-                        self.mode = ProjectorMode::Normal;
+                        self.pending.drain(..end + marker.len());
+                        self.mode = if is_hidden {
+                            ProjectorMode::HiddenControlBlock
+                        } else {
+                            ProjectorMode::Normal
+                        };
                         continue;
                     }
-                    let retained = longest_suffix_prefix(&self.pending, Self::THINK_CLOSER);
+
+                    let mut retained = Self::THINK_CLOSERS
+                        .iter()
+                        .map(|closer| longest_suffix_prefix(&self.pending, closer))
+                        .max()
+                        .unwrap_or_default();
+                    retained = retained.max(
+                        Self::HIDDEN_OPENERS
+                            .iter()
+                            .map(|opener| longest_suffix_prefix(&self.pending, opener))
+                            .max()
+                            .unwrap_or_default(),
+                    );
                     let emit_bytes = floor_char_boundary(
                         &self.pending,
                         self.pending.len().saturating_sub(retained),
@@ -416,10 +469,12 @@ impl ControlBlockProjector {
                             self.pending.find(opener).map(|idx| (idx, *opener, true))
                         })
                         .min_by_key(|(idx, _, _)| *idx);
-                    let think_match = self
-                        .pending
-                        .find(Self::THINK_OPENER)
-                        .map(|idx| (idx, Self::THINK_OPENER, false));
+                    let think_match = Self::THINK_OPENERS
+                        .iter()
+                        .filter_map(|opener| {
+                            self.pending.find(opener).map(|idx| (idx, *opener, false))
+                        })
+                        .min_by_key(|(idx, _, _)| *idx);
 
                     let earliest = match (hidden_match, think_match) {
                         (Some(h), Some(t)) => {
@@ -450,8 +505,13 @@ impl ControlBlockProjector {
                         .map(|opener| longest_suffix_prefix(&self.pending, opener))
                         .max()
                         .unwrap_or_default();
-                    retained =
-                        retained.max(longest_suffix_prefix(&self.pending, Self::THINK_OPENER));
+                    retained = retained.max(
+                        Self::THINK_OPENERS
+                            .iter()
+                            .map(|opener| longest_suffix_prefix(&self.pending, opener))
+                            .max()
+                            .unwrap_or_default(),
+                    );
 
                     let emit_bytes = floor_char_boundary(
                         &self.pending,
@@ -1120,6 +1180,35 @@ mod tests {
         assert!(!visible.contains("<think>"));
         assert!(!visible.contains("</think>"));
         assert!(response.content.contains("<think>"));
+    }
+
+    #[tokio::test]
+    async fn live_projection_extracts_unstructured_thinking_preambles_into_reasoning_delta() {
+        let stream = ChatStream::from_chunks(vec![
+            ChatChunk {
+                content_delta: "Here's a thinking process:\n\n1. Analyze user request.".to_string(),
+                ..ChatChunk::default()
+            },
+            ChatChunk {
+                content_delta: "\n\n**Response:**\nHere is your answer!".to_string(),
+                done: true,
+                ..ChatChunk::default()
+            },
+        ]);
+        let mut visible = String::new();
+        let mut reasoning = String::new();
+
+        let _response = stream
+            .collect_response_with_observer("test", "model", |update| {
+                visible.push_str(&update.visible_delta);
+                reasoning.push_str(&update.reasoning_delta);
+            })
+            .await
+            .expect("collect");
+
+        assert!(reasoning.contains("Analyze user request"));
+        assert_eq!(visible, "Here is your answer!");
+        assert!(!visible.contains("Here's a thinking process:"));
     }
 
     #[test]

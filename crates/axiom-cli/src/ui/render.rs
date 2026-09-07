@@ -441,6 +441,39 @@ impl Renderer {
                 }
             }
         }
+
+        const THINK_PREFIXES: [&str; 3] = [
+            "Here's a thinking process:",
+            "Here is a thinking process:",
+            "Thinking Process:",
+        ];
+        for prefix in &THINK_PREFIXES {
+            if content.starts_with(prefix) {
+                const DELIMITERS: [&str; 5] = [
+                    "\n\n---\n\n",
+                    "\n\n**Response:**",
+                    "\n\n**Final Answer:**",
+                    "\n\n### Response",
+                    "\n\n## Response",
+                ];
+                for delim in &DELIMITERS {
+                    if let Some((thought, answer)) = content.split_once(delim) {
+                        let thought = thought.trim();
+                        let answer = answer.trim();
+                        if !thought.is_empty() && !answer.is_empty() {
+                            return format!(
+                                "{}\n{} {}",
+                                self.thinking(thought),
+                                self.primary("◆ Axiom:"),
+                                self.ash(answer)
+                            );
+                        }
+                    }
+                }
+                return self.thinking(content.trim());
+            }
+        }
+
         format!("{} {}", self.primary("◆ Axiom:"), self.ash(content))
     }
 
@@ -806,6 +839,26 @@ mod tests {
             assert!(banner.contains("session: session-12345678-abcdef01"));
             assert!(banner.contains("[BUILD MODE]"));
         }
+    }
+
+    #[test]
+    fn assistant_renders_unstructured_thinking_preambles_cleanly() {
+        let mut config = AxiomConfig::default();
+        config.ui.color = false;
+        let renderer = Renderer::from_config_with_terminal(&config, true);
+
+        // Entire content is thinking
+        let thought_only = "Here's a thinking process:\n\n1. Analyze user input.\n2. Need platform list.";
+        let rendered_thought = renderer.assistant(thought_only);
+        assert!(rendered_thought.contains("💭 Thinking:"));
+        assert!(!rendered_thought.contains("◆ Axiom:"));
+
+        // Thinking followed by response
+        let thought_and_response = "Here's a thinking process:\n\nPlanning answer.\n\n**Response:**\nHere are the top platforms:\n1. Modrinth\n2. CurseForge";
+        let rendered_both = renderer.assistant(thought_and_response);
+        assert!(rendered_both.contains("💭 Thinking:"));
+        assert!(rendered_both.contains("◆ Axiom:"));
+        assert!(rendered_both.contains("Modrinth"));
     }
 
     struct EnvVarGuard {

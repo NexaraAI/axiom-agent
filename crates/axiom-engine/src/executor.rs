@@ -648,9 +648,16 @@ impl SkillExecutor for WebFetchExecutor {
             id: self.id().to_string(),
             input_schema: json!({
                 "type": "object",
-                "required": ["url"],
-                "additionalProperties": false,
-                "properties": {"url": {"type": "string", "format": "uri"}}
+                "properties": {
+                    "url": {
+                        "type": "string",
+                        "description": "The URL to fetch content from."
+                    },
+                    "query": {
+                        "type": "string",
+                        "description": "Web search query to research documentation, platforms, libraries, APIs, or unfamiliar topics online."
+                    }
+                }
             }),
             output_schema: json!({
                 "type": "object",
@@ -2081,11 +2088,14 @@ fn validated_web_target(
     let url = if let Ok(u) = string_arg(request, "url") {
         u
     } else if let Ok(q) = string_arg(request, "query") {
-        format!("https://html.duckduckgo.com/html/?q={q}")
+        let mut ddg = reqwest::Url::parse("https://html.duckduckgo.com/html/")
+            .map_err(|e| SkillExecutionError::InvalidUrl(e.to_string()))?;
+        ddg.query_pairs_mut().append_pair("q", &q);
+        ddg.to_string()
     } else {
         return Err(SkillExecutionError::MissingArgument {
             skill_id: "web.fetch".to_string(),
-            argument: "url",
+            argument: "url or query",
         });
     };
     let mut parsed = validate_web_url(&url, context)?;

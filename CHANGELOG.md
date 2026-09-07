@@ -4,6 +4,34 @@ All notable changes to Axiom are documented here. Versions follow semantic
 versioning. Stable releases document user-visible changes, configuration or
 proof migrations, security fixes, and upgrade actions.
 
+## 1.0.11
+
+This release fixes custom reply adaptation for interactive questions (`question.ask`), enforces a strict research-first protocol across all agent operations, eliminates overthinking loops on conversational queries, and prevents internal chain-of-thought preambles from leaking into chat output.
+
+Install it:
+
+```bash
+npm install -g axiom-agent@1.0.11
+```
+
+### New Features & Improvements
+
+- **Custom Answer & Clarification Adaptation (`question.ask`)**:
+  - Resolved prompt contradiction where `question.ask` results were previously labeled as untrusted data with instructions to never follow them.
+  - Formatted user responses (options and custom write-in replies) as trusted, immediate top-priority instructions.
+  - Updated loop reflection instruction to directly fulfill user clarification replies rather than falling back to the original request.
+- **Research-First Operating Protocol**:
+  - Added dedicated `research-first` builtin skill and system prompt directives enforcing online research (`web.fetch`) before taking actions or answering questions on unfamiliar platforms, APIs, or domain concepts.
+  - Exposed `query` in `web.fetch` tool schema so models actively utilize web search capabilities.
+  - Fixed URL-encoding in `validated_web_target` when search queries contain spaces.
+  - Enhanced orchestrator to automatically detect research and platform discovery inquiries (e.g. Minecraft modding distribution platforms, library alternatives).
+- **Overthinking Loop Elimination**:
+  - Relaxed `question.ask` in identity instructions: restricted to critical technical forks, destructive confirmations, or explicit user polls.
+  - Mandated direct, comprehensive answers for advisory, conceptual, planning, and community management questions without unneeded filesystem scans (`project.scan`) or MCQ interrogations.
+- **Thinking Preamble Projection & Leak Prevention**:
+  - Upgraded `ControlBlockProjector` in `axiom-llm` to recognize unstructured chain-of-thought prefixes (`Here's a thinking process:`, `Thinking Process:`) and route them into `reasoning_delta` (`💭 Thinking:`) instead of leaking into visible assistant responses (`◆ Axiom: ...`).
+  - Added matching handling in `render.rs` assistant formatting.
+
 ## 1.0.10
 
 This release introduces an interactive Command Palette (`/commands`, `/palette`, `/menu`, `/`) with full keyboard navigation and quick controls, gateway-decided reasoning effort in auto mode, provider-specific reasoning schema adaptations (OpenRouter, Anthropic, OpenAI, Groq), dynamic endpoint model switching across all variants (Default, low, medium, high, xhigh), and a first-class `/models` catalog discovery alias.

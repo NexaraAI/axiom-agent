@@ -861,9 +861,20 @@ impl<'a> AgentLoop<'a> {
                 }
             }
 
-            let reflection_instruction = ChatMessage {
-                role: "user".to_string(),
-                content: "Reflect on all Axiom Tool Results, update your plan if needed, and either request the next necessary tools or provide the final answer to the original request.".to_string(),
+            let had_question_ask = progress
+                .tool_events
+                .iter()
+                .any(|e| e.request.skill_id == "question.ask");
+            let reflection_instruction = if had_question_ask {
+                ChatMessage {
+                    role: "user".to_string(),
+                    content: "The user has provided their choice/reply above. Treat their response as the top-priority instruction and deliver the concrete solution, advice, or action now without asking repeated questions.".to_string(),
+                }
+            } else {
+                ChatMessage {
+                    role: "user".to_string(),
+                    content: "Reflect on all Axiom Tool Results, update your plan if needed, and either request the next necessary tools or provide the final answer to the original request.".to_string(),
+                }
             };
             if let Some(last_message) = messages.last_mut().filter(|m| m.role == "user") {
                 last_message.content.push_str("\n\n");
@@ -1142,10 +1153,29 @@ fn is_readonly_tool(skill_id: &str) -> bool {
 
 fn tool_observation(event: &ToolExecutionEvent) -> String {
     match &event.status {
-        ToolExecutionStatus::Succeeded(result) => format!(
-            "Tool `{}` succeeded:\n```json\n{}\n```",
-            result.skill_id, result.output
-        ),
+        ToolExecutionStatus::Succeeded(result) => {
+            if result.skill_id == "question.ask" {
+                if let Some(selected) = result.output.get("selected").and_then(Value::as_str) {
+                    let is_custom = result
+                        .output
+                        .get("is_custom")
+                        .and_then(Value::as_bool)
+                        .unwrap_or(false);
+                    let reply_type = if is_custom {
+                        "custom write-in reply"
+                    } else {
+                        "selected choice"
+                    };
+                    return format!(
+                        "The user responded to your clarification question ({reply_type}):\n\"{selected}\"\n\nIMPORTANT: Prioritize this user answer above all else. Address and fulfill this response directly. Do not ask repeated questions or loop."
+                    );
+                }
+            }
+            format!(
+                "Tool `{}` succeeded:\n```json\n{}\n```",
+                result.skill_id, result.output
+            )
+        }
         ToolExecutionStatus::Failed(error) => format!(
             "Tool `{}` failed: {error}\nAnalyze the error and take the next necessary step to complete the task.",
             event.request.skill_id
@@ -1824,5 +1854,30 @@ min_axiom_version = "0.1.0"
             },
             manifest,
         }
+    }
+
+    #[test]
+    fn tool_observation_formats_question_ask_as_trusted_user_instruction() {
+        let custom_event = ToolExecutionEvent {
+            request: ToolRequest {
+                skill_id: "question.ask".to_string(),
+                arguments: json!({"question": "Where to publish?"}),
+            },
+            latency_ms: 100,
+            status: ToolExecutionStatus::Succeeded(SkillExecutionResult {
+                skill_id: "question.ask".to_string(),
+                output: json!({
+                    "selected": "Modrinth and CurseForge",
+                    "is_custom": true,
+                    "index": 3
+                }),
+                latency_ms: 100,
+            }),
+        };
+
+        let obs = tool_observation(&custom_event);
+        assert!(obs.contains("The user responded to your clarification question (custom write-in reply):"));
+        assert!(obs.contains("Modrinth and CurseForge"));
+        assert!(obs.contains("IMPORTANT: Prioritize this user answer above all else"));
     }
 }
