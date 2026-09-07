@@ -1087,7 +1087,6 @@ impl CoderSession {
                             "reasoning".to_string(),
                             serde_json::json!({
                                 "effort": effort,
-                                "max_tokens": budget_tokens,
                             }),
                         );
                     }

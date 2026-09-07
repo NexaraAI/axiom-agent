@@ -56,7 +56,7 @@ impl Spinner {
                     .fg(Color::Fixed(240))
                     .paint(format!("({elapsed:.1}s)"));
 
-                print!("\r\x1B[2K{styled_frame} {styled_msg} {timer}");
+                print!("\r\x1B[2K  {styled_frame} {styled_msg} {timer}");
                 let _ = io::stdout().flush();
 
                 index = index.wrapping_add(1);

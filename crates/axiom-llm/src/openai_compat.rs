@@ -245,15 +245,19 @@ impl OpenAiCompatibleProvider {
                 && (body_str.contains("reasoning_effort")
                     || body_str.contains("unrecognized field `reasoning_effort`")
                     || body_str.contains("thinking")
-                    || body_str.contains("unrecognized field `thinking`"))
+                    || body_str.contains("unrecognized field `thinking`")
+                    || body_str.contains("reasoning"))
                 && request.provider_options.as_ref().is_some_and(|opts| {
-                    opts.contains_key("reasoning_effort") || opts.contains_key("thinking")
+                    opts.contains_key("reasoning_effort")
+                        || opts.contains_key("thinking")
+                        || opts.contains_key("reasoning")
                 })
             {
                 let mut fallback = request.clone();
                 if let Some(opts) = fallback.provider_options.as_mut() {
                     opts.remove("reasoning_effort");
                     opts.remove("thinking");
+                    opts.remove("reasoning");
                     if opts.is_empty() {
                         fallback.provider_options = None;
                     }
@@ -297,15 +301,19 @@ impl OpenAiCompatibleProvider {
                 && (body_str.contains("reasoning_effort")
                     || body_str.contains("unrecognized field `reasoning_effort`")
                     || body_str.contains("thinking")
-                    || body_str.contains("unrecognized field `thinking`"))
+                    || body_str.contains("unrecognized field `thinking`")
+                    || body_str.contains("reasoning"))
                 && request.provider_options.as_ref().is_some_and(|opts| {
-                    opts.contains_key("reasoning_effort") || opts.contains_key("thinking")
+                    opts.contains_key("reasoning_effort")
+                        || opts.contains_key("thinking")
+                        || opts.contains_key("reasoning")
                 })
             {
                 let mut fallback = request.clone();
                 if let Some(opts) = fallback.provider_options.as_mut() {
                     opts.remove("reasoning_effort");
                     opts.remove("thinking");
+                    opts.remove("reasoning");
                     if opts.is_empty() {
                         fallback.provider_options = None;
                     }

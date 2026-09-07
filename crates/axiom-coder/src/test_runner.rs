@@ -32,6 +32,20 @@ pub fn detect_test_commands(root: impl AsRef<Path>) -> std::io::Result<Vec<TestC
     let root = root.as_ref();
     let files = discover_detection_files(root, 4)?;
     let mut commands = detect_test_commands_for_files(&files);
+    commands.retain(|command| {
+        if command.command != "npm test" && command.command != "pnpm test" && command.command != "yarn test" {
+            return true;
+        }
+        let package_path = command.working_directory.as_deref().map_or_else(
+            || root.join("package.json"),
+            |dir| root.join(dir).join("package.json"),
+        );
+        if package_path.is_file() {
+            package_test_script(&package_path).unwrap_or(None).is_some()
+        } else {
+            false
+        }
+    });
     for command in &mut commands {
         if command.command != "npm test" {
             continue;

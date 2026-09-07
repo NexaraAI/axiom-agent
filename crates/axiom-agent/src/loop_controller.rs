@@ -715,8 +715,15 @@ impl<'a> AgentLoop<'a> {
                             ToolExecutionStatus::Succeeded(result)
                         }
                         Err(error) => {
-                            consecutive_tool_errors += 1;
-                            ToolExecutionStatus::Failed(error.to_string())
+                            let err_str = error.to_string();
+                            let is_non_fatal = err_str.contains("approval denied")
+                                || err_str.contains("timeout")
+                                || err_str.contains("timed out")
+                                || err_str.contains("cancelled");
+                            if !is_non_fatal {
+                                consecutive_tool_errors += 1;
+                            }
+                            ToolExecutionStatus::Failed(err_str)
                         }
                     };
                     progress
@@ -804,11 +811,17 @@ impl<'a> AgentLoop<'a> {
                             ToolExecutionStatus::Succeeded(result)
                         }
                         Some(Err(error)) => {
-                            consecutive_tool_errors += 1;
-                            ToolExecutionStatus::Failed(error.to_string())
+                            let err_str = error.to_string();
+                            let is_non_fatal = err_str.contains("approval denied")
+                                || err_str.contains("timeout")
+                                || err_str.contains("timed out")
+                                || err_str.contains("cancelled");
+                            if !is_non_fatal {
+                                consecutive_tool_errors += 1;
+                            }
+                            ToolExecutionStatus::Failed(err_str)
                         }
                         None => {
-                            consecutive_tool_errors += 1;
                             ToolExecutionStatus::Failed(
                                 "Tool execution cancelled by user".to_string(),
                             )
@@ -1180,15 +1193,37 @@ fn tool_observation(event: &ToolExecutionEvent) -> String {
                     );
                 }
             }
+            if let Some(124) = result.output.get("exit_code").and_then(Value::as_i64) {
+                let stdout = result.output.get("stdout").and_then(Value::as_str).unwrap_or("");
+                let stderr = result.output.get("stderr").and_then(Value::as_str).unwrap_or("");
+                return format!(
+                    "Tool `{}` timed out after execution limit (exit code 124).\nCaptured stdout:\n```\n{stdout}\n```\nCaptured stderr:\n```\n{stderr}\n```\n\nAUTONOMOUS RECOVERY DIRECTIVE: Do not give up or abandon the task! The command took longer than the foreground timeout. Check if partial files were written to disk, check running processes, or adapt your approach (e.g. background the process, run sub-commands, or use compression). Continue your task now.",
+                    result.skill_id
+                );
+            }
             format!(
                 "Tool `{}` succeeded:\n```json\n{}\n```",
                 result.skill_id, result.output
             )
         }
-        ToolExecutionStatus::Failed(error) => format!(
-            "Tool `{}` failed: {error}\nAnalyze the error and take the next necessary step to complete the task.",
-            event.request.skill_id
-        ),
+        ToolExecutionStatus::Failed(error) => {
+            if error.contains("approval denied") {
+                format!(
+                    "Tool `{}` was declined by user approval: {error}\nAUTONOMOUS RECOVERY DIRECTIVE: Do not give up. Select an alternative non-destructive approach or explain what was requested.",
+                    event.request.skill_id
+                )
+            } else if error.contains("cancelled") || error.contains("timeout") || error.contains("timed out") {
+                format!(
+                    "Tool `{}` interrupted or timed out: {error}\nAUTONOMOUS RECOVERY DIRECTIVE: Do not give up or stop. Adapt your approach and continue executing the task autonomously.",
+                    event.request.skill_id
+                )
+            } else {
+                format!(
+                    "Tool `{}` failed: {error}\nAnalyze the error and take the next necessary step to complete the task.",
+                    event.request.skill_id
+                )
+            }
+        }
     }
 }
 
@@ -1889,5 +1924,45 @@ min_axiom_version = "0.1.0"
         ));
         assert!(obs.contains("Modrinth and CurseForge"));
         assert!(obs.contains("IMPORTANT: Prioritize this user answer above all else"));
+    }
+
+    #[test]
+    fn tool_observation_formats_timeout_as_autonomous_recovery_directive() {
+        let timeout_event = ToolExecutionEvent {
+            request: ToolRequest {
+                skill_id: "shell.powershell.safe".to_string(),
+                arguments: json!({"command": "scp -r user@remote:/data ."}),
+            },
+            latency_ms: 30000,
+            status: ToolExecutionStatus::Succeeded(SkillExecutionResult {
+                skill_id: "shell.powershell.safe".to_string(),
+                output: json!({
+                    "exit_code": 124,
+                    "stdout": "Transferred 10 files...",
+                    "stderr": "Command timed out after 30s."
+                }),
+            }),
+        };
+
+        let obs = tool_observation(&timeout_event);
+        assert!(obs.contains("timed out after execution limit (exit code 124)"));
+        assert!(obs.contains("AUTONOMOUS RECOVERY DIRECTIVE: Do not give up or abandon the task!"));
+        assert!(obs.contains("Transferred 10 files..."));
+    }
+
+    #[test]
+    fn tool_observation_formats_declined_approval_as_recovery_directive() {
+        let denied_event = ToolExecutionEvent {
+            request: ToolRequest {
+                skill_id: "shell.powershell.safe".to_string(),
+                arguments: json!({"command": "rm -rf /"}),
+            },
+            latency_ms: 500,
+            status: ToolExecutionStatus::Failed("approval denied by user policy".to_string()),
+        };
+
+        let obs = tool_observation(&denied_event);
+        assert!(obs.contains("was declined by user approval"));
+        assert!(obs.contains("AUTONOMOUS RECOVERY DIRECTIVE: Do not give up. Select an alternative non-destructive approach"));
     }
 }

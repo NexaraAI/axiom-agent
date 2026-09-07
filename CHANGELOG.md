@@ -4,6 +4,37 @@ All notable changes to Axiom are documented here. Versions follow semantic
 versioning. Stable releases document user-visible changes, configuration or
 proof migrations, security fixes, and upgrade actions.
 
+## 1.0.13
+
+This release resolves OpenRouter reasoning compatibility, adds live tool execution spinners, protects against infinite verification loops, and provides autonomous recovery from command timeouts and declined approvals.
+
+Install it:
+
+```bash
+npm install -g axiom-agent@1.0.13
+```
+
+### Bug Fixes & Resiliency Improvements
+
+- **Live Tool Execution Spinner & Timer**:
+  - Replaced static terminal tool execution printouts with active 80ms pulsing spinners displaying real-time elapsed seconds (`⠋ Axiom Tool: executing <skill> (<Xs>)`).
+  - Added clean completion and timeout indicators (`✔ Axiom Tool: completed` and `⏱ Axiom Tool: timed out`).
+  - Implemented automatic spinner drop cleanup to eliminate terminal display artifacts on cancellations.
+- **OpenRouter Reasoning HTTP 400 Resolution**:
+  - Enforced exclusive `reasoning.effort` payload for OpenRouter models to prevent HTTP 400 rejection.
+  - Enhanced HTTP 400 auto-recovery in `OpenAiCompatibleProvider` to catch `reasoning` alongside `reasoning_effort` and transparently strip incompatible parameters on retry.
+- **Loop Controller Autonomous Timeout & Approval Recovery**:
+  - Exempted command timeouts (exit code 124), user cancellations, and declined approvals from counting towards fatal `consecutive_tool_errors`.
+  - Added autonomous recovery directives to tool observations instructing the model to inspect partial disk outputs, background processes, or adapt approach rather than aborting.
+- **Stage 4 Reviewer & Debugger Guardrails**:
+  - Prevented Stage 4 verification checks from running on aborted turns, provider errors, or turns without code modifications.
+  - Capped automated verification retries to prevent infinite debugger feedback loops.
+  - Fixed Windows `program not found` in test execution by executing commands via PowerShell.
+  - Updated test runner detection to verify that `package.json` actually contains a test script before proposing `npm test`.
+- **Anti-Promissory Chatter Rules**:
+  - Added strict prompt directives preventing models from narrating future intent without issuing tool calls in the same turn.
+  - Added Windows PowerShell syntax guidance (using `;` instead of `&&`, and `$HOME` instead of `~`).
+
 ## 1.0.12
 
 This release introduces comprehensive skill installation and management (local paths, GitHub repositories, registry, and built-in catalogs), dedicated GitHub search and deep web research engines, multi-step thinking and writing state indicators, modular skills for clean humanized code and game building, and robust JSON tool-call repair.
