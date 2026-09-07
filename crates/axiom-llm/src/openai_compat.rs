@@ -24,6 +24,7 @@ pub struct OpenAiCompatibleProvider {
     api_key_env: Option<String>,
     api_key: Option<SecretValue>,
     models_url: Option<String>,
+    session_id: Option<String>,
     client: std::result::Result<reqwest::Client, String>,
 }
 
@@ -39,6 +40,7 @@ impl OpenAiCompatibleProvider {
             api_key_env,
             api_key: None,
             models_url: None,
+            session_id: None,
             client: build_provider_http_client(),
         }
     }
@@ -54,6 +56,11 @@ impl OpenAiCompatibleProvider {
 
     pub fn with_api_key(mut self, api_key: impl Into<String>) -> Self {
         self.api_key = Some(SecretValue::new(api_key));
+        self
+    }
+
+    pub fn with_session_id(mut self, session_id: impl Into<String>) -> Self {
+        self.session_id = Some(session_id.into());
         self
     }
 
@@ -78,7 +85,26 @@ impl OpenAiCompatibleProvider {
     pub fn build_chat_request(&self, request: &ChatRequest) -> Result<RequestBuilder> {
         self.validate_request(request)?;
         let body = chat_request_body(request);
-        let builder = self.client()?.post(self.chat_endpoint()).json(&body);
+        let mut builder = self.client()?.post(self.chat_endpoint()).json(&body);
+
+        let is_opencode = self.name.contains("opencode")
+            || self.name == "zen"
+            || self.base_url.contains("opencode.ai");
+        if is_opencode {
+            let session_id = self
+                .session_id
+                .as_deref()
+                .or_else(|| {
+                    request
+                        .metadata
+                        .as_ref()
+                        .and_then(|m| m.get("session_id"))
+                        .and_then(|v| v.as_str())
+                })
+                .unwrap_or("axiom-session");
+            builder = builder.header("x-opencode-session", session_id);
+        }
+
         self.authenticate(builder)
     }
 
@@ -90,7 +116,16 @@ impl OpenAiCompatibleProvider {
         validate_provider_endpoint("base_url", &self.base_url, true)?;
         let models_endpoint = self.models_endpoint();
         validate_provider_endpoint("models_url", &models_endpoint, true)?;
-        let builder = self.client()?.get(models_endpoint);
+        let mut builder = self.client()?.get(models_endpoint);
+
+        let is_opencode = self.name.contains("opencode")
+            || self.name == "zen"
+            || self.base_url.contains("opencode.ai");
+        if is_opencode {
+            let session_id = self.session_id.as_deref().unwrap_or("axiom-catalog");
+            builder = builder.header("x-opencode-session", session_id);
+        }
+
         self.authenticate(builder)
     }
 
@@ -684,5 +719,27 @@ mod tests {
             tools: Vec::new(),
             tool_choice: None,
         }
+    }
+
+    #[test]
+    fn opencode_injects_session_header() {
+        let provider = OpenAiCompatibleProvider::new(
+            "opencode",
+            "https://opencode.ai/zen/v1",
+            None,
+        )
+        .with_api_key("sk-test")
+        .with_session_id("session-123");
+
+        let request = provider
+            .build_chat_request(&sample_request())
+            .expect("should build")
+            .build()
+            .expect("should finalize");
+
+        assert_eq!(
+            request.headers()["x-opencode-session"],
+            "session-123"
+        );
     }
 }

@@ -892,7 +892,8 @@ pub(crate) async fn discover_and_choose_model(
         "Fetching the LIVE model list from the provider (free metadata call, no chat cost)..."
     );
     let provider = OpenAiCompatibleProvider::new(provider_name, base_url, api_key_env.clone())
-        .with_models_url(models_url);
+        .with_models_url(models_url)
+        .with_session_id("axiom-model-discovery");
     let provider = match api_key_env.as_deref() {
         Some(environment_variable) => {
             match crate::credentials::resolve_credential(environment_variable) {

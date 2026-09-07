@@ -1599,7 +1599,8 @@ impl CoderSession {
             } => {
                 let provider =
                     OpenAiCompatibleProvider::new(provider_name, base_url, api_key_env.clone())
-                        .with_models_url(models_url.clone());
+                        .with_models_url(models_url.clone())
+                        .with_session_id("axiom-code-review");
                 let provider = match api_key_env.as_deref() {
                     Some(environment_variable) => {
                         match crate::credentials::resolve_credential(environment_variable)? {
