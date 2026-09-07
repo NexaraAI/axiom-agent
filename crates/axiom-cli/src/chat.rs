@@ -3811,14 +3811,14 @@ async fn handle_chat_command(session: &mut ChatSession, input: &str) -> Result<C
                             Ok(s) => {
                                 println!(
                                     "{}",
-                                    ui.error(&format!("npm update exited with code: {s}"))
+                                    ui.error(format!("npm update exited with code: {s}"))
                                 );
                                 println!(
                                     "To update manually, run: npm install -g axiom-agent@latest"
                                 );
                             }
                             Err(e) => {
-                                println!("{}", ui.error(&format!("Failed to execute npm: {e}")));
+                                println!("{}", ui.error(format!("Failed to execute npm: {e}")));
                                 println!(
                                     "To update manually, run: npm install -g axiom-agent@latest"
                                 );
@@ -3826,7 +3826,6 @@ async fn handle_chat_command(session: &mut ChatSession, input: &str) -> Result<C
                         }
                     }
                     _ => {
-                        let mut updated = false;
                         match crate::update_commands::install().await {
                             Ok(()) => {
                                 println!(
@@ -3835,28 +3834,24 @@ async fn handle_chat_command(session: &mut ChatSession, input: &str) -> Result<C
                                         "Successfully updated Axiom to v{latest}! Please restart Axiom to use the new version."
                                     ))
                                 );
-                                updated = true;
                             }
                             Err(err) => {
                                 let npm_cmd = if cfg!(windows) { "npm.cmd" } else { "npm" };
-                                if let Ok(s) = std::process::Command::new(npm_cmd)
+                                let npm_success = std::process::Command::new(npm_cmd)
                                     .args(["install", "-g", "axiom-agent@latest"])
                                     .status()
-                                {
-                                    if s.success() {
-                                        println!(
-                                            "{}",
-                                            ui.success(&format!(
-                                                "Successfully updated Axiom to v{latest}! Please restart Axiom to use the new version."
-                                            ))
-                                        );
-                                        updated = true;
-                                    }
-                                }
-                                if !updated {
+                                    .is_ok_and(|s| s.success());
+                                if npm_success {
                                     println!(
                                         "{}",
-                                        ui.error(&format!("Automatic update failed: {err}"))
+                                        ui.success(&format!(
+                                            "Successfully updated Axiom to v{latest}! Please restart Axiom to use the new version."
+                                        ))
+                                    );
+                                } else {
+                                    println!(
+                                        "{}",
+                                        ui.error(format!("Automatic update failed: {err}"))
                                     );
                                     println!(
                                         "To update manually, run: npm install -g axiom-agent@latest"
