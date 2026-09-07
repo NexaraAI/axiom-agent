@@ -3825,41 +3825,36 @@ async fn handle_chat_command(session: &mut ChatSession, input: &str) -> Result<C
                             }
                         }
                     }
-                    _ => {
-                        match crate::update_commands::install().await {
-                            Ok(()) => {
+                    _ => match crate::update_commands::install().await {
+                        Ok(()) => {
+                            println!(
+                                "{}",
+                                ui.success(&format!(
+                                    "Successfully updated Axiom to v{latest}! Please restart Axiom to use the new version."
+                                ))
+                            );
+                        }
+                        Err(err) => {
+                            let npm_cmd = if cfg!(windows) { "npm.cmd" } else { "npm" };
+                            let npm_success = std::process::Command::new(npm_cmd)
+                                .args(["install", "-g", "axiom-agent@latest"])
+                                .status()
+                                .is_ok_and(|s| s.success());
+                            if npm_success {
                                 println!(
                                     "{}",
                                     ui.success(&format!(
                                         "Successfully updated Axiom to v{latest}! Please restart Axiom to use the new version."
                                     ))
                                 );
-                            }
-                            Err(err) => {
-                                let npm_cmd = if cfg!(windows) { "npm.cmd" } else { "npm" };
-                                let npm_success = std::process::Command::new(npm_cmd)
-                                    .args(["install", "-g", "axiom-agent@latest"])
-                                    .status()
-                                    .is_ok_and(|s| s.success());
-                                if npm_success {
-                                    println!(
-                                        "{}",
-                                        ui.success(&format!(
-                                            "Successfully updated Axiom to v{latest}! Please restart Axiom to use the new version."
-                                        ))
-                                    );
-                                } else {
-                                    println!(
-                                        "{}",
-                                        ui.error(format!("Automatic update failed: {err}"))
-                                    );
-                                    println!(
-                                        "To update manually, run: npm install -g axiom-agent@latest"
-                                    );
-                                }
+                            } else {
+                                println!("{}", ui.error(format!("Automatic update failed: {err}")));
+                                println!(
+                                    "To update manually, run: npm install -g axiom-agent@latest"
+                                );
                             }
                         }
-                    }
+                    },
                 }
             } else {
                 println!(
