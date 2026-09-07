@@ -3851,7 +3851,8 @@ async fn handle_chat_command(session: &mut ChatSession, input: &str) -> Result<C
                     InstallationMode::NpmGlobal => {
                         let npm_cmd = if cfg!(windows) { "npm.cmd" } else { "npm" };
                         println!("Executing `{npm_cmd} install -g axiom-agent@latest`...");
-                        match crate::update_commands::run_npm_global_update(binary_path.as_deref()) {
+                        match crate::update_commands::run_npm_global_update(binary_path.as_deref())
+                        {
                             Ok(()) => {
                                 println!(
                                     "{}",
@@ -3873,12 +3874,14 @@ async fn handle_chat_command(session: &mut ChatSession, input: &str) -> Result<C
                             println!(
                                 "{}",
                                 ui.success(&format!(
-                                        "Successfully updated Axiom to v{latest}! Please restart Axiom to use the new version."
+                                    "Successfully updated Axiom to v{latest}! Please restart Axiom to use the new version."
                                 ))
                             );
                         }
                         Err(err) => {
-                            if crate::update_commands::run_npm_global_update(binary_path.as_deref()).is_ok() {
+                            if crate::update_commands::run_npm_global_update(binary_path.as_deref())
+                                .is_ok()
+                            {
                                 println!(
                                     "{}",
                                     ui.success(&format!(

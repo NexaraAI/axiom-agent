@@ -546,7 +546,12 @@ pub(crate) fn run_npm_global_update(binary_path: Option<&Path>) -> Result<(), St
 
     // Try npm install with --allow-scripts first (for modern npm 12+), fallback to standard
     let status = std::process::Command::new(npm_cmd)
-        .args(["install", "-g", "axiom-agent@latest", "--allow-scripts=axiom-agent"])
+        .args([
+            "install",
+            "-g",
+            "axiom-agent@latest",
+            "--allow-scripts=axiom-agent",
+        ])
         .status();
 
     let success = match status {
