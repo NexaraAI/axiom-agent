@@ -24,6 +24,7 @@ pub enum GiveUpReason {
     MaxCostReached,
     ConsecutiveToolErrorsReached,
     Cancelled,
+    ProviderFailed(String),
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -519,7 +520,11 @@ impl<'a> AgentLoop<'a> {
                             error: error.to_string(),
                         },
                     )?;
-                    return Err(error.into());
+                    return self.give_up(
+                        GiveUpReason::ProviderFailed(error.to_string()),
+                        iteration,
+                        progress,
+                    );
                 }
             };
             if let Some(usage) = response.usage.as_ref() {
@@ -815,6 +820,22 @@ impl<'a> AgentLoop<'a> {
                     iteration: iterations,
                 },
             )?;
+        } else if let GiveUpReason::ProviderFailed(ref err) = reason {
+            let already_recorded = progress
+                .history_delta
+                .last()
+                .is_some_and(|m| m.role == "assistant");
+            if !already_recorded {
+                let note = if !partial.trim().is_empty() {
+                    format!("{}\n\n[Turn interrupted by error: {err}]", partial.trim_end())
+                } else {
+                    format!("[Turn interrupted by error: {err}]")
+                };
+                progress.history_delta.push(ChatMessage {
+                    role: "assistant".to_string(),
+                    content: note,
+                });
+            }
         } else if let Some(cap) = cap_kind(&reason) {
             self.record_transition(
                 &mut progress,
@@ -945,7 +966,7 @@ fn cap_kind(reason: &GiveUpReason) -> Option<AgentCapKind> {
         GiveUpReason::MaxTokensReached => Some(AgentCapKind::Tokens),
         GiveUpReason::MaxCostReached => Some(AgentCapKind::Cost),
         GiveUpReason::ConsecutiveToolErrorsReached => Some(AgentCapKind::ConsecutiveToolErrors),
-        GiveUpReason::Cancelled => None,
+        GiveUpReason::Cancelled | GiveUpReason::ProviderFailed(_) => None,
     }
 }
 
@@ -1526,6 +1547,66 @@ mod tests {
         fn provider_name(&self) -> &str {
             "multi"
         }
+    }
+
+    #[tokio::test]
+    async fn provider_failure_preserves_history_and_gives_up() {
+        struct FailingProvider;
+        #[async_trait]
+        impl LlmProvider for FailingProvider {
+            async fn chat(&self, _request: ChatRequest) -> axiom_llm::Result<ChatResponse> {
+                Err(LlmError::StreamDisconnected {
+                    provider: "failing".to_string(),
+                })
+            }
+            async fn stream_chat(&self, _request: ChatRequest) -> axiom_llm::Result<ChatStream> {
+                Err(LlmError::StreamDisconnected {
+                    provider: "failing".to_string(),
+                })
+            }
+            async fn models(&self) -> axiom_llm::Result<Vec<ModelInfo>> {
+                Ok(Vec::new())
+            }
+            fn provider_name(&self) -> &str {
+                "failing"
+            }
+        }
+
+        let provider = FailingProvider;
+        let mut approval = DenyAllApprover;
+        let skills = Vec::new();
+        let mut agent = AgentLoop::new(
+            &provider,
+            "test-model",
+            AgentCaps::default(),
+            Vec::new(),
+            Vec::new(),
+            &skills,
+            context(),
+            &mut approval,
+        );
+
+        let result = agent
+            .run_turn(ChatMessage {
+                role: "user".to_string(),
+                content: "do something".to_string(),
+            })
+            .await
+            .expect("turn should gracefully give up instead of failing");
+
+        let TurnResult::GiveUp {
+            reason, completion, ..
+        } = result
+        else {
+            panic!("expected GiveUp on provider failure");
+        };
+
+        assert!(matches!(reason, GiveUpReason::ProviderFailed(_)));
+        assert_eq!(completion.history_delta.len(), 2);
+        assert_eq!(completion.history_delta[0].role, "user");
+        assert_eq!(completion.history_delta[0].content, "do something");
+        assert_eq!(completion.history_delta[1].role, "assistant");
+        assert!(completion.history_delta[1].content.contains("[Turn interrupted by error:"));
     }
 
     fn installed_tool(skill_id: &str) -> InstalledSkill {

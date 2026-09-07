@@ -288,6 +288,35 @@ impl SideEffectPolicyConfig {
         self.process = preset.process;
         self.git = preset.git;
     }
+
+    pub fn ensure_mode_consistency(&mut self) {
+        if let Some(mode) = PermissionMode::parse(&self.mode) {
+            match mode {
+                PermissionMode::FullMachine => {
+                    self.filesystem_read = "allow".to_string();
+                    self.filesystem_write = "allow".to_string();
+                    self.network = "allow".to_string();
+                    self.process = "allow".to_string();
+                    self.git = "allow".to_string();
+                }
+                PermissionMode::Velocity => {
+                    if self.filesystem_read == "ask" {
+                        self.filesystem_read = "allow".to_string();
+                    }
+                    if self.filesystem_write == "ask" {
+                        self.filesystem_write = "allow".to_string();
+                    }
+                    if self.network == "ask" {
+                        self.network = "allow".to_string();
+                    }
+                    if self.process == "ask" {
+                        self.process = "allow".to_string();
+                    }
+                }
+                PermissionMode::Strict => {}
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -964,6 +993,7 @@ impl AxiomConfig {
                 message: "expected full_machine, velocity, or strict".to_string(),
             });
         }
+        self.policy.ensure_mode_consistency();
         for (field, value) in [
             ("policy.filesystem_read", &self.policy.filesystem_read),
             ("policy.filesystem_write", &self.policy.filesystem_write),

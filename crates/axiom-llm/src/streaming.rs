@@ -161,8 +161,15 @@ impl ChatStream {
         let mut tool_call_deltas_received = 0_usize;
         let mut chunks_received = 0_usize;
         let mut total_argument_bytes = 0_usize;
-
-        while let Some(chunk) = self.next_chunk().await? {
+        while let Some(chunk) = match self.next_chunk().await {
+            Ok(chunk) => chunk,
+            Err(LlmError::StreamDisconnected { .. })
+                if !content.is_empty() || !tool_calls.is_empty() || !total_reasoning.is_empty() =>
+            {
+                None
+            }
+            Err(err) => return Err(err),
+        } {
             ensure_additional_count(
                 provider,
                 "stream chunk count",
@@ -302,18 +309,19 @@ impl ChatStream {
 
         let tool_calls = tool_calls
             .into_values()
-            .map(|partial| {
-                let arguments = serde_json::from_str(&partial.arguments).map_err(|_| {
-                    LlmError::ResponseParse {
+            .filter_map(|partial| {
+                match serde_json::from_str::<serde_json::Value>(&partial.arguments) {
+                    Ok(arguments) => Some(Ok(ChatToolCall {
+                        id: partial.id,
+                        name: partial.name,
+                        arguments,
+                    })),
+                    Err(_) if !content.is_empty() || !total_reasoning.is_empty() => None,
+                    Err(_) => Some(Err(LlmError::ResponseParse {
                         provider: provider.to_string(),
                         body_summary: summarize_body(&partial.arguments),
-                    }
-                })?;
-                Ok(ChatToolCall {
-                    id: partial.id,
-                    name: partial.name,
-                    arguments,
-                })
+                    })),
+                }
             })
             .collect::<Result<Vec<_>>>()?;
         if content.trim().is_empty() && tool_calls.is_empty() {

@@ -1988,7 +1988,8 @@ impl TerminalInput {
             editor.set_helper(Some(AxiomCommandHelper::default()));
             let _ = editor.bind_sequence(KeyEvent(KeyCode::Enter, Modifiers::ALT), Cmd::Newline);
             let _ = editor.bind_sequence(KeyEvent(KeyCode::Enter, Modifiers::SHIFT), Cmd::Newline);
-            let _ = editor.bind_sequence(KeyEvent(KeyCode::Char('j'), Modifiers::CTRL), Cmd::Newline);
+            let _ =
+                editor.bind_sequence(KeyEvent(KeyCode::Char('j'), Modifiers::CTRL), Cmd::Newline);
             if history_path.exists() && sanitize_terminal_history_file(&history_path) {
                 let _ = editor.load_history(&history_path);
             }
@@ -2323,6 +2324,15 @@ async fn run_terminal_session(mut session: ChatSession) -> Result<()> {
                 {
                     println!("{}", ui.plain(&hint));
                 }
+                session.history.push(ChatMessage {
+                    role: "user".to_string(),
+                    content: final_prompt.clone(),
+                });
+                session.history.push(ChatMessage {
+                    role: "assistant".to_string(),
+                    content: format!("[Turn interrupted by error: {error}]"),
+                });
+                let _ = session.persist_session();
             }
         }
     }
@@ -3083,6 +3093,7 @@ fn give_up_reason_label(reason: &GiveUpReason) -> String {
             "maximum consecutive tool errors reached".to_string()
         }
         GiveUpReason::Cancelled => "cancelled by user".to_string(),
+        GiveUpReason::ProviderFailed(err) => format!("provider error: {err}"),
     }
 }
 
@@ -3472,6 +3483,9 @@ struct TerminalApprover {
 impl SkillApproval for TerminalApprover {
     fn approve(&mut self, request: &ApprovalRequest) -> bool {
         if self.mode == PermissionMode::FullMachine {
+            return true;
+        }
+        if self.mode == PermissionMode::Velocity && request.risk_level != "high" {
             return true;
         }
         println!(

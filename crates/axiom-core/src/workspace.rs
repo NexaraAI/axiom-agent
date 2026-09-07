@@ -278,7 +278,22 @@ fn path_starts_with(path: &Path, base: &Path) -> bool {
     {
         let p = strip_verbatim_prefix(path);
         let b = strip_verbatim_prefix(base);
-        p.starts_with(b)
+        if p.starts_with(&b) {
+            return true;
+        }
+        let p_comps: Vec<_> = p.components().collect();
+        let b_comps: Vec<_> = b.components().collect();
+        if p_comps.len() < b_comps.len() {
+            return false;
+        }
+        for (pc, bc) in p_comps.iter().zip(b_comps.iter()) {
+            let ps = pc.as_os_str().to_string_lossy();
+            let bs = bc.as_os_str().to_string_lossy();
+            if !ps.eq_ignore_ascii_case(&bs) {
+                return false;
+            }
+        }
+        true
     }
     #[cfg(not(windows))]
     {
@@ -292,11 +307,11 @@ fn strip_ancestor_prefix<'a>(path: &'a Path, ancestor: &Path) -> std::result::Re
     }
     #[cfg(windows)]
     {
-        let p = strip_verbatim_prefix(path);
-        let a = strip_verbatim_prefix(ancestor);
-        if p.starts_with(&a) {
+        if path_starts_with(path, ancestor) {
+            let a = strip_verbatim_prefix(ancestor);
+            let a_count = a.components().count();
             let mut path_comps = path.components();
-            for _ in a.components() {
+            for _ in 0..a_count {
                 path_comps.next();
             }
             return Ok(path_comps.as_path());
