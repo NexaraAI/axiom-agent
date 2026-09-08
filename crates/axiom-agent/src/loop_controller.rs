@@ -1212,7 +1212,10 @@ fn tool_observation(event: &ToolExecutionEvent) -> String {
                     "Tool `{}` was declined by user approval: {error}\nAUTONOMOUS RECOVERY DIRECTIVE: Do not give up. Select an alternative non-destructive approach or explain what was requested.",
                     event.request.skill_id
                 )
-            } else if error.contains("cancelled") || error.contains("timeout") || error.contains("timed out") {
+            } else if error.contains("cancelled")
+                || error.contains("timeout")
+                || error.contains("timed out")
+            {
                 format!(
                     "Tool `{}` interrupted or timed out: {error}\nAUTONOMOUS RECOVERY DIRECTIVE: Do not give up or stop. Adapt your approach and continue executing the task autonomously.",
                     event.request.skill_id

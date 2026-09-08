@@ -2568,11 +2568,13 @@ async fn run_terminal_session(mut session: ChatSession) -> Result<()> {
                 if let Some(runtime) = runtime {
                     println!("{}", ui.status_line(&runtime.status_text()));
                 }
-                let stopped_before_completion = content.contains("Axiom stopped before completion:");
-                let is_debugger_retry = final_prompt.starts_with("The Stage 4 Debugger Subagent ran verification command");
-                let has_code_changes = tool_results.iter().any(|res| {
-                    res.skill_id == "file.write" || res.skill_id == "file.replace"
-                });
+                let stopped_before_completion =
+                    content.contains("Axiom stopped before completion:");
+                let is_debugger_retry = final_prompt
+                    .starts_with("The Stage 4 Debugger Subagent ran verification command");
+                let has_code_changes = tool_results
+                    .iter()
+                    .any(|res| res.skill_id == "file.write" || res.skill_id == "file.replace");
                 if orchestrator_plan.is_coding_task
                     && !was_cancelled
                     && !stopped_before_completion
@@ -3090,11 +3092,8 @@ impl TransitionObserver for DurableTransitionWriter {
                     }
                     match &event.status {
                         ToolExecutionStatus::Succeeded(result) => {
-                            let is_timeout = result
-                                .output
-                                .get("exit_code")
-                                .and_then(Value::as_i64)
-                                == Some(124);
+                            let is_timeout =
+                                result.output.get("exit_code").and_then(Value::as_i64) == Some(124);
                             let summary =
                                 format_tool_result_summary(&event.request.skill_id, &result.output);
                             if is_timeout {
@@ -3535,8 +3534,16 @@ fn format_tool_result_message(result: &SkillExecutionResult) -> String {
         }
     }
     if let Some(124) = result.output.get("exit_code").and_then(Value::as_i64) {
-        let stdout = result.output.get("stdout").and_then(Value::as_str).unwrap_or("");
-        let stderr = result.output.get("stderr").and_then(Value::as_str).unwrap_or("");
+        let stdout = result
+            .output
+            .get("stdout")
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        let stderr = result
+            .output
+            .get("stderr")
+            .and_then(Value::as_str)
+            .unwrap_or("");
         return format!(
             "Tool `{}` timed out after execution limit (exit code 124).\nCaptured stdout:\n```\n{stdout}\n```\nCaptured stderr:\n```\n{stderr}\n```\n\nAUTONOMOUS RECOVERY DIRECTIVE: Do not give up or abandon the task! The command took longer than the foreground timeout. Check if partial files were written to disk, check running processes, or adapt your approach (e.g. background the process, run sub-commands, or use compression). Continue your task now.",
             result.skill_id
