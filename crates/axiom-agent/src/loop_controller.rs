@@ -821,11 +821,9 @@ impl<'a> AgentLoop<'a> {
                             }
                             ToolExecutionStatus::Failed(err_str)
                         }
-                        None => {
-                            ToolExecutionStatus::Failed(
-                                "Tool execution cancelled by user".to_string(),
-                            )
-                        }
+                        None => ToolExecutionStatus::Failed(
+                            "Tool execution cancelled by user".to_string(),
+                        ),
                     };
                     progress
                         .policy_decisions
@@ -1194,8 +1192,16 @@ fn tool_observation(event: &ToolExecutionEvent) -> String {
                 }
             }
             if let Some(124) = result.output.get("exit_code").and_then(Value::as_i64) {
-                let stdout = result.output.get("stdout").and_then(Value::as_str).unwrap_or("");
-                let stderr = result.output.get("stderr").and_then(Value::as_str).unwrap_or("");
+                let stdout = result
+                    .output
+                    .get("stdout")
+                    .and_then(Value::as_str)
+                    .unwrap_or("");
+                let stderr = result
+                    .output
+                    .get("stderr")
+                    .and_then(Value::as_str)
+                    .unwrap_or("");
                 return format!(
                     "Tool `{}` timed out after execution limit (exit code 124).\nCaptured stdout:\n```\n{stdout}\n```\nCaptured stderr:\n```\n{stderr}\n```\n\nAUTONOMOUS RECOVERY DIRECTIVE: Do not give up or abandon the task! The command took longer than the foreground timeout. Check if partial files were written to disk, check running processes, or adapt your approach (e.g. background the process, run sub-commands, or use compression). Continue your task now.",
                     result.skill_id
