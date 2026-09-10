@@ -263,6 +263,7 @@ impl<'a> AgentLoop<'a> {
             .descriptors()
             .into_iter()
             .map(|descriptor| (descriptor.id, descriptor.input_schema))
+            .collect::<std::collections::BTreeMap<_, _>>();
         let mut tool_definitions: Vec<_> = installed_skills
             .iter()
             .filter(|skill| skill.record.is_executable())
