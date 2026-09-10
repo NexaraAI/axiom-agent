@@ -1244,14 +1244,24 @@ fn tool_observation(event: &ToolExecutionEvent) -> String {
 }
 
 fn sanitize_interrupted_content(content: &str) -> String {
-    let mut s = content.trim().to_string();
-    if let Some(period) = detect_repetition_period(&s) {
+    let mut s = content.to_string();
+    while let Some(period) = detect_repetition_period(&s) {
         let keep_len = s.len().saturating_sub(period * 2);
         let mut boundary = keep_len;
         while !s.is_char_boundary(boundary) && boundary < s.len() {
             boundary += 1;
         }
         s.truncate(boundary);
+    }
+    let mut s = s.trim().to_string();
+    while let Some(period) = detect_repetition_period(&s) {
+        let keep_len = s.len().saturating_sub(period * 2);
+        let mut boundary = keep_len;
+        while !s.is_char_boundary(boundary) && boundary < s.len() {
+            boundary += 1;
+        }
+        s.truncate(boundary);
+        s = s.trim().to_string();
     }
     if s.len() > 1500 {
         let mut boundary = 1500;
