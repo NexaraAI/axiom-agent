@@ -294,7 +294,9 @@ impl ChatStream {
             }
             if let Some(period) = detect_repetition_period(&total_reasoning) {
                 let mut keep_len = total_reasoning.len().saturating_sub(period * 2);
-                while !total_reasoning.is_char_boundary(keep_len) && keep_len < total_reasoning.len() {
+                while !total_reasoning.is_char_boundary(keep_len)
+                    && keep_len < total_reasoning.len()
+                {
                     keep_len += 1;
                 }
                 total_reasoning.truncate(keep_len);
@@ -1362,4 +1364,3 @@ mod tests {
         assert_eq!(detect_repetition_period(divider), None);
     }
 }
-

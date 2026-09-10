@@ -597,4 +597,3 @@ mod tests {
         assert_eq!(sanitize_secret(&powershell_export), single_key);
     }
 }
-
