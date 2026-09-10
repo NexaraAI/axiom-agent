@@ -264,7 +264,7 @@ pub(crate) fn sanitize_secret(secret: &str) -> String {
     let mut cleaned = s.to_string();
     loop {
         let len = cleaned.len();
-        if len >= 16 && len % 2 == 0 {
+        if len >= 16 && len.is_multiple_of(2) {
             let half = len / 2;
             if cleaned[..half] == cleaned[half..] {
                 cleaned.truncate(half);
