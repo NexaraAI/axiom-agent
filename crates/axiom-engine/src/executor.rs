@@ -1686,11 +1686,12 @@ fn file_read(
         .get("offset")
         .and_then(Value::as_u64)
         .unwrap_or(1) as usize;
-    let limit = request
+    let explicit_limit = request
         .arguments
         .get("limit")
         .and_then(Value::as_u64)
-        .unwrap_or(800) as usize;
+        .map(|v| v as usize);
+    let limit = explicit_limit.unwrap_or(if total_lines > 400 { 300 } else { 800 });
     let limit = limit.min(1000);
 
     let start_idx = (offset.saturating_sub(1)).min(total_lines);
@@ -1700,7 +1701,7 @@ fn file_read(
     let returned_lines = slice.len();
     let truncated = end_idx < total_lines || start_idx > 0;
 
-    Ok(json!({
+    let mut response = json!({
         "path": path,
         "content": selected_content,
         "bytes": metadata.len(),
@@ -1709,7 +1710,21 @@ fn file_read(
         "offset": start_idx + 1,
         "limit": limit,
         "truncated": truncated,
-    }))
+    });
+
+    if truncated {
+        if let Some(obj) = response.as_object_mut() {
+            obj.insert(
+                "hint".to_string(),
+                json!(format!(
+                    "File has {total_lines} total lines. Pass offset={} to read subsequent lines.",
+                    end_idx + 1
+                )),
+            );
+        }
+    }
+
+    Ok(response)
 }
 
 fn file_write(

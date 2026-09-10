@@ -4,6 +4,34 @@ All notable changes to Axiom are documented here. Versions follow semantic
 versioning. Stable releases document user-visible changes, configuration or
 proof migrations, security fixes, and upgrade actions.
 
+## 1.0.14
+
+This release eliminates OpenCode credential corruption through automatic self-healing, halts generative repetition loops in streaming responses, implements strict prompt prefix stability for prompt caching, and introduces smart file reading to eliminate baseline context bloat.
+
+Install it:
+
+```bash
+npm install -g axiom-agent@1.0.14
+```
+
+### New Features & Resiliency Improvements
+
+- **Credential Self-Healing & OpenCode 401 Resolution**:
+  - Added `sanitize_secret` to detect accidental double-pasting in masked terminal prompts (`key + key`), duplicate prefixes (`sk-`, `nvapi-`, `gsk_`), surrounding quotes, and shell export syntax.
+  - Implemented automatic keychain self-healing: upon resolving credentials from the OS Credential Manager (WinCred) or local fallback store, Axiom automatically sanitizes the key and repairs the stored entry in the background.
+- **Real-Time Streaming Repetition Loop Guard**:
+  - Implemented a sliding window repetition detector in `axiom-llm` streaming that intercepts autoregressive runaway loops (3+ repetitions of 30+ byte diverse blocks).
+  - Automatically truncates duplicate cycles and cleanly terminates the stream, preventing 100,000+ token runaway bills.
+- **Session History Poisoning Protection on Cancellation**:
+  - Interrupted runs (Ctrl+C / cancellation) now sanitize partial stream accumulator output and truncate to 1,500 characters before saving to session history, keeping context clean for subsequent turns.
+- **Prompt Caching & Context Bloat Optimization**:
+  - Unified identity, skill context, and plan mode directives into a single canonical system message to preserve prompt cache prefix stability across multi-turn chats.
+  - Deterministically sorted `tool_definitions` by name and `skill_cards` by ID.
+  - Added OpenRouter app attribution and prompt caching headers (`HTTP-Referer: https://axiom.nexara.ai`, `X-Title: Axiom Agent`).
+  - Added smart pagination in `file_read`: large files (>400 lines) default to 300 lines with explicit pagination hints.
+- **Codex CLI Architectural Inspirations**:
+  - Added action-driven preambles (1-2 sentence updates with immediate tool invocation) and strict `No Tool Output Simulation` directives forbidding synthetic tool JSON blocks.
+
 ## 1.0.13
 
 This release resolves OpenRouter reasoning compatibility, adds live tool execution spinners, protects against infinite verification loops, and provides autonomous recovery from command timeouts and declined approvals.

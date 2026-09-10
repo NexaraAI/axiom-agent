@@ -7,7 +7,10 @@ use axiom_engine::{
     InstalledSkill, RecordingSideEffectAuditSink, SideEffectDecision, SideEffectPolicy,
     SkillApproval, SkillExecutionContext, SkillExecutionError, SkillExecutionResult, ToolRequest,
 };
-use axiom_llm::{ChatMessage, ChatRequest, ChatStreamUpdate, ChatToolDefinition, LlmProvider};
+use axiom_llm::{
+    detect_repetition_period, ChatMessage, ChatRequest, ChatStreamUpdate, ChatToolDefinition,
+    LlmProvider,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -260,7 +263,23 @@ impl<'a> AgentLoop<'a> {
             .descriptors()
             .into_iter()
             .map(|descriptor| (descriptor.id, descriptor.input_schema))
-            .collect::<std::collections::BTreeMap<_, _>>();
+        let mut tool_definitions: Vec<_> = installed_skills
+            .iter()
+            .filter(|skill| skill.record.is_executable())
+            .filter(|skill| skill.manifest.skill_type == axiom_engine::SkillType::Tool)
+            .filter_map(|skill| {
+                executor_schemas
+                    .get(&skill.manifest.id)
+                    .cloned()
+                    .map(|input_schema| ChatToolDefinition {
+                        name: native_tool_name(&skill.manifest.id),
+                        description: skill.manifest.description.clone(),
+                        parameters: input_schema,
+                    })
+            })
+            .collect();
+        tool_definitions.sort_by(|a, b| a.name.cmp(&b.name));
+
         Self {
             provider,
             model: model.into(),
@@ -274,21 +293,7 @@ impl<'a> AgentLoop<'a> {
             todo: TodoList::default(),
             temperature: Some(0.7),
             max_response_tokens: None,
-            tool_definitions: installed_skills
-                .iter()
-                .filter(|skill| skill.record.is_executable())
-                .filter(|skill| skill.manifest.skill_type == axiom_engine::SkillType::Tool)
-                .filter_map(|skill| {
-                    executor_schemas
-                        .get(&skill.manifest.id)
-                        .cloned()
-                        .map(|input_schema| ChatToolDefinition {
-                            name: native_tool_name(&skill.manifest.id),
-                            description: skill.manifest.description.clone(),
-                            parameters: input_schema,
-                        })
-                })
-                .collect(),
+            tool_definitions,
             pricing: UsagePricing::default(),
             streaming: false,
             cancellation: CancellationToken::new(),
@@ -498,12 +503,13 @@ impl<'a> AgentLoop<'a> {
                         .map(|guard| guard.clone())
                         .unwrap_or_default();
                     if !partial_str.trim().is_empty() {
-                        progress.partial = partial_str.clone();
+                        let cleaned = sanitize_interrupted_content(&partial_str);
+                        progress.partial = cleaned.clone();
                         progress.history_delta.push(ChatMessage {
                             role: "assistant".to_string(),
                             content: format!(
                                 "{}\n\n[Response interrupted by user]",
-                                partial_str.trim_end()
+                                cleaned.trim_end()
                             ),
                         });
                     }
@@ -1234,6 +1240,27 @@ fn tool_observation(event: &ToolExecutionEvent) -> String {
             }
         }
     }
+}
+
+fn sanitize_interrupted_content(content: &str) -> String {
+    let mut s = content.trim().to_string();
+    if let Some(period) = detect_repetition_period(&s) {
+        let keep_len = s.len().saturating_sub(period * 2);
+        let mut boundary = keep_len;
+        while !s.is_char_boundary(boundary) && boundary < s.len() {
+            boundary += 1;
+        }
+        s.truncate(boundary);
+    }
+    if s.len() > 1500 {
+        let mut boundary = 1500;
+        while !s.is_char_boundary(boundary) && boundary > 0 {
+            boundary -= 1;
+        }
+        s.truncate(boundary);
+        s.push_str("\n... [Output truncated on interruption]");
+    }
+    s
 }
 
 #[cfg(test)]
@@ -1974,4 +2001,18 @@ min_axiom_version = "0.1.0"
         assert!(obs.contains("was declined by user approval"));
         assert!(obs.contains("AUTONOMOUS RECOVERY DIRECTIVE: Do not give up. Select an alternative non-destructive approach"));
     }
+
+    #[test]
+    fn sanitize_interrupted_content_truncates_repetitive_and_huge_text() {
+        let pattern = "Both servers are launching. Let me verify they're actually up by checking the ports.\n";
+        let repetitive_text = format!("{pattern}{pattern}{pattern}");
+        let sanitized = sanitize_interrupted_content(&repetitive_text);
+        assert_eq!(sanitized, pattern.trim());
+
+        let huge = "A".repeat(3000);
+        let sanitized_huge = sanitize_interrupted_content(&huge);
+        assert!(sanitized_huge.len() < 1600);
+        assert!(sanitized_huge.ends_with("[Output truncated on interruption]"));
+    }
 }
+

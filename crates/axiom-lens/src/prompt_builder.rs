@@ -30,7 +30,10 @@ Write or update files one by one so each file is verified and saved properly int
 Available skill cards:\n",
     );
 
-    for (index, card) in cards.iter().enumerate() {
+    let mut sorted_cards = cards.to_vec();
+    sorted_cards.sort_by(|a, b| a.id.cmp(&b.id));
+
+    for (index, card) in sorted_cards.iter().enumerate() {
         message.push_str(&format!(
             "{}. {}\nSummary: {}\nInput: {}\nOutput: {}\nRisk: {}\n",
             index + 1,

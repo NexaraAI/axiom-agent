@@ -283,6 +283,23 @@ impl ChatStream {
             if let Some(chunk_model) = chunk.model {
                 model = Some(chunk_model);
             }
+
+            if let Some(period) = detect_repetition_period(&content) {
+                let mut keep_len = content.len().saturating_sub(period * 2);
+                while !content.is_char_boundary(keep_len) && keep_len < content.len() {
+                    keep_len += 1;
+                }
+                content.truncate(keep_len);
+                break;
+            }
+            if let Some(period) = detect_repetition_period(&total_reasoning) {
+                let mut keep_len = total_reasoning.len().saturating_sub(period * 2);
+                while !total_reasoning.is_char_boundary(keep_len) && keep_len < total_reasoning.len() {
+                    keep_len += 1;
+                }
+                total_reasoning.truncate(keep_len);
+                break;
+            }
         }
         let final_projected = projector.finish();
         let last_tool_name = tool_calls.values().last().map(|p| p.name.clone());
@@ -347,6 +364,41 @@ impl ChatStream {
             tool_calls,
         })
     }
+}
+
+/// Detects if the trailing text contains a degenerative loop of 3 or more identical cycles
+/// of length >= 30 bytes with substantive diversity (>= 6 distinct bytes, >= 10 alphanumeric).
+/// Returns Some(period) if a degenerative repetition cycle is detected.
+pub fn detect_repetition_period(text: &str) -> Option<usize> {
+    let bytes = text.as_bytes();
+    let len = bytes.len();
+    if len < 90 {
+        return None;
+    }
+    let max_m = std::cmp::min(2500, len / 3);
+    for m in (30..=max_m).rev() {
+        let s1 = &bytes[len - m..len];
+        let s2 = &bytes[len - 2 * m..len - m];
+        let s3 = &bytes[len - 3 * m..len - 2 * m];
+        if s1 == s2 && s2 == s3 {
+            let mut seen = [false; 256];
+            let mut distinct = 0;
+            let mut alnum = 0;
+            for &b in s1 {
+                if !seen[b as usize] {
+                    seen[b as usize] = true;
+                    distinct += 1;
+                }
+                if b.is_ascii_alphanumeric() {
+                    alnum += 1;
+                }
+            }
+            if distinct >= 6 && alnum >= 10 {
+                return Some(m);
+            }
+        }
+    }
+    None
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -1297,4 +1349,17 @@ mod tests {
             let _ = parse_sse_event("corpus", &event);
         }
     }
+
+    #[test]
+    fn detects_degenerative_repetition_loops_and_truncates() {
+        let pattern = "Both servers are launching. Let me verify they're actually up by checking the ports.\n";
+        let repetitive_text = format!("Prefix text.\n{pattern}{pattern}{pattern}");
+        let detected = detect_repetition_period(&repetitive_text);
+        assert_eq!(detected, Some(pattern.len()));
+
+        // Non-degenerative uniform characters should NOT trigger false positive
+        let divider = "----------------------------------------------------------------------------------------------------";
+        assert_eq!(detect_repetition_period(divider), None);
+    }
 }
+

@@ -14,7 +14,9 @@ pub use provider::{
     ollama_cloud_provider, validate_credential_env_name, validate_provider_endpoint, LlmError,
     LlmProvider, Result, OLLAMA_CLOUD_API_KEY_ENV, OLLAMA_CLOUD_BASE_URL, OLLAMA_CLOUD_MODELS,
 };
-pub use streaming::{ChatChunk, ChatStream, ChatStreamUpdate, ChatToolCallDelta};
+pub use streaming::{
+    detect_repetition_period, ChatChunk, ChatStream, ChatStreamUpdate, ChatToolCallDelta,
+};
 pub use types::{
     ChatMessage, ChatRequest, ChatResponse, ChatToolCall, ChatToolDefinition, ModelInfo, TokenUsage,
 };

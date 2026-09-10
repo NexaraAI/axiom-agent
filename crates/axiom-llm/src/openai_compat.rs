@@ -109,6 +109,13 @@ impl OpenAiCompatibleProvider {
             builder = builder.header("x-opencode-session", session_id);
         }
 
+        let is_openrouter = self.name.contains("openrouter") || self.base_url.contains("openrouter.ai");
+        if is_openrouter {
+            builder = builder
+                .header("HTTP-Referer", "https://axiom.nexara.ai")
+                .header("X-Title", "Axiom Agent");
+        }
+
         self.authenticate(builder)
     }
 

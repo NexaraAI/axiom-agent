@@ -242,16 +242,69 @@ pub(crate) fn prompt_for_credential(environment_variable: &str) -> Result<bool> 
     }
 }
 
+/// Cleans, deduplicates, and sanitizes API keys and tokens.
+///
+/// Handles accidental double-pasting in masked terminal prompts (common in Windows Terminal
+/// where right-click pastes silently and users then press Ctrl+V, causing key + key),
+/// accidental shell assignment copy-pastes (`export KEY="xxx"` or `$env:KEY="xxx"`),
+/// surrounding quotes, trailing control characters, and duplicated key prefixes.
+pub(crate) fn sanitize_secret(secret: &str) -> String {
+    let mut s = secret.trim();
+
+    s = s.trim_matches(|c: char| c.is_whitespace() || c == '\0' || c == '\r' || c == '\n');
+
+    if s.starts_with("export ") || s.starts_with("set ") || s.starts_with("$env:") {
+        if let Some((_, val)) = s.split_once('=') {
+            s = val.trim();
+        }
+    }
+
+    s = s.trim_matches(|c: char| c == '"' || c == '\'');
+
+    let mut cleaned = s.to_string();
+    loop {
+        let len = cleaned.len();
+        if len >= 16 && len % 2 == 0 {
+            let half = len / 2;
+            if cleaned[..half] == cleaned[half..] {
+                cleaned.truncate(half);
+                continue;
+            }
+        }
+        break;
+    }
+
+    for prefix in &["sk-", "nvapi-", "gsk_", "AIzaSy", "xai-"] {
+        if cleaned.starts_with(prefix) {
+            let matches: Vec<usize> = cleaned.match_indices(prefix).map(|(i, _)| i).collect();
+            if matches.len() > 1 {
+                let second_idx = matches[1];
+                let first_part = &cleaned[..second_idx];
+                let second_part = &cleaned[second_idx..];
+                if first_part == second_part || second_part.starts_with(first_part) {
+                    cleaned = first_part.to_string();
+                    break;
+                }
+            }
+        }
+    }
+
+    cleaned
+}
+
 /// Stores a secret in the OS keychain when available, otherwise in the
 /// private local fallback file. Returns `true` for keychain, `false` for the
 /// local file. Pasted keys are never silently dropped.
 pub(crate) fn store_credential(environment_variable: &str, secret: &str) -> Result<bool> {
     axiom_llm::validate_credential_env_name(environment_variable)?;
-    let secret = secret.trim();
-    match OsCredentialStore.set(environment_variable, secret) {
+    let sanitized = sanitize_secret(secret);
+    if sanitized.is_empty() {
+        return Ok(false);
+    }
+    match OsCredentialStore.set(environment_variable, &sanitized) {
         Ok(()) => Ok(true),
         Err(_) => {
-            write_file_credential(environment_variable, secret)?;
+            write_file_credential(environment_variable, &sanitized)?;
             Ok(false)
         }
     }
@@ -271,15 +324,37 @@ fn resolve_single_with_store(
 ) -> Result<Option<String>> {
     axiom_llm::validate_credential_env_name(environment_variable)?;
     if let Ok(value) = std::env::var(environment_variable) {
-        if !value.trim().is_empty() {
-            return Ok(Some(value));
+        let sanitized = sanitize_secret(&value);
+        if !sanitized.is_empty() {
+            return Ok(Some(sanitized));
         }
     }
     match store.get(environment_variable) {
-        Ok(Some(secret)) => Ok(Some(secret)),
-        Ok(None) => Ok(read_file_credential(environment_variable)?),
+        Ok(Some(secret)) => {
+            let sanitized = sanitize_secret(&secret);
+            if sanitized != secret {
+                let _ = store.set(environment_variable, &sanitized);
+            }
+            Ok(Some(sanitized))
+        }
+        Ok(None) => match read_file_credential(environment_variable)? {
+            Some(secret) => {
+                let sanitized = sanitize_secret(&secret);
+                if sanitized != secret {
+                    let _ = write_file_credential(environment_variable, &sanitized);
+                }
+                Ok(Some(sanitized))
+            }
+            None => Ok(None),
+        },
         Err(keyring_error) => match read_file_credential(environment_variable)? {
-            Some(secret) => Ok(Some(secret)),
+            Some(secret) => {
+                let sanitized = sanitize_secret(&secret);
+                if sanitized != secret {
+                    let _ = write_file_credential(environment_variable, &sanitized);
+                }
+                Ok(Some(sanitized))
+            }
             None => Err(keyring_error),
         },
     }
@@ -502,4 +577,24 @@ mod tests {
         let _ = forget_credential("GMI_CLOUD_API_KEY");
         let _ = forget_credential("GMI_API_KEY");
     }
+
+    #[test]
+    fn sanitize_secret_handles_double_pasting_quotes_and_exports() {
+        let single_key = "sk-test-sample-opencode-key-1234567890abcdef";
+        let double_key = format!("{single_key}{single_key}");
+        assert_eq!(sanitize_secret(&double_key), single_key);
+
+        let quadruple_key = format!("{single_key}{single_key}{single_key}{single_key}");
+        assert_eq!(sanitize_secret(&quadruple_key), single_key);
+
+        let quoted = format!("  \"{single_key}\" \r\n");
+        assert_eq!(sanitize_secret(&quoted), single_key);
+
+        let bash_export = format!("export OPENCODE_API_KEY=\"{single_key}\"");
+        assert_eq!(sanitize_secret(&bash_export), single_key);
+
+        let powershell_export = format!("$env:OPENCODE_API_KEY='{single_key}'");
+        assert_eq!(sanitize_secret(&powershell_export), single_key);
+    }
 }
+
