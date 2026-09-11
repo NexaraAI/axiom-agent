@@ -155,6 +155,7 @@ pub(crate) enum ModelSwitchOutcome {
 }
 
 impl ModelSwitchOutcome {
+    #[allow(dead_code)]
     pub(crate) fn is_successful(&self) -> bool {
         matches!(
             self,
@@ -165,6 +166,7 @@ impl ModelSwitchOutcome {
         )
     }
 
+    #[allow(dead_code)]
     pub(crate) fn active_model(&self) -> Option<&str> {
         match self {
             Self::Switched { model }
