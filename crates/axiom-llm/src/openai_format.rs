@@ -191,13 +191,9 @@ pub fn summarize_body(body: &str) -> String {
             if let Some(msg) = err.get("message").and_then(|m| m.as_str()) {
                 let err_type = err.get("type").and_then(|t| t.as_str());
                 let code = err.get("code").and_then(|c| {
-                    if let Some(s) = c.as_str() {
-                        Some(s.to_string())
-                    } else if let Some(n) = c.as_i64() {
-                        Some(n.to_string())
-                    } else {
-                        None
-                    }
+                    c.as_str()
+                        .map(|s| s.to_string())
+                        .or_else(|| c.as_i64().map(|n| n.to_string()))
                 });
                 let mut out = msg.trim().to_string();
                 if let Some(t) = err_type {
@@ -212,7 +208,7 @@ pub fn summarize_body(body: &str) -> String {
                 }
                 return out;
             } else if let Some(msg) = err.as_str() {
-                let mut out = msg.trim().to_string();
+                let out = msg.trim().to_string();
                 if out.chars().count() > MAX_SUMMARY_CHARS {
                     let mut truncated: String = out.chars().take(MAX_SUMMARY_CHARS).collect();
                     truncated.push_str("...");
@@ -222,7 +218,7 @@ pub fn summarize_body(body: &str) -> String {
             }
         }
         if let Some(msg) = val.get("message").and_then(|m| m.as_str()) {
-            let mut out = msg.trim().to_string();
+            let out = msg.trim().to_string();
             if out.chars().count() > MAX_SUMMARY_CHARS {
                 let mut truncated: String = out.chars().take(MAX_SUMMARY_CHARS).collect();
                 truncated.push_str("...");
