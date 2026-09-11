@@ -4,6 +4,28 @@ All notable changes to Axiom are documented here. Versions follow semantic
 versioning. Stable releases document user-visible changes, configuration or
 proof migrations, security fixes, and upgrade actions.
 
+## 1.0.16
+
+This release adds a comprehensive suite of POSIX and Unix utility shims to Windows PowerShell executions, enabling models to use `sleep` (supporting fractional and suffixed durations like `2s` or `100ms`), pipeline and file-based `grep`, `head`, `tail`, `touch`, `export`, `unset`, `which`, `pkill`, `killall`, and port-inspecting `lsof`.
+
+Install it:
+
+```bash
+npm install -g axiom-agent@1.0.16
+```
+
+### New Features & Windows Utility Shims
+
+- **Comprehensive POSIX & Shell Compatibility Shims**:
+  - **`sleep`**: Injected custom PowerShell `sleep` function replacing the default `Start-Sleep` alias, with support for unit suffixes (`sleep 2s`, `sleep 500ms`, `sleep 1m`) and floating-point seconds (`sleep 0.5`).
+  - **`grep`**: Upgraded `grep` to support both pipeline input (`ps | grep vite`, `cat foo | grep bar`) and direct file arguments (`grep 'pattern' file.txt`), with support for `-v` (`--invert-match`) and graceful absorption of common flags (`-i`, `-n`, `-E`).
+  - **`head` & `tail`**: Fully support line limits with `-n <N>`, `-<N>`, pipeline streaming, and direct file arguments (`head -n 5 file.txt`, `tail -20 file.txt`).
+  - **`touch`**: Creates new files if absent or updates timestamps if present (`touch app.js`).
+  - **`export` & `unset`**: Sets and unsets process environment variables using standard shell syntax (`export PORT=3000`, `unset PORT`).
+  - **`which`**: Locates executables, aliases, and system commands via `Get-Command`.
+  - **`pkill` & `killall`**: Terminates background or rogue dev processes cleanly by process name.
+  - **`lsof`**: Inspects active TCP listening sockets and port bindings (`lsof -i :5173`, `lsof -i:3000`), returning the local address, state, and owning PID.
+
 ## 1.0.15
 
 This release introduces catalog-aware model resolution and suggestion for `/model`, automatic PowerShell syntax normalization (`&&` to `;`) with POSIX utility shims on Windows, OS-targeted shell tool selection, synthetic `<tool_call>` tag suppression, and humanized provider error formatting.

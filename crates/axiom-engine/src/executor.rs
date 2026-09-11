@@ -3106,6 +3106,67 @@ pub(crate) fn normalize_powershell_command(command: &str) -> String {
     result
 }
 
+pub(crate) const POWERSHELL_COMPAT_BOOTSTRAP: &str = concat!(
+    "if (Test-Path alias:curl) { Remove-Item alias:curl -Force -ErrorAction SilentlyContinue }; ",
+    "if (Test-Path alias:wget) { Remove-Item alias:wget -Force -ErrorAction SilentlyContinue }; ",
+    "if (Test-Path alias:sleep) { Remove-Item alias:sleep -Force -ErrorAction SilentlyContinue }; ",
+    "function sleep { $d = if ($args.Count -gt 0) { [string]$args[0] } else { '1' }; ",
+    "if ($d -match '^[0-9.]+(s|sec)?$') { ",
+    "[System.Threading.Thread]::Sleep([int]([double]($d -replace '[^0-9.]','') * 1000)) ",
+    "} elseif ($d -match '^[0-9.]+ms$') { ",
+    "[System.Threading.Thread]::Sleep([int][double]($d -replace '[^0-9.]','')) ",
+    "} elseif ($d -match '^[0-9.]+m(in)?$') { ",
+    "[System.Threading.Thread]::Sleep([int]([double]($d -replace '[^0-9.]','') * 60000)) ",
+    "} else { Start-Sleep -Seconds ([int]$d) } }; ",
+    "function grep { $pattern = $null; $files = @(); $invert = $false; ",
+    "for ($i = 0; $i -lt $args.Count; $i++) { $a = $args[$i]; ",
+    "if ($a -eq '-v' -or $a -eq '--invert-match') { $invert = $true } ",
+    "elseif ($a -like '-*') { } elseif ($null -eq $pattern) { $pattern = $a } ",
+    "else { $files += $a } }; if ($null -eq $pattern) { return }; ",
+    "$p = @{ Pattern = $pattern }; if ($invert) { $p['NotMatch'] = $true }; ",
+    "if ($MyInvocation.ExpectingInput) { ",
+    "$input | Select-String @p | ForEach-Object { $_.Line } ",
+    "} elseif ($files.Count -gt 0) { ",
+    "Select-String @p -Path $files | ForEach-Object { $_.Line } } }; ",
+    "function head { $n = 10; $file = $null; ",
+    "for ($i = 0; $i -lt $args.Count; $i++) { ",
+    "if ($args[$i] -match '^-[0-9]+$') { $n = [int]($args[$i].Substring(1)) } ",
+    "elseif ($args[$i] -eq '-n' -and $i + 1 -lt $args.Count) { $n = [int]$args[++$i] } ",
+    "elseif (Test-Path $args[$i]) { $file = $args[$i] } }; ",
+    "if ($file) { Get-Content $file | Select-Object -First $n } ",
+    "else { $input | Select-Object -First $n } }; ",
+    "function tail { $n = 10; $file = $null; ",
+    "for ($i = 0; $i -lt $args.Count; $i++) { ",
+    "if ($args[$i] -match '^-[0-9]+$') { $n = [int]($args[$i].Substring(1)) } ",
+    "elseif ($args[$i] -eq '-n' -and $i + 1 -lt $args.Count) { $n = [int]$args[++$i] } ",
+    "elseif (Test-Path $args[$i]) { $file = $args[$i] } }; ",
+    "if ($file) { Get-Content $file | Select-Object -Last $n } ",
+    "else { $input | Select-Object -Last $n } }; ",
+    "function touch { foreach ($f in $args) { ",
+    "if (Test-Path $f) { (Get-Item $f).LastWriteTime = Get-Date } ",
+    "else { $null = New-Item -ItemType File -Path $f -Force } } }; ",
+    "function export { foreach ($a in $args) { $parts = $a -split '=', 2; ",
+    "if ($parts.Count -eq 2) { ",
+    "[System.Environment]::SetEnvironmentVariable($parts[0], $parts[1], 'Process') } } }; ",
+    "function unset { foreach ($a in $args) { ",
+    "[System.Environment]::SetEnvironmentVariable($a, $null, 'Process') } }; ",
+    "function which { foreach ($a in $args) { ",
+    "$cmd = Get-Command -Name $a -ErrorAction SilentlyContinue; ",
+    "if ($cmd.Source) { $cmd.Source } elseif ($cmd.Path) { $cmd.Path } ",
+    "elseif ($cmd) { $cmd.Definition } } }; ",
+    "function pkill { param([string]$name) ",
+    "Stop-Process -Name $name -Force -ErrorAction SilentlyContinue }; ",
+    "function killall { param([string]$name) ",
+    "Stop-Process -Name $name -Force -ErrorAction SilentlyContinue }; ",
+    "function lsof { $port = $null; for ($i = 0; $i -lt $args.Count; $i++) { ",
+    "if ($args[$i] -match ':(\\d+)') { $port = [int]$Matches[1] } ",
+    "elseif ($args[$i] -match '^\\d+$') { $port = [int]$args[$i] } }; ",
+    "if ($port) { Get-NetTCPConnection -LocalPort $port -ErrorAction SilentlyContinue ",
+    "| Select-Object LocalAddress, LocalPort, State, OwningProcess } ",
+    "else { Get-NetTCPConnection -ErrorAction SilentlyContinue ",
+    "| Select-Object -First 10 LocalAddress, LocalPort, State, OwningProcess } };"
+);
+
 fn create_shell_command(
     skill_id: &str,
     command: &str,
@@ -3114,8 +3175,7 @@ fn create_shell_command(
 ) -> Command {
     let mut cmd = if cfg!(windows) {
         let normalized = normalize_powershell_command(command);
-        let bootstrap = "if (Test-Path alias:curl) { Remove-Item alias:curl -Force -ErrorAction SilentlyContinue }; if (Test-Path alias:wget) { Remove-Item alias:wget -Force -ErrorAction SilentlyContinue }; function grep { $input | Select-String $args }; function head { param([int]$n=10) $input | Select-Object -First $n }; function which { (Get-Command -Name $args[0] -ErrorAction SilentlyContinue).Source };";
-        let full_script = format!("{bootstrap}\n{normalized}");
+        let full_script = format!("{POWERSHELL_COMPAT_BOOTSTRAP}\n{normalized}");
         let mut c = Command::new("powershell.exe");
         c.arg("-NoProfile")
             .arg("-NonInteractive")
@@ -5344,5 +5404,23 @@ min_axiom_version = "0.1.0"
             normalize_powershell_command("echo \"hello && world\" || exit 1"),
             "echo \"hello && world\" ; exit 1"
         );
+    }
+
+    #[test]
+    fn powershell_bootstrap_defines_essential_shims() {
+        assert!(POWERSHELL_COMPAT_BOOTSTRAP.contains("function sleep"));
+        assert!(POWERSHELL_COMPAT_BOOTSTRAP.contains("function grep"));
+        assert!(POWERSHELL_COMPAT_BOOTSTRAP.contains("function head"));
+        assert!(POWERSHELL_COMPAT_BOOTSTRAP.contains("function tail"));
+        assert!(POWERSHELL_COMPAT_BOOTSTRAP.contains("function touch"));
+        assert!(POWERSHELL_COMPAT_BOOTSTRAP.contains("function export"));
+        assert!(POWERSHELL_COMPAT_BOOTSTRAP.contains("function unset"));
+        assert!(POWERSHELL_COMPAT_BOOTSTRAP.contains("function which"));
+        assert!(POWERSHELL_COMPAT_BOOTSTRAP.contains("function pkill"));
+        assert!(POWERSHELL_COMPAT_BOOTSTRAP.contains("function killall"));
+        assert!(POWERSHELL_COMPAT_BOOTSTRAP.contains("function lsof"));
+        assert!(POWERSHELL_COMPAT_BOOTSTRAP.contains("Remove-Item alias:curl"));
+        assert!(POWERSHELL_COMPAT_BOOTSTRAP.contains("Remove-Item alias:wget"));
+        assert!(POWERSHELL_COMPAT_BOOTSTRAP.contains("Remove-Item alias:sleep"));
     }
 }
