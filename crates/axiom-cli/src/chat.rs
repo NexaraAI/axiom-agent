@@ -128,6 +128,88 @@ impl VariantSwitchResult {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ModelSwitchOutcome {
+    Switched {
+        model: String,
+    },
+    ForceSwitched {
+        model: String,
+    },
+    ResolvedAndSwitched {
+        original: String,
+        resolved: String,
+    },
+    Ambiguous {
+        query: String,
+        provider: String,
+        matches: Vec<String>,
+    },
+    NotFound {
+        query: String,
+        provider: String,
+    },
+    CatalogUnreachable {
+        model: String,
+    },
+}
+
+impl ModelSwitchOutcome {
+    pub(crate) fn is_successful(&self) -> bool {
+        matches!(
+            self,
+            Self::Switched { .. }
+                | Self::ForceSwitched { .. }
+                | Self::ResolvedAndSwitched { .. }
+                | Self::CatalogUnreachable { .. }
+        )
+    }
+
+    pub(crate) fn active_model(&self) -> Option<&str> {
+        match self {
+            Self::Switched { model }
+            | Self::ForceSwitched { model }
+            | Self::ResolvedAndSwitched {
+                resolved: model, ..
+            }
+            | Self::CatalogUnreachable { model } => Some(model.as_str()),
+            Self::Ambiguous { .. } | Self::NotFound { .. } => None,
+        }
+    }
+
+    pub(crate) fn display_message(&self) -> String {
+        match self {
+            Self::Switched { model } => format!("Model switched to {model}."),
+            Self::ForceSwitched { model } => {
+                format!("Model force-switched to {model} (catalog validation bypassed).")
+            }
+            Self::ResolvedAndSwitched { original, resolved } => {
+                format!("Resolved '{original}' to '{resolved}'. Model switched to {resolved}.")
+            }
+            Self::Ambiguous {
+                query,
+                provider,
+                matches,
+            } => {
+                format!(
+                    "'{query}' is not an exact model ID for {provider}. Did you mean one of these?\n- {}\nSwitch with: /model <exact-id> (or /model force {query} to switch anyway)",
+                    matches.join("\n- ")
+                )
+            }
+            Self::NotFound { query, provider } => {
+                format!(
+                    "'{query}' was not found in the {provider} catalog.\nUse `/models` to view available models, or `/model force {query}` to switch anyway."
+                )
+            }
+            Self::CatalogUnreachable { model } => {
+                format!(
+                    "Model switched to {model} (catalog unreachable, ID not verified — /models to confirm)."
+                )
+            }
+        }
+    }
+}
+
 impl ChatSession {
     pub(crate) fn load(config_path: impl AsRef<Path>) -> Result<Self> {
         let config_path = config_path.as_ref().to_path_buf();
@@ -583,6 +665,78 @@ impl ChatSession {
         }
         self.save_config()?;
         Ok(model)
+    }
+
+    pub(crate) async fn resolve_and_switch_model(
+        &mut self,
+        model_query: &str,
+        force: bool,
+    ) -> Result<ModelSwitchOutcome> {
+        let query = model_query.trim();
+        if query.is_empty() {
+            return Err(anyhow!("model name cannot be empty"));
+        }
+
+        let provider = match self.active_provider() {
+            Some(p) => p.to_string(),
+            None => return Err(anyhow!("no active provider configured")),
+        };
+
+        if force {
+            let active = self.set_model(query)?;
+            self.persist_session()?;
+            return Ok(ModelSwitchOutcome::ForceSwitched { model: active });
+        }
+
+        match self.available_models(&provider).await {
+            Ok(models) if models.is_empty() => {
+                let active = self.set_model(query)?;
+                self.persist_session()?;
+                Ok(ModelSwitchOutcome::CatalogUnreachable { model: active })
+            }
+            Ok(models) => {
+                if let Some(exact) = models.iter().find(|m| m.id.eq_ignore_ascii_case(query)) {
+                    let active = self.set_model(&exact.id)?;
+                    self.persist_session()?;
+                    return Ok(ModelSwitchOutcome::Switched { model: active });
+                }
+
+                let query_lower = query.to_ascii_lowercase();
+                let mut matches: Vec<String> = models
+                    .iter()
+                    .map(|m| m.id.clone())
+                    .filter(|id| id.to_ascii_lowercase().contains(&query_lower))
+                    .collect();
+                matches.sort();
+
+                if matches.len() == 1 {
+                    let resolved = matches.remove(0);
+                    let active = self.set_model(&resolved)?;
+                    self.persist_session()?;
+                    Ok(ModelSwitchOutcome::ResolvedAndSwitched {
+                        original: query.to_string(),
+                        resolved: active,
+                    })
+                } else if !matches.is_empty() {
+                    matches.truncate(8);
+                    Ok(ModelSwitchOutcome::Ambiguous {
+                        query: query.to_string(),
+                        provider,
+                        matches,
+                    })
+                } else {
+                    Ok(ModelSwitchOutcome::NotFound {
+                        query: query.to_string(),
+                        provider,
+                    })
+                }
+            }
+            Err(_) => {
+                let active = self.set_model(query)?;
+                self.persist_session()?;
+                Ok(ModelSwitchOutcome::CatalogUnreachable { model: active })
+            }
+        }
     }
 
     pub(crate) fn set_provider(&mut self, provider_name: impl Into<String>) -> Result<String> {
@@ -5064,20 +5218,30 @@ async fn handle_chat_command(session: &mut ChatSession, input: &str) -> Result<C
             Ok(CommandResult::Continue)
         }
         _ if input.starts_with("/model use ")
+            || input.starts_with("/model force ")
             || (input.starts_with("/model ")
                 && !input.starts_with("/model list")
                 && !input.starts_with("/model current")) =>
         {
-            let model = if let Some(m) = input.strip_prefix("/model use ") {
-                m.trim()
-            } else {
-                input.trim_start_matches("/model ").trim()
-            };
-            match session.set_model(model) {
-                Ok(model) => {
-                    session.persist_session()?;
-                    println!("Model switched to {model}.")
+            let (force, model) = if let Some(m) = input.strip_prefix("/model force ") {
+                (true, m.trim())
+            } else if let Some(m) = input.strip_prefix("/model use ") {
+                if let Some(m2) = m.strip_suffix("--force") {
+                    (true, m2.trim())
+                } else {
+                    (false, m.trim())
                 }
+            } else {
+                let m = input.trim_start_matches("/model ").trim();
+                if let Some(m2) = m.strip_suffix("--force") {
+                    (true, m2.trim())
+                } else {
+                    (false, m)
+                }
+            };
+
+            match session.resolve_and_switch_model(model, force).await {
+                Ok(outcome) => println!("{}", outcome.display_message()),
                 Err(error) => println!("Model switch failed: {error}"),
             }
             Ok(CommandResult::Continue)
@@ -6481,5 +6645,54 @@ mod tests {
             .expect("system time")
             .as_nanos();
         std::env::temp_dir().join(format!("axiom-cli-chat-test-{nanos}-{count}"))
+    }
+
+    #[test]
+    fn model_switch_outcome_messages_are_informative() {
+        let switched = ModelSwitchOutcome::Switched {
+            model: "nemotron-3.5-lightning-free".to_string(),
+        };
+        assert_eq!(
+            switched.display_message(),
+            "Model switched to nemotron-3.5-lightning-free."
+        );
+
+        let resolved = ModelSwitchOutcome::ResolvedAndSwitched {
+            original: "lightning".to_string(),
+            resolved: "nemotron-3.5-lightning-free".to_string(),
+        };
+        assert_eq!(
+            resolved.display_message(),
+            "Resolved 'lightning' to 'nemotron-3.5-lightning-free'. Model switched to nemotron-3.5-lightning-free."
+        );
+
+        let ambiguous = ModelSwitchOutcome::Ambiguous {
+            query: "nemo".to_string(),
+            provider: "opencode".to_string(),
+            matches: vec![
+                "nemotron-3-ultra-free".to_string(),
+                "nemotron-3.5-lightning-free".to_string(),
+            ],
+        };
+        let msg = ambiguous.display_message();
+        assert!(msg.contains("'nemo' is not an exact model ID for opencode. Did you mean one of these?"));
+        assert!(msg.contains("- nemotron-3-ultra-free"));
+        assert!(msg.contains("- nemotron-3.5-lightning-free"));
+
+        let not_found = ModelSwitchOutcome::NotFound {
+            query: "unknown-xyz".to_string(),
+            provider: "opencode".to_string(),
+        };
+        assert!(not_found
+            .display_message()
+            .contains("'unknown-xyz' was not found in the opencode catalog."));
+
+        let force = ModelSwitchOutcome::ForceSwitched {
+            model: "my-custom-model".to_string(),
+        };
+        assert_eq!(
+            force.display_message(),
+            "Model force-switched to my-custom-model (catalog validation bypassed)."
+        );
     }
 }

@@ -4,6 +4,33 @@ All notable changes to Axiom are documented here. Versions follow semantic
 versioning. Stable releases document user-visible changes, configuration or
 proof migrations, security fixes, and upgrade actions.
 
+## 1.0.15
+
+This release introduces catalog-aware model resolution and suggestion for `/model`, automatic PowerShell syntax normalization (`&&` to `;`) with POSIX utility shims on Windows, OS-targeted shell tool selection, synthetic `<tool_call>` tag suppression, and humanized provider error formatting.
+
+Install it:
+
+```bash
+npm install -g axiom-agent@1.0.15
+```
+
+### New Features & Resiliency Improvements
+
+- **Intelligent Model Resolution & Catalog Validation**:
+  - `/model <query>` and `axiom model use <query>` now validate against the active provider's catalog before switching.
+  - If a model query is ambiguous (e.g. `/model nemo` or `/model muse`), Axiom presents a list of close catalog matches and keeps the existing model intact instead of switching to a non-existent ID.
+  - Automatically resolves unique matches (e.g. `/model ultra` resolves to `nemotron-3-ultra-free`).
+  - Added `/model force <id>` and `axiom model use <id> --force` to bypass validation for custom reverse proxies or unlisted models.
+- **PowerShell Command Normalization & Windows Shims**:
+  - Automatically normalizes bash-style chain operators (`&&` and `||` outside of string quotes) to `;` when invoking Windows PowerShell, eliminating `The token '&&' is not a valid statement separator in this version` errors on Windows PowerShell 5.1.
+  - Injects native compatibility shims into PowerShell executions: strips alias shadowing for `curl` and `wget` to invoke the real system binaries, and provides `grep`, `head`, and `which` helper functions.
+- **OS-Aware Shell Candidate Selection**:
+  - `axiom-lens` now strictly selects `shell.powershell.safe` on Windows for generic shell and dev-server tasks, preventing models from attempting to run bash/zsh tools on Windows hosts.
+- **Synthetic `<tool_call>` Leak Suppression**:
+  - `ControlBlockProjector` and the CLI terminal renderer now intercept and suppress raw `<tool_call>...</tool_call>` XML tags emitted in assistant prose by certain open models.
+- **Human-Readable Error Summaries**:
+  - Enhanced `summarize_body` in `axiom-llm` to parse JSON error responses from providers and format them cleanly (e.g. `Model muse is not supported (ModelError)`) rather than printing raw escaped JSON.
+
 ## 1.0.14
 
 This release eliminates OpenCode credential corruption through automatic self-healing, halts generative repetition loops in streaming responses, implements strict prompt prefix stability for prompt caching, and introduces smart file reading to eliminate baseline context bloat.

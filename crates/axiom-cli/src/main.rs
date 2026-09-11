@@ -216,6 +216,8 @@ enum ModelCommands {
         model: String,
         #[arg(long)]
         provider: Option<String>,
+        #[arg(long)]
+        force: bool,
     },
 }
 
@@ -724,15 +726,31 @@ async fn model(command: ModelCommands) -> Result<()> {
                 );
             }
         }
-        ModelCommands::Use { model, provider } => {
+        ModelCommands::Use {
+            model,
+            provider,
+            force,
+        } => {
             if let Some(provider) = provider {
                 session.set_provider(provider)?;
             }
-            let model = session.set_model(model)?;
-            println!(
-                "Model switched to {model} for {}.",
-                session.active_provider().unwrap_or("active provider")
-            );
+            match session.resolve_and_switch_model(&model, force).await? {
+                chat::ModelSwitchOutcome::Switched { model }
+                | chat::ModelSwitchOutcome::ForceSwitched { model }
+                | chat::ModelSwitchOutcome::ResolvedAndSwitched {
+                    resolved: model, ..
+                }
+                | chat::ModelSwitchOutcome::CatalogUnreachable { model } => {
+                    println!(
+                        "Model switched to {model} for {}.",
+                        session.active_provider().unwrap_or("active provider")
+                    );
+                }
+                outcome @ (chat::ModelSwitchOutcome::Ambiguous { .. }
+                | chat::ModelSwitchOutcome::NotFound { .. }) => {
+                    anyhow::bail!("{}", outcome.display_message());
+                }
+            }
         }
     }
     Ok(())

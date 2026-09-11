@@ -185,6 +185,53 @@ pub fn parse_chat_response(
 
 pub fn summarize_body(body: &str) -> String {
     const MAX_SUMMARY_CHARS: usize = 500;
+
+    if let Ok(val) = serde_json::from_str::<serde_json::Value>(body.trim()) {
+        if let Some(err) = val.get("error") {
+            if let Some(msg) = err.get("message").and_then(|m| m.as_str()) {
+                let err_type = err.get("type").and_then(|t| t.as_str());
+                let code = err.get("code").and_then(|c| {
+                    if let Some(s) = c.as_str() {
+                        Some(s.to_string())
+                    } else if let Some(n) = c.as_i64() {
+                        Some(n.to_string())
+                    } else {
+                        None
+                    }
+                });
+                let mut out = msg.trim().to_string();
+                if let Some(t) = err_type {
+                    out.push_str(&format!(" ({t})"));
+                } else if let Some(c) = code {
+                    out.push_str(&format!(" (code {c})"));
+                }
+                if out.chars().count() > MAX_SUMMARY_CHARS {
+                    let mut truncated: String = out.chars().take(MAX_SUMMARY_CHARS).collect();
+                    truncated.push_str("...");
+                    return truncated;
+                }
+                return out;
+            } else if let Some(msg) = err.as_str() {
+                let mut out = msg.trim().to_string();
+                if out.chars().count() > MAX_SUMMARY_CHARS {
+                    let mut truncated: String = out.chars().take(MAX_SUMMARY_CHARS).collect();
+                    truncated.push_str("...");
+                    return truncated;
+                }
+                return out;
+            }
+        }
+        if let Some(msg) = val.get("message").and_then(|m| m.as_str()) {
+            let mut out = msg.trim().to_string();
+            if out.chars().count() > MAX_SUMMARY_CHARS {
+                let mut truncated: String = out.chars().take(MAX_SUMMARY_CHARS).collect();
+                truncated.push_str("...");
+                return truncated;
+            }
+            return out;
+        }
+    }
+
     let mut summary = String::with_capacity(MAX_SUMMARY_CHARS + 3);
     let mut characters = 0_usize;
     let mut truncated = false;
@@ -523,5 +570,23 @@ mod tests {
 
         assert!(matches!(error, LlmError::MissingApiKeyEnv { .. }));
         assert!(error.to_string().contains(env));
+    }
+
+    #[test]
+    fn summarize_body_extracts_clean_json_error_messages() {
+        let opencode_model_err = r#"{"type":"error","error":{"type":"ModelError","message":"Model muse is not supported"}}"#;
+        assert_eq!(
+            summarize_body(opencode_model_err),
+            "Model muse is not supported (ModelError)"
+        );
+
+        let openrouter_err = r#"{"error":{"message":"Only one of \"reasoning.effort\" and \"reasoning.max_tokens\" can be specified","code":400}}"#;
+        assert_eq!(
+            summarize_body(openrouter_err),
+            r#"Only one of "reasoning.effort" and "reasoning.max_tokens" can be specified (code 400)"#
+        );
+
+        let simple_msg_err = r#"{"message":"Unauthorized access"}"#;
+        assert_eq!(summarize_body(simple_msg_err), "Unauthorized access");
     }
 }

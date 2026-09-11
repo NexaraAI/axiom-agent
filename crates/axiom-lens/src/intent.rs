@@ -257,9 +257,21 @@ pub fn analyze_intent(prompt: &str) -> IntentAnalysis {
         needs_shell = true;
         risk_level = "high".to_string();
         push_keyword(&mut keywords, "shell");
-        push_candidate(&mut candidates, "shell.powershell.safe");
-        push_candidate(&mut candidates, "shell.bash.safe");
-        push_candidate(&mut candidates, "shell.zsh.safe");
+        if cfg!(windows) {
+            push_candidate(&mut candidates, "shell.powershell.safe");
+            if lower.contains("bash") {
+                push_candidate(&mut candidates, "shell.bash.safe");
+            }
+            if lower.contains("zsh") {
+                push_candidate(&mut candidates, "shell.zsh.safe");
+            }
+        } else {
+            push_candidate(&mut candidates, "shell.bash.safe");
+            push_candidate(&mut candidates, "shell.zsh.safe");
+            if lower.contains("powershell") {
+                push_candidate(&mut candidates, "shell.powershell.safe");
+            }
+        }
     }
 
     if contains_any(

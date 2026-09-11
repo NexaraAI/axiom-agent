@@ -252,42 +252,17 @@ async fn list_models_reply(session: &ChatSession, filter: Option<&str>) -> Strin
 }
 
 async fn switch_model_reply(session: &mut ChatSession, id: &str) -> String {
-    let provider = match session.active_provider() {
-        Some(provider) => provider.to_string(),
-        None => return "No active provider. Use /provider <name> first.".to_string(),
-    };
-    match session.available_models(&provider).await {
-        Ok(models) if models.iter().any(|model| model.id == id) => match session.set_model(id) {
-            Ok(active) => format!("Model switched to {active}."),
-            Err(error) => format!("Model switch failed: {error:#}"),
-        },
-        Ok(models) => {
-            let mut close: Vec<&str> = models
-                .iter()
-                .map(|model| model.id.as_str())
-                .filter(|candidate| {
-                    candidate
-                        .to_ascii_lowercase()
-                        .contains(&id.to_ascii_lowercase())
-                })
-                .take(8)
-                .collect();
-            close.sort_unstable();
-            if close.is_empty() {
-                format!("'{id}' is not in the {provider} catalog. See /models for exact IDs.")
-            } else {
-                format!(
-                    "'{id}' is not an exact catalog ID. Did you mean one of these?\n- {}\nUse the full ID with /model.",
-                    close.join("\n- ")
-                )
-            }
-        }
-        Err(_) => match session.set_model(id) {
-            Ok(active) => format!(
-                "Model switched to {active} (catalog unreachable, ID not verified — /models to confirm)."
-            ),
-            Err(error) => format!("Model switch failed: {error:#}"),
-        },
+    let id = id.trim();
+    if id.is_empty() {
+        return session
+            .active_model()
+            .map(|active| format!("Active model: {active}"))
+            .unwrap_or_else(|| "No active model configured.".to_string());
+    }
+
+    match session.resolve_and_switch_model(id, false).await {
+        Ok(outcome) => outcome.display_message(),
+        Err(error) => format!("Model switch failed: {error:#}"),
     }
 }
 

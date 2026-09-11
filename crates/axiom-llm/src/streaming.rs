@@ -425,7 +425,7 @@ struct ControlBlockProjector {
 }
 
 impl ControlBlockProjector {
-    const HIDDEN_OPENERS: [&'static str; 2] = ["```axiom-tool", "```axiom-todo"];
+    const HIDDEN_OPENERS: [&'static str; 3] = ["```axiom-tool", "```axiom-todo", "<tool_call>"];
     const THINK_OPENERS: [&'static str; 4] = [
         "<think>",
         "Here's a thinking process:",
@@ -452,7 +452,12 @@ impl ControlBlockProjector {
                         self.mode = ProjectorMode::Normal;
                         continue;
                     }
-                    let keep = self.pending.len().min(2);
+                    if let Some(end) = self.pending.find("</tool_call>") {
+                        self.pending.drain(..end + "</tool_call>".len());
+                        self.mode = ProjectorMode::Normal;
+                        continue;
+                    }
+                    let keep = self.pending.len().min(12);
                     let discard = floor_char_boundary(&self.pending, self.pending.len() - keep);
                     self.pending.drain(..discard);
                     break;

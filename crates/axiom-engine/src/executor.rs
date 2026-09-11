@@ -3075,6 +3075,36 @@ fn spawn_stream_reader<R: Read + Send + 'static>(
     });
 }
 
+pub(crate) fn normalize_powershell_command(command: &str) -> String {
+    let mut result = String::with_capacity(command.len());
+    let mut in_single = false;
+    let mut in_double = false;
+    let chars: Vec<char> = command.chars().collect();
+    let mut i = 0;
+    while i < chars.len() {
+        let c = chars[i];
+        if c == '\'' && !in_double {
+            in_single = !in_single;
+            result.push(c);
+            i += 1;
+        } else if c == '"' && !in_single {
+            in_double = !in_double;
+            result.push(c);
+            i += 1;
+        } else if !in_single && !in_double && c == '&' && i + 1 < chars.len() && chars[i + 1] == '&' {
+            result.push(';');
+            i += 2;
+        } else if !in_single && !in_double && c == '|' && i + 1 < chars.len() && chars[i + 1] == '|' {
+            result.push(';');
+            i += 2;
+        } else {
+            result.push(c);
+            i += 1;
+        }
+    }
+    result
+}
+
 fn create_shell_command(
     skill_id: &str,
     command: &str,
@@ -3082,13 +3112,16 @@ fn create_shell_command(
     credential_env_names: &[String],
 ) -> Command {
     let mut cmd = if cfg!(windows) {
+        let normalized = normalize_powershell_command(command);
+        let bootstrap = "if (Test-Path alias:curl) { Remove-Item alias:curl -Force -ErrorAction SilentlyContinue }; if (Test-Path alias:wget) { Remove-Item alias:wget -Force -ErrorAction SilentlyContinue }; function grep { $input | Select-String $args }; function head { param([int]$n=10) $input | Select-Object -First $n }; function which { (Get-Command -Name $args[0] -ErrorAction SilentlyContinue).Source };";
+        let full_script = format!("{bootstrap}\n{normalized}");
         let mut c = Command::new("powershell.exe");
         c.arg("-NoProfile")
             .arg("-NonInteractive")
             .arg("-ExecutionPolicy")
             .arg("Bypass")
             .arg("-Command")
-            .arg(command);
+            .arg(full_script);
         c
     } else if skill_id == "shell.zsh.safe" {
         let mut c = Command::new("zsh");
@@ -5294,5 +5327,21 @@ min_axiom_version = "0.1.0"
             .and_then(Value::as_str)
             .unwrap()
             .contains("Security Inspector"));
+    }
+
+    #[test]
+    fn normalize_powershell_command_replaces_and_preserves_quotes() {
+        assert_eq!(
+            normalize_powershell_command("cd DemonZDevelopment/frontend && npm run dev"),
+            "cd DemonZDevelopment/frontend ; npm run dev"
+        );
+        assert_eq!(
+            normalize_powershell_command("git add . && git commit -m 'feat: A && B' && npm test"),
+            "git add . ; git commit -m 'feat: A && B' ; npm test"
+        );
+        assert_eq!(
+            normalize_powershell_command("echo \"hello && world\" || exit 1"),
+            "echo \"hello && world\" ; exit 1"
+        );
     }
 }

@@ -425,23 +425,27 @@ impl Renderer {
     }
 
     pub(crate) fn assistant(&self, content: &str) -> String {
-        let raw_content = content.trim();
-        let cleaned = if raw_content.contains("```axiom-tool")
-            || raw_content.contains("```axiom_tool")
-        {
-            let mut s = raw_content.to_string();
-            while let Some(start) = s.find("```axiom-tool").or_else(|| s.find("```axiom_tool")) {
-                let rest = &s[start..];
-                if let Some(end) = rest[13..].find("```") {
-                    s.replace_range(start..start + 13 + end + 3, "");
-                } else {
-                    s.truncate(start);
-                }
+        let mut cleaned = raw_content.to_string();
+        while let Some(start) = cleaned.find("```axiom-tool").or_else(|| cleaned.find("```axiom_tool")) {
+            let rest = &cleaned[start..];
+            if let Some(end) = rest[13..].find("```") {
+                cleaned.replace_range(start..start + 13 + end + 3, "");
+            } else {
+                cleaned.truncate(start);
             }
-            s.trim().to_string()
-        } else {
-            raw_content.to_string()
-        };
+        }
+        while let Some(start) = cleaned.find("<tool_call>") {
+            let rest = &cleaned[start..];
+            if let Some(end) = rest["<tool_call>".len()..].find("</tool_call>") {
+                cleaned.replace_range(
+                    start..start + "<tool_call>".len() + end + "</tool_call>".len(),
+                    "",
+                );
+            } else {
+                cleaned.truncate(start);
+            }
+        }
+        let cleaned = cleaned.trim().to_string();
 
         if cleaned.is_empty() {
             return String::new();
