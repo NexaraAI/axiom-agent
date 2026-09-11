@@ -454,9 +454,15 @@ mod tests {
     #[test]
     fn selects_shell_for_localhost_server_request() {
         let intent = analyze_intent("its created? run an local server");
-        assert!(intent
-            .candidate_skill_ids
-            .contains(&"shell.powershell.safe".to_string()));
+        if cfg!(windows) {
+            assert!(intent
+                .candidate_skill_ids
+                .contains(&"shell.powershell.safe".to_string()));
+        } else {
+            assert!(intent
+                .candidate_skill_ids
+                .contains(&"shell.bash.safe".to_string()));
+        }
     }
 
     #[test]
