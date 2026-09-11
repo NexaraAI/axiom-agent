@@ -6675,7 +6675,8 @@ mod tests {
             ],
         };
         let msg = ambiguous.display_message();
-        assert!(msg.contains("'nemo' is not an exact model ID for opencode. Did you mean one of these?"));
+        assert!(msg
+            .contains("'nemo' is not an exact model ID for opencode. Did you mean one of these?"));
         assert!(msg.contains("- nemotron-3-ultra-free"));
         assert!(msg.contains("- nemotron-3.5-lightning-free"));
 

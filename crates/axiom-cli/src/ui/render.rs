@@ -425,8 +425,11 @@ impl Renderer {
     }
 
     pub(crate) fn assistant(&self, content: &str) -> String {
-        let mut cleaned = raw_content.to_string();
-        while let Some(start) = cleaned.find("```axiom-tool").or_else(|| cleaned.find("```axiom_tool")) {
+        let mut cleaned = content.trim().to_string();
+        while let Some(start) = cleaned
+            .find("```axiom-tool")
+            .or_else(|| cleaned.find("```axiom_tool"))
+        {
             let rest = &cleaned[start..];
             if let Some(end) = rest[13..].find("```") {
                 cleaned.replace_range(start..start + 13 + end + 3, "");

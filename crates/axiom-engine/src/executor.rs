@@ -3091,10 +3091,12 @@ pub(crate) fn normalize_powershell_command(command: &str) -> String {
             in_double = !in_double;
             result.push(c);
             i += 1;
-        } else if !in_single && !in_double && c == '&' && i + 1 < chars.len() && chars[i + 1] == '&' {
+        } else if !in_single && !in_double && c == '&' && i + 1 < chars.len() && chars[i + 1] == '&'
+        {
             result.push(';');
             i += 2;
-        } else if !in_single && !in_double && c == '|' && i + 1 < chars.len() && chars[i + 1] == '|' {
+        } else if !in_single && !in_double && c == '|' && i + 1 < chars.len() && chars[i + 1] == '|'
+        {
             result.push(';');
             i += 2;
         } else {
