@@ -10,7 +10,7 @@ use std::{
 use nu_ansi_term::{Color, Style};
 use tokio::task::JoinHandle;
 
-const SPINNER_FRAMES: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+const SPINNER_FRAMES: &[&str] = &["◐", "◓", "◑", "◒"];
 
 pub(crate) struct Spinner {
     handle: Option<JoinHandle<()>>,
@@ -56,7 +56,9 @@ impl Spinner {
                     .fg(Color::Fixed(240))
                     .paint(format!("({elapsed:.1}s)"));
 
-                print!("\r\x1B[2K  {styled_frame} {styled_msg} {timer}");
+                // Erase a whole oversized previous frame first so no glyph
+                // remnants are left behind on narrow consoles, then draw.
+                print!("\r\x1B[2K\r  {styled_frame} {styled_msg} {timer}");
                 let _ = io::stdout().flush();
 
                 index = index.wrapping_add(1);
@@ -94,7 +96,10 @@ impl Spinner {
         if let Some(handle) = self.handle.take() {
             handle.abort();
         }
-        Self::clear_line();
+        if io::stdout().is_terminal() {
+            print!("\r\x1B[2K\r");
+            let _ = io::stdout().flush();
+        }
     }
 }
 

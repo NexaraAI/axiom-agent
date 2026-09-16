@@ -255,24 +255,61 @@ fn render_card(
     let border_mid = "  ├─────────────────────────────────────────────────────────────┤";
     let card_empty = pad_card_line("│", "", 58);
 
+    // A long title is truncated by display width (never byte-sliced) and, if
+    // still wider than 45 columns after truncation, wrapped onto multiple
+    // header rows instead of overflowing the card.
+    let mut header_source = title.to_string();
+    if visible_width(title) > 42 {
+        let mut acc = 0usize;
+        let mut cut = title.len();
+        for (idx, ch) in title.char_indices() {
+            if acc + visible_width(ch.to_string().as_str()) > 42 {
+                cut = idx;
+                break;
+            }
+            acc += visible_width(ch.to_string().as_str());
+        }
+        header_source = format!("{}...", &title[..cut]);
+    }
+    let mut header_lines: Vec<String> = Vec::new();
+    {
+        let mut remaining = header_source.as_str();
+        loop {
+            let mut acc = 0usize;
+            let mut cut = remaining.len();
+            for (idx, ch) in remaining.char_indices() {
+                if acc + visible_width(ch.to_string().as_str()) > 45 {
+                    cut = idx;
+                    break;
+                }
+                acc += visible_width(ch.to_string().as_str());
+            }
+            let (head, tail) = remaining.split_at(cut);
+            header_lines.push(head.trim_end().to_string());
+            remaining = tail.trim_start();
+            if remaining.is_empty() {
+                break;
+            }
+        }
+    }
+    let esc_vis = 3;
+
     let mut lines = Vec::new();
     lines.push(renderer.border(border_top));
-
-    let title_vis = visible_width(title).min(45);
-    let title_display = if visible_width(title) > 45 {
-        format!(
-            "{}...",
-            &title[..title.chars().take(42).map(|c| c.len_utf8()).sum()]
-        )
-    } else {
-        title.to_string()
-    };
-    let title_styled = renderer.bone(&title_display);
-    let esc_styled = renderer.smoke("esc");
-    let esc_vis = 3;
-    let spaces = " ".repeat(58_usize.saturating_sub(title_vis + esc_vis));
-    let header_line = format!("{title_styled}{spaces}{esc_styled}");
-    lines.push(pad_card_line(&renderer.border("│"), &header_line, 58));
+    for (h_idx, h_line) in header_lines.iter().enumerate() {
+        let h_vis = visible_width(h_line);
+        let is_last = h_idx + 1 == header_lines.len();
+        let tail = if is_last { "esc" } else { "" };
+        let tail_vis = if is_last { esc_vis } else { 0 };
+        let spaces = " ".repeat(58_usize.saturating_sub(h_vis + tail_vis));
+        let line = format!(
+            "{}{}{}",
+            renderer.bone(h_line),
+            spaces,
+            renderer.smoke(tail)
+        );
+        lines.push(pad_card_line(&renderer.border("│"), &line, 58));
+    }
     lines.push(renderer.border(border_mid));
     lines.push(renderer.border(&card_empty));
 
@@ -407,10 +444,45 @@ mod tests {
             );
             for (idx, line) in lines.iter().enumerate() {
                 let vis = visible_width(line);
-                assert_eq!(
-                    vis, 65,
-                    "Line {} for selected_idx {} has visible width {} instead of 65: '{}'",
-                    idx, selected_idx, vis, line
+                if idx == 0 || idx + 1 == lines.len() {
+                    assert_eq!(
+                        vis, 65,
+                        "Frame line {} has visible width {} instead of 65: '{}'",
+                        idx, vis, line
+                    );
+                } else {
+                    assert!(
+                        vis <= 65,
+                        "Line {} has visible width {} exceeding the 65-char frame: '{}'",
+                        idx,
+                        vis,
+                        line
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn long_titles_truncate_instead_of_overflowing_the_card() {
+        let config = AxiomConfig::default();
+        let renderer = Renderer::from_config(&config);
+        let options = vec!["option one".to_string(), "option two".to_string()];
+        let long_title =
+            "A Very Long Clarification Title That Definitely Exceeds The Card Width".to_string();
+
+        let lines = render_card(&long_title, &options, 0, true, &renderer);
+
+        for (idx, line) in lines.iter().enumerate() {
+            let vis = visible_width(line);
+            if idx == 0 || idx + 1 == lines.len() {
+                assert_eq!(vis, 65, "Frame line {} broken by long title", idx);
+            } else {
+                assert!(
+                    vis <= 65,
+                    "Line {} overflows with long title: '{}'",
+                    idx,
+                    line
                 );
             }
         }

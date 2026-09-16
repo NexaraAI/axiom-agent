@@ -53,6 +53,41 @@ Built-in executors:
 
 Axiom constrains execution to the active workspace where applicable. It blocks secret-looking paths (`.env`, private keys, `.pem`, `.key` files) by default. Medium-risk actions prompt for terminal approval unless policy allows auto execution.
 
+## Manifest hooks
+
+A manifest may declare hooks that the agent loop fires around the skill it is
+executing:
+
+```toml
+[hooks]
+pre = "hook.snapshot"         # after the call is accepted, before the skill runs
+post = "hook.lint_changed"    # after the skill succeeds
+on_error = "hook.git_restore" # after the skill fails
+```
+
+Each hook names another skill, which must be executable in the session (a `tool`
+skill backed by a registered executor); otherwise the hook is recorded as
+unavailable and the turn continues. Hooks are ordinary tools: they run through
+the same `[policy]` side-effect rules, approval hook, and Proof Mode audit as any
+other call.
+
+The hook receives the arguments of the tool that triggered it, so a post-write
+lint hook sees the path that changed. That is the whole hook contract — a hook
+skill should declare an input schema compatible with the tool it attaches to.
+
+Every guard is reported in the tool observation instead of being silently
+dropped:
+
+- **Re-entrancy** — a hook never fires hooks of its own, and a skill cannot hook
+  itself; both are recorded as `skipped_reentrancy`.
+- **Budget** — hooks share the turn's wall clock and a per-turn allowance (24 by
+  default), and each hook is capped at 30 seconds.
+- **Failure** — a failing hook is recorded for the model to see; it never fails
+  the turn.
+
+Hook results are appended to the tool result the model receives, so a failing
+`post` hook (a lint error, for example) can steer the next iteration.
+
 ## Installed Skills
 
 Axiom stores installed skills under the config directory:

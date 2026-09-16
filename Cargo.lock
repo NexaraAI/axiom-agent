@@ -209,7 +209,7 @@ checksum = "f2032f911046de80f0a198e0901378627c33f59ea0ac00e363d481118bd70a53"
 
 [[package]]
 name = "axiom-agent"
-version = "1.0.16"
+version = "1.0.17"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -223,7 +223,7 @@ dependencies = [
 
 [[package]]
 name = "axiom-cli"
-version = "1.0.16"
+version = "1.0.17"
 dependencies = [
  "anyhow",
  "axiom-agent",
@@ -232,6 +232,7 @@ dependencies = [
  "axiom-engine",
  "axiom-lens",
  "axiom-llm",
+ "axiom-mcp",
  "axiom-proof",
  "axiom-update",
  "clap",
@@ -249,11 +250,12 @@ dependencies = [
  "tokio-tungstenite",
  "toml",
  "tracing-subscriber",
+ "unicode-width",
 ]
 
 [[package]]
 name = "axiom-coder"
-version = "1.0.16"
+version = "1.0.17"
 dependencies = [
  "axiom-core",
  "serde",
@@ -264,7 +266,7 @@ dependencies = [
 
 [[package]]
 name = "axiom-core"
-version = "1.0.16"
+version = "1.0.17"
 dependencies = [
  "dirs",
  "serde",
@@ -276,7 +278,7 @@ dependencies = [
 
 [[package]]
 name = "axiom-engine"
-version = "1.0.16"
+version = "1.0.17"
 dependencies = [
  "async-trait",
  "axiom-core",
@@ -292,7 +294,7 @@ dependencies = [
 
 [[package]]
 name = "axiom-lens"
-version = "1.0.16"
+version = "1.0.17"
 dependencies = [
  "axiom-engine",
  "serde",
@@ -300,7 +302,7 @@ dependencies = [
 
 [[package]]
 name = "axiom-llm"
-version = "1.0.16"
+version = "1.0.17"
 dependencies = [
  "async-trait",
  "reqwest",
@@ -311,8 +313,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "axiom-mcp"
+version = "1.0.17"
+dependencies = [
+ "async-trait",
+ "axiom-core",
+ "axiom-engine",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+ "tokio",
+]
+
+[[package]]
 name = "axiom-proof"
-version = "1.0.16"
+version = "1.0.17"
 dependencies = [
  "axiom-core",
  "serde",
@@ -322,7 +337,7 @@ dependencies = [
 
 [[package]]
 name = "axiom-update"
-version = "1.0.16"
+version = "1.0.17"
 dependencies = [
  "axiom-core",
  "reqwest",

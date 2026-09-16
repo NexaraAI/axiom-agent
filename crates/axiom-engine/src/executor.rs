@@ -18,10 +18,10 @@ use serde_json::{json, Value};
 use thiserror::Error;
 
 use crate::{
-    check_manifest_compatibility, current_axiom_version, InstalledSkill, Permission, Platform,
-    PolicyAction, PolicyOutcome, RiskLevel, SideEffectAuditSink, SideEffectClass,
-    SideEffectDecision, SideEffectPolicy, SideEffectRequest, SkillLifecycleState, SkillType,
-    TrustLevel,
+    check_manifest_compatibility, current_axiom_version, ExternalToolSource, InstalledSkill,
+    Permission, Platform, PolicyAction, PolicyOutcome, RiskLevel, SideEffectAuditSink,
+    SideEffectClass, SideEffectDecision, SideEffectPolicy, SideEffectRequest, SkillLifecycleState,
+    SkillType, TrustLevel,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -163,6 +163,10 @@ impl ExecutorRegistry {
         registry.register(Box::new(SkillCreateExecutor));
         registry.register(Box::new(QuestionAskExecutor));
         registry.register(Box::new(TestRunExecutor));
+        registry.register(Box::new(CodeGrepExecutor));
+        registry.register(Box::new(CodeGlobExecutor));
+        registry.register(Box::new(CodeListExecutor));
+        registry.register(Box::new(FileReadManyExecutor));
         registry
     }
 
@@ -183,6 +187,268 @@ impl ExecutorRegistry {
             .values()
             .map(|executor| executor.descriptor())
             .collect()
+    }
+}
+
+struct CodeGrepExecutor;
+struct CodeGlobExecutor;
+struct CodeListExecutor;
+struct FileReadManyExecutor;
+
+#[async_trait(?Send)]
+impl SkillExecutor for CodeGrepExecutor {
+    fn id(&self) -> &'static str {
+        "code.grep"
+    }
+
+    fn descriptor(&self) -> ExecutorDescriptor {
+        ExecutorDescriptor {
+            id: self.id().to_string(),
+            input_schema: json!({
+                "type": "object",
+                "required": ["pattern"],
+                "additionalProperties": false,
+                "properties": {
+                    "pattern": {"type": "string", "minLength": 1, "description": "Literal text to search for across workspace files."},
+                    "path": {"type": "string", "description": "Workspace-relative file or directory. Defaults to the workspace root."},
+                    "glob": {"type": "string", "description": "Optional file filter glob, e.g. `**/*.rs` or `*.ts`."},
+                    "case_sensitive": {"type": "boolean"},
+                    "max_results": {"type": "integer", "minimum": 1, "maximum": 500}
+                }
+            }),
+            output_schema: json!({
+                "type": "object",
+                "required": ["pattern", "matches", "count", "truncated"]
+            }),
+            permissions: vec![Permission::FileSystemRead, Permission::ProjectScan],
+            side_effects: vec![SideEffectClass::FilesystemRead],
+            deterministic_fixture: json!({"pattern": "fn main"}),
+        }
+    }
+
+    async fn execute(
+        &self,
+        request: &ToolRequest,
+        context: &SkillExecutionContext,
+        approval: &mut dyn SkillApproval,
+    ) -> Result<Value, SkillExecutionError> {
+        let policy = SideEffectPolicy::backward_compatible(context.auto_approve_medium_risk);
+        let mut audit = crate::NoopSideEffectAuditSink;
+        self.execute_with_policy(request, context, approval, &policy, &mut audit)
+            .await
+    }
+
+    async fn execute_with_policy(
+        &self,
+        request: &ToolRequest,
+        context: &SkillExecutionContext,
+        approval: &mut dyn SkillApproval,
+        policy: &SideEffectPolicy,
+        audit: &mut dyn SideEffectAuditSink,
+    ) -> Result<Value, SkillExecutionError> {
+        let target = optional_string_arg(request, "path").unwrap_or_else(|| ".".to_string());
+        authorize_side_effect(
+            policy,
+            audit,
+            approval,
+            SideEffectRequest::new(
+                self.id(),
+                "fs.grep",
+                [SideEffectClass::FilesystemRead],
+                Some(target),
+            ),
+        )?;
+        code_grep(request, context)
+    }
+}
+
+#[async_trait(?Send)]
+impl SkillExecutor for CodeGlobExecutor {
+    fn id(&self) -> &'static str {
+        "code.glob"
+    }
+
+    fn descriptor(&self) -> ExecutorDescriptor {
+        ExecutorDescriptor {
+            id: self.id().to_string(),
+            input_schema: json!({
+                "type": "object",
+                "required": ["pattern"],
+                "additionalProperties": false,
+                "properties": {
+                    "pattern": {"type": "string", "minLength": 1, "description": "Glob pattern such as `**/*.rs` or `*.toml`."},
+                    "path": {"type": "string", "description": "Workspace-relative directory to search. Defaults to the workspace root."},
+                    "max_results": {"type": "integer", "minimum": 1, "maximum": 2000}
+                }
+            }),
+            output_schema: json!({
+                "type": "object",
+                "required": ["pattern", "files", "count", "truncated"]
+            }),
+            permissions: vec![Permission::FileSystemRead, Permission::ProjectScan],
+            side_effects: vec![SideEffectClass::FilesystemRead],
+            deterministic_fixture: json!({"pattern": "**/*.toml"}),
+        }
+    }
+
+    async fn execute(
+        &self,
+        request: &ToolRequest,
+        context: &SkillExecutionContext,
+        approval: &mut dyn SkillApproval,
+    ) -> Result<Value, SkillExecutionError> {
+        let policy = SideEffectPolicy::backward_compatible(context.auto_approve_medium_risk);
+        let mut audit = crate::NoopSideEffectAuditSink;
+        self.execute_with_policy(request, context, approval, &policy, &mut audit)
+            .await
+    }
+
+    async fn execute_with_policy(
+        &self,
+        request: &ToolRequest,
+        context: &SkillExecutionContext,
+        approval: &mut dyn SkillApproval,
+        policy: &SideEffectPolicy,
+        audit: &mut dyn SideEffectAuditSink,
+    ) -> Result<Value, SkillExecutionError> {
+        let target = optional_string_arg(request, "path").unwrap_or_else(|| ".".to_string());
+        authorize_side_effect(
+            policy,
+            audit,
+            approval,
+            SideEffectRequest::new(
+                self.id(),
+                "fs.glob",
+                [SideEffectClass::FilesystemRead],
+                Some(target),
+            ),
+        )?;
+        code_glob(request, context)
+    }
+}
+
+#[async_trait(?Send)]
+impl SkillExecutor for CodeListExecutor {
+    fn id(&self) -> &'static str {
+        "code.list"
+    }
+
+    fn descriptor(&self) -> ExecutorDescriptor {
+        ExecutorDescriptor {
+            id: self.id().to_string(),
+            input_schema: json!({
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "path": {"type": "string", "description": "Workspace-relative directory. Defaults to the workspace root."},
+                    "max_depth": {"type": "integer", "minimum": 0, "maximum": 32}
+                }
+            }),
+            output_schema: json!({
+                "type": "object",
+                "required": ["root", "entries", "truncated"]
+            }),
+            permissions: vec![Permission::FileSystemRead, Permission::ProjectScan],
+            side_effects: vec![SideEffectClass::FilesystemRead],
+            deterministic_fixture: json!({"path": ".", "max_depth": 2}),
+        }
+    }
+
+    async fn execute(
+        &self,
+        request: &ToolRequest,
+        context: &SkillExecutionContext,
+        approval: &mut dyn SkillApproval,
+    ) -> Result<Value, SkillExecutionError> {
+        let policy = SideEffectPolicy::backward_compatible(context.auto_approve_medium_risk);
+        let mut audit = crate::NoopSideEffectAuditSink;
+        self.execute_with_policy(request, context, approval, &policy, &mut audit)
+            .await
+    }
+
+    async fn execute_with_policy(
+        &self,
+        request: &ToolRequest,
+        context: &SkillExecutionContext,
+        approval: &mut dyn SkillApproval,
+        policy: &SideEffectPolicy,
+        audit: &mut dyn SideEffectAuditSink,
+    ) -> Result<Value, SkillExecutionError> {
+        let target = optional_string_arg(request, "path").unwrap_or_else(|| ".".to_string());
+        authorize_side_effect(
+            policy,
+            audit,
+            approval,
+            SideEffectRequest::new(
+                self.id(),
+                "fs.list",
+                [SideEffectClass::FilesystemRead],
+                Some(target),
+            ),
+        )?;
+        code_list(request, context)
+    }
+}
+
+#[async_trait(?Send)]
+impl SkillExecutor for FileReadManyExecutor {
+    fn id(&self) -> &'static str {
+        "file.read_many"
+    }
+
+    fn descriptor(&self) -> ExecutorDescriptor {
+        ExecutorDescriptor {
+            id: self.id().to_string(),
+            input_schema: json!({
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "paths": {"type": "array", "items": {"type": "string"}, "description": "Workspace-relative files to read in one bounded batch."},
+                    "glob": {"type": "string", "description": "Optional glob selecting additional files, e.g. `**/*.toml`."}
+                }
+            }),
+            output_schema: json!({
+                "type": "object",
+                "required": ["files", "count", "truncated"]
+            }),
+            permissions: vec![Permission::FileSystemRead, Permission::ProjectScan],
+            side_effects: vec![SideEffectClass::FilesystemRead],
+            deterministic_fixture: json!({"paths": ["README.md"]}),
+        }
+    }
+
+    async fn execute(
+        &self,
+        request: &ToolRequest,
+        context: &SkillExecutionContext,
+        approval: &mut dyn SkillApproval,
+    ) -> Result<Value, SkillExecutionError> {
+        let policy = SideEffectPolicy::backward_compatible(context.auto_approve_medium_risk);
+        let mut audit = crate::NoopSideEffectAuditSink;
+        self.execute_with_policy(request, context, approval, &policy, &mut audit)
+            .await
+    }
+
+    async fn execute_with_policy(
+        &self,
+        request: &ToolRequest,
+        context: &SkillExecutionContext,
+        approval: &mut dyn SkillApproval,
+        policy: &SideEffectPolicy,
+        audit: &mut dyn SideEffectAuditSink,
+    ) -> Result<Value, SkillExecutionError> {
+        authorize_side_effect(
+            policy,
+            audit,
+            approval,
+            SideEffectRequest::new(
+                self.id(),
+                "fs.read_many",
+                [SideEffectClass::FilesystemRead],
+                Some(".".to_string()),
+            ),
+        )?;
+        file_read_many(request, context)
     }
 }
 
@@ -1469,6 +1735,30 @@ pub fn builtin_installed_skill(skill_id: &str) -> Option<InstalledSkill> {
             SkillType::Prompt,
             RiskLevel::Low,
         ),
+        "code.grep" => (
+            "Search Workspace Files",
+            "Search workspace files for literal text with optional glob filters",
+            SkillType::Tool,
+            RiskLevel::Low,
+        ),
+        "code.glob" => (
+            "Find Workspace Files",
+            "Find workspace files by glob pattern such as **/*.rs",
+            SkillType::Tool,
+            RiskLevel::Low,
+        ),
+        "code.list" => (
+            "List Workspace Entries",
+            "List workspace directories and files with bounded depth",
+            SkillType::Tool,
+            RiskLevel::Low,
+        ),
+        "file.read_many" => (
+            "Read Multiple Files",
+            "Read a bounded batch of workspace files in one call",
+            SkillType::Tool,
+            RiskLevel::Low,
+        ),
         _ => return None,
     };
 
@@ -1531,13 +1821,19 @@ pub fn builtin_installed_skill(skill_id: &str) -> Option<InstalledSkill> {
     })
 }
 
-pub async fn execute_installed_tool_with_policy(
+/// Executes a tool request, resolving it against installed skills, built-in
+/// executors, and finally the optional external tool source (for example a
+/// connected MCP server). External tools receive `policy` and `audit` so they
+/// are gated by exactly the same rules as every built-in tool.
+#[allow(clippy::too_many_arguments)]
+pub async fn execute_tool_with_policy(
     request: &ToolRequest,
     installed_skills: &[InstalledSkill],
     context: &SkillExecutionContext,
     approval: &mut dyn SkillApproval,
     policy: &SideEffectPolicy,
     audit: &mut dyn SideEffectAuditSink,
+    external: Option<&dyn ExternalToolSource>,
 ) -> Result<SkillExecutionResult, SkillExecutionError> {
     let synthetic_builtin;
     let skill = match installed_skills
@@ -1552,6 +1848,9 @@ pub async fn execute_installed_tool_with_policy(
                 synthetic_builtin.as_ref().ok_or_else(|| {
                     SkillExecutionError::SkillNotInstalled(request.skill_id.clone())
                 })?
+            } else if let Some(source) = external.filter(|source| source.handles(&request.skill_id))
+            {
+                return source.call(request, context, approval, policy, audit).await;
             } else {
                 return Err(SkillExecutionError::SkillNotInstalled(
                     request.skill_id.clone(),
@@ -1620,6 +1919,26 @@ pub async fn execute_installed_tool_with_policy(
         skill_id: request.skill_id.clone(),
         output,
     })
+}
+
+pub async fn execute_installed_tool_with_policy(
+    request: &ToolRequest,
+    installed_skills: &[InstalledSkill],
+    context: &SkillExecutionContext,
+    approval: &mut dyn SkillApproval,
+    policy: &SideEffectPolicy,
+    audit: &mut dyn SideEffectAuditSink,
+) -> Result<SkillExecutionResult, SkillExecutionError> {
+    execute_tool_with_policy(
+        request,
+        installed_skills,
+        context,
+        approval,
+        policy,
+        audit,
+        None,
+    )
+    .await
 }
 
 fn validate_runtime_dependencies(
@@ -1835,27 +2154,15 @@ fn file_replace(
     }))
 }
 
-fn subagent_run(request: &ToolRequest) -> Result<Value, SkillExecutionError> {
-    let role = string_arg(request, "role")?;
-    let task = string_arg(request, "task")?;
-    let subagent_context = request
-        .arguments
-        .get("context")
-        .and_then(Value::as_str)
-        .unwrap_or("");
-
-    let summary = if subagent_context.is_empty() {
-        format!("Subagent [{role}] completed assigned task: {task}")
-    } else {
-        format!("Subagent [{role}] completed assigned task: {task} (context reviewed)")
-    };
-
-    Ok(json!({
-        "role": role,
-        "task": task,
-        "status": "completed",
-        "summary": summary,
-    }))
+fn subagent_run(_request: &ToolRequest) -> Result<Value, SkillExecutionError> {
+    // Real sub-agent delegation is orchestrated by the agent loop, which owns the
+    // provider, the capsule caps, and the cancellation token. A standalone execution
+    // cannot run a sub-agent, so it fails loudly instead of fabricating a result the
+    // model would mistake for real work.
+    Err(SkillExecutionError::UnsupportedSkill(
+        "subagent.run is orchestrated by the agent loop and cannot be executed standalone"
+            .to_string(),
+    ))
 }
 
 fn skill_create(
@@ -3797,7 +4104,10 @@ fn test_run(
     }))
 }
 
-fn validate_schema_value(value: &Value, schema: &Value) -> std::result::Result<(), String> {
+/// Validates a JSON value against the subset of JSON Schema Axiom enforces for
+/// tool inputs and outputs. External tool sources use this to gate calls with
+/// the same rules as built-in executors.
+pub fn validate_schema_value(value: &Value, schema: &Value) -> std::result::Result<(), String> {
     if let Some(expected) = schema.get("type").and_then(Value::as_str) {
         let matches = match expected {
             "object" => value.is_object(),
@@ -4153,6 +4463,400 @@ fn block_secret_path(path: impl AsRef<Path>) -> Result<(), SkillExecutionError> 
     }
 }
 
+const MAX_SEARCH_FILE_BYTES: u64 = 1_048_576;
+const DEFAULT_GREP_RESULTS: usize = 100;
+const MAX_GREP_RESULTS: usize = 500;
+const DEFAULT_GLOB_RESULTS: usize = 200;
+const MAX_GLOB_RESULTS: usize = 2000;
+const DEFAULT_LIST_ENTRIES: usize = 500;
+const MAX_LIST_ENTRIES: usize = 2000;
+const MAX_READ_MANY_FILES: usize = 25;
+const MAX_READ_MANY_TOTAL_BYTES: u64 = 1_048_576;
+
+fn collect_entries(
+    context: &SkillExecutionContext,
+    subpath: &str,
+    max_depth: usize,
+) -> Result<Vec<(String, bool)>, SkillExecutionError> {
+    let workspace = Workspace::new(&context.workspace_root)?;
+    let root = workspace.resolve_inside(subpath)?;
+    let mut entries = Vec::new();
+    collect_entries_at(&workspace, &root, &root, max_depth, 0, &mut entries)?;
+    entries.sort();
+    Ok(entries)
+}
+
+fn collect_entries_at(
+    workspace: &Workspace,
+    scan_root: &Path,
+    current: &Path,
+    max_depth: usize,
+    depth: usize,
+    entries: &mut Vec<(String, bool)>,
+) -> Result<(), SkillExecutionError> {
+    if depth > max_depth {
+        return Ok(());
+    }
+    let mut children = fs::read_dir(current)?
+        .filter_map(Result::ok)
+        .collect::<Vec<_>>();
+    children.sort_by_key(|entry| entry.file_name());
+    for entry in children {
+        let path = entry.path();
+        let name = entry.file_name().to_string_lossy().to_string();
+        let file_type = entry.file_type()?;
+        if file_type.is_dir() {
+            if ignored_dir(&name) {
+                continue;
+            }
+            workspace.resolve_inside(&path)?;
+            let relative = path
+                .strip_prefix(scan_root)
+                .unwrap_or(&path)
+                .to_string_lossy()
+                .replace('\\', "/");
+            entries.push((relative, true));
+            collect_entries_at(workspace, scan_root, &path, max_depth, depth + 1, entries)?;
+        } else if file_type.is_file() {
+            let relative = path
+                .strip_prefix(scan_root)
+                .unwrap_or(&path)
+                .to_string_lossy()
+                .replace('\\', "/");
+            if block_secret_path(&relative).is_ok() {
+                entries.push((relative, false));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn path_matches_glob(pattern: &str, relative: &str) -> bool {
+    if pattern.contains('/') {
+        glob_match(pattern, relative)
+    } else {
+        let name = relative.rsplit('/').next().unwrap_or(relative);
+        glob_match(pattern, name)
+    }
+}
+
+fn glob_match(pattern: &str, text: &str) -> bool {
+    let pattern_chars = pattern.chars().collect::<Vec<_>>();
+    let text_chars = text.chars().collect::<Vec<_>>();
+    glob_match_at(&pattern_chars, 0, &text_chars, 0)
+}
+
+fn glob_match_at(pattern: &[char], pi: usize, text: &[char], ti: usize) -> bool {
+    if pi == pattern.len() {
+        return ti == text.len();
+    }
+    match pattern[pi] {
+        '*' => {
+            if pi + 1 < pattern.len() && pattern[pi + 1] == '*' {
+                let mut rest = pi + 2;
+                let skip_slash = rest < pattern.len() && pattern[rest] == '/';
+                if skip_slash {
+                    rest += 1;
+                }
+                if glob_match_at(pattern, rest, text, ti) {
+                    return true;
+                }
+                for k in ti..text.len() {
+                    if skip_slash {
+                        if text[k] == '/' && glob_match_at(pattern, rest, text, k + 1) {
+                            return true;
+                        }
+                    } else if glob_match_at(pattern, rest, text, k + 1) {
+                        return true;
+                    }
+                }
+                false
+            } else {
+                if glob_match_at(pattern, pi + 1, text, ti) {
+                    return true;
+                }
+                for k in ti..text.len() {
+                    if text[k] == '/' {
+                        return false;
+                    }
+                    if glob_match_at(pattern, pi + 1, text, k + 1) {
+                        return true;
+                    }
+                }
+                false
+            }
+        }
+        '?' => ti < text.len() && text[ti] != '/' && glob_match_at(pattern, pi + 1, text, ti + 1),
+        literal => {
+            ti < text.len() && text[ti] == literal && glob_match_at(pattern, pi + 1, text, ti + 1)
+        }
+    }
+}
+
+fn code_grep(
+    request: &ToolRequest,
+    context: &SkillExecutionContext,
+) -> Result<Value, SkillExecutionError> {
+    let pattern = string_arg(request, "pattern")?;
+    if pattern.trim().is_empty() {
+        return Err(SkillExecutionError::MissingArgument {
+            skill_id: "code.grep".to_string(),
+            argument: "pattern",
+        });
+    }
+    let subpath = optional_string_arg(request, "path").unwrap_or_else(|| ".".to_string());
+    let glob = optional_string_arg(request, "glob");
+    let case_sensitive = request
+        .arguments
+        .get("case_sensitive")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let max_results = request
+        .arguments
+        .get("max_results")
+        .and_then(Value::as_u64)
+        .unwrap_or(DEFAULT_GREP_RESULTS as u64)
+        .clamp(1, MAX_GREP_RESULTS as u64) as usize;
+
+    let workspace = Workspace::new(&context.workspace_root)?;
+    let resolved_root = workspace.resolve_inside(&subpath)?;
+    let candidates = if resolved_root.is_file() {
+        vec![subpath.replace('\\', "/")]
+    } else {
+        collect_entries(context, &subpath, 32)?
+            .into_iter()
+            .filter(|(_, is_dir)| !*is_dir)
+            .map(|(relative, _)| relative)
+            .collect()
+    };
+
+    let needle = if case_sensitive {
+        pattern.clone()
+    } else {
+        pattern.to_lowercase()
+    };
+    let mut matches = Vec::new();
+    let mut truncated = false;
+
+    'files: for relative in candidates {
+        if let Some(ref glob_pattern) = glob {
+            if !path_matches_glob(glob_pattern, &relative) {
+                continue;
+            }
+        }
+        let resolved = match workspace.resolve_inside(&relative) {
+            Ok(path) => path,
+            Err(_) => continue,
+        };
+        if block_secret_path(&resolved).is_err() {
+            continue;
+        }
+        let metadata = match fs::metadata(&resolved) {
+            Ok(metadata) => metadata,
+            Err(_) => continue,
+        };
+        if !metadata.is_file() || metadata.len() > MAX_SEARCH_FILE_BYTES {
+            continue;
+        }
+        let content = match fs::read_to_string(&resolved) {
+            Ok(content) => content,
+            Err(_) => continue,
+        };
+        for (index, line) in content.lines().enumerate() {
+            let haystack = if case_sensitive {
+                line.to_string()
+            } else {
+                line.to_lowercase()
+            };
+            if haystack.contains(&needle) {
+                if matches.len() >= max_results {
+                    truncated = true;
+                    break 'files;
+                }
+                matches.push(json!({
+                    "path": &relative,
+                    "line": index + 1,
+                    "text": line.trim_end(),
+                }));
+            }
+        }
+    }
+
+    let count = matches.len();
+    Ok(json!({
+        "pattern": pattern,
+        "matches": matches,
+        "count": count,
+        "truncated": truncated,
+    }))
+}
+
+fn code_glob(
+    request: &ToolRequest,
+    context: &SkillExecutionContext,
+) -> Result<Value, SkillExecutionError> {
+    let pattern = string_arg(request, "pattern")?;
+    let subpath = optional_string_arg(request, "path").unwrap_or_else(|| ".".to_string());
+    let max_results = request
+        .arguments
+        .get("max_results")
+        .and_then(Value::as_u64)
+        .unwrap_or(DEFAULT_GLOB_RESULTS as u64)
+        .clamp(1, MAX_GLOB_RESULTS as u64) as usize;
+
+    let mut files = Vec::new();
+    let mut truncated = false;
+    for (relative, is_dir) in collect_entries(context, &subpath, 32)? {
+        if is_dir {
+            continue;
+        }
+        if path_matches_glob(&pattern, &relative) {
+            if files.len() >= max_results {
+                truncated = true;
+                break;
+            }
+            files.push(relative);
+        }
+    }
+
+    let count = files.len();
+    Ok(json!({
+        "pattern": pattern,
+        "files": files,
+        "count": count,
+        "truncated": truncated,
+    }))
+}
+
+fn code_list(
+    request: &ToolRequest,
+    context: &SkillExecutionContext,
+) -> Result<Value, SkillExecutionError> {
+    let subpath = optional_string_arg(request, "path").unwrap_or_else(|| ".".to_string());
+    let max_depth = optional_u64_arg(request, "max_depth").unwrap_or(2).min(32) as usize;
+    let max_entries = request
+        .arguments
+        .get("max_entries")
+        .and_then(Value::as_u64)
+        .unwrap_or(DEFAULT_LIST_ENTRIES as u64)
+        .clamp(1, MAX_LIST_ENTRIES as u64) as usize;
+
+    let mut entries = Vec::new();
+    let mut truncated = false;
+    for (relative, is_dir) in collect_entries(context, &subpath, max_depth)? {
+        if entries.len() >= max_entries {
+            truncated = true;
+            break;
+        }
+        entries.push(json!({
+            "path": relative,
+            "kind": if is_dir { "dir" } else { "file" },
+        }));
+    }
+
+    Ok(json!({
+        "root": subpath,
+        "entries": entries,
+        "truncated": truncated,
+    }))
+}
+
+fn file_read_many(
+    request: &ToolRequest,
+    context: &SkillExecutionContext,
+) -> Result<Value, SkillExecutionError> {
+    let mut selected = match request.arguments.get("paths") {
+        Some(Value::Array(items)) => items
+            .iter()
+            .filter_map(Value::as_str)
+            .map(|path| path.replace('\\', "/"))
+            .collect::<Vec<_>>(),
+        _ => Vec::new(),
+    };
+    let glob = optional_string_arg(request, "glob");
+    if selected.is_empty() && glob.is_none() {
+        return Err(SkillExecutionError::MissingArgument {
+            skill_id: "file.read_many".to_string(),
+            argument: "paths",
+        });
+    }
+    if let Some(ref glob_pattern) = glob {
+        for (relative, is_dir) in collect_entries(context, ".", 32)? {
+            if !is_dir
+                && path_matches_glob(glob_pattern, &relative)
+                && !selected.contains(&relative)
+            {
+                selected.push(relative);
+            }
+        }
+    }
+
+    let workspace = Workspace::new(&context.workspace_root)?;
+    let per_file_limit = context.max_file_read_bytes.min(MAX_SEARCH_FILE_BYTES);
+    let mut files = Vec::new();
+    let mut skipped = Vec::new();
+    let mut total_bytes = 0_u64;
+    let mut truncated = false;
+
+    for path in selected {
+        if files.len() >= MAX_READ_MANY_FILES {
+            truncated = true;
+            break;
+        }
+        if block_secret_path(&path).is_err() {
+            skipped.push(json!({"path": &path, "reason": "secret path"}));
+            continue;
+        }
+        let resolved = match workspace.resolve_inside(&path) {
+            Ok(resolved) => resolved,
+            Err(_) => {
+                skipped.push(json!({"path": &path, "reason": "outside workspace"}));
+                continue;
+            }
+        };
+        let metadata = match fs::metadata(&resolved) {
+            Ok(metadata) => metadata,
+            Err(_) => {
+                skipped.push(json!({"path": &path, "reason": "not found"}));
+                continue;
+            }
+        };
+        if !metadata.is_file() {
+            skipped.push(json!({"path": &path, "reason": "not a file"}));
+            continue;
+        }
+        if metadata.len() > per_file_limit {
+            skipped.push(json!({"path": &path, "reason": "too large"}));
+            continue;
+        }
+        if total_bytes.saturating_add(metadata.len()) > MAX_READ_MANY_TOTAL_BYTES {
+            truncated = true;
+            break;
+        }
+        let content = match fs::read_to_string(&resolved) {
+            Ok(content) => content,
+            Err(_) => {
+                skipped.push(json!({"path": &path, "reason": "not utf-8"}));
+                continue;
+            }
+        };
+        total_bytes = total_bytes.saturating_add(metadata.len());
+        files.push(json!({
+            "path": path,
+            "content": content,
+            "bytes": metadata.len(),
+        }));
+    }
+
+    let count = files.len();
+    Ok(json!({
+        "files": files,
+        "count": count,
+        "skipped": skipped,
+        "truncated": truncated,
+    }))
+}
+
 fn ignored_dir(name: &str) -> bool {
     matches!(
         name,
@@ -4302,7 +5006,11 @@ mod tests {
         assert_eq!(
             registry.supported_skill_ids(),
             vec![
+                "code.glob",
+                "code.grep",
+                "code.list",
                 "file.read",
+                "file.read_many",
                 "file.replace",
                 "file.write",
                 "git.diff",
@@ -4326,7 +5034,7 @@ mod tests {
     #[test]
     fn every_builtin_executor_has_complete_schema_policy_and_fixture_metadata() {
         let descriptors = ExecutorRegistry::with_builtin_executors().descriptors();
-        assert_eq!(descriptors.len(), 17);
+        assert_eq!(descriptors.len(), 21);
         for descriptor in descriptors {
             assert!(descriptor.is_complete(), "incomplete: {}", descriptor.id);
             assert!(descriptor.input_schema.is_object());
@@ -4458,6 +5166,135 @@ mod tests {
             "git fixture command failed: {}",
             String::from_utf8_lossy(&output.stderr)
         );
+    }
+
+    #[tokio::test]
+    async fn code_grep_finds_matches_and_skips_secret_paths() {
+        let root = unique_temp_dir();
+        fs::create_dir_all(root.join("src")).expect("root");
+        fs::write(
+            root.join("src").join("main.rs"),
+            "fn main() {}\nlet x = 1;\n",
+        )
+        .expect("rs");
+        fs::write(root.join("src").join("lib.rs"), "pub fn helper() {}\n").expect("lib");
+        fs::write(root.join(".env"), "API_KEY=secret\n").expect("secret");
+        let mut approval = AllowAllApprover;
+
+        let result = execute_installed_tool(
+            &ToolRequest {
+                skill_id: "code.grep".to_string(),
+                arguments: json!({ "pattern": "fn main" }),
+            },
+            &[installed_tool("code.grep")],
+            &context(&root),
+            &mut approval,
+        )
+        .await
+        .expect("execute code.grep");
+
+        assert_eq!(result.output["count"], 1);
+        assert_eq!(result.output["matches"][0]["path"], "src/main.rs");
+        assert_eq!(result.output["matches"][0]["line"], 1);
+
+        let secret = execute_installed_tool(
+            &ToolRequest {
+                skill_id: "code.grep".to_string(),
+                arguments: json!({ "pattern": "API_KEY" }),
+            },
+            &[installed_tool("code.grep")],
+            &context(&root),
+            &mut approval,
+        )
+        .await
+        .expect("execute code.grep for secret");
+
+        assert_eq!(secret.output["count"], 0);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn code_glob_and_list_are_bounded_and_ignore_generated_dirs() {
+        let root = unique_temp_dir();
+        fs::create_dir_all(root.join("target")).expect("target");
+        fs::create_dir_all(root.join("src")).expect("src");
+        fs::write(root.join("src").join("a.rs"), "").expect("a");
+        fs::write(root.join("target").join("b.rs"), "").expect("b");
+        fs::write(root.join("Cargo.toml"), "[package]").expect("toml");
+        let mut approval = AllowAllApprover;
+
+        let glob = execute_installed_tool(
+            &ToolRequest {
+                skill_id: "code.glob".to_string(),
+                arguments: json!({ "pattern": "**/*.rs" }),
+            },
+            &[installed_tool("code.glob")],
+            &context(&root),
+            &mut approval,
+        )
+        .await
+        .expect("execute code.glob");
+        assert_eq!(glob.output["files"], json!(["src/a.rs"]));
+
+        let listed = execute_installed_tool(
+            &ToolRequest {
+                skill_id: "code.list".to_string(),
+                arguments: json!({ "path": ".", "max_depth": 1 }),
+            },
+            &[installed_tool("code.list")],
+            &context(&root),
+            &mut approval,
+        )
+        .await
+        .expect("execute code.list");
+        let entries = listed.output["entries"].as_array().expect("entries");
+        assert!(entries
+            .iter()
+            .any(|entry| entry["path"] == "src" && entry["kind"] == "dir"));
+        assert!(!entries.iter().any(|entry| entry["path"] == "target"));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn glob_patterns_match_expected_paths() {
+        assert!(glob_match("**/*.rs", "src/main.rs"));
+        assert!(glob_match("**/*.rs", "main.rs"));
+        assert!(glob_match("*.rs", "main.rs"));
+        assert!(!glob_match("*.rs", "src/main.rs"));
+        assert!(glob_match("src/*.rs", "src/lib.rs"));
+        assert!(path_matches_glob("*.rs", "src/main.rs"));
+        assert!(!path_matches_glob("*.toml", "src/main.rs"));
+    }
+
+    #[tokio::test]
+    async fn file_read_many_batches_files_and_reports_skips() {
+        let root = unique_temp_dir();
+        fs::create_dir_all(&root).expect("root");
+        fs::write(root.join("a.txt"), "alpha").expect("a");
+        fs::write(root.join("b.txt"), "beta").expect("b");
+        fs::write(root.join(".env"), "SECRET=1").expect("secret");
+        let mut approval = AllowAllApprover;
+
+        let result = execute_installed_tool(
+            &ToolRequest {
+                skill_id: "file.read_many".to_string(),
+                arguments: json!({ "paths": ["a.txt", "b.txt", ".env", "missing.txt"] }),
+            },
+            &[installed_tool("file.read_many")],
+            &context(&root),
+            &mut approval,
+        )
+        .await
+        .expect("execute file.read_many");
+
+        assert_eq!(result.output["count"], 2);
+        assert_eq!(result.output["files"][0]["path"], "a.txt");
+        assert_eq!(result.output["files"][0]["content"], "alpha");
+        assert_eq!(
+            result.output["skipped"].as_array().expect("skipped").len(),
+            2
+        );
+        let _ = fs::remove_dir_all(root);
     }
 
     #[tokio::test]
@@ -5341,7 +6178,7 @@ min_axiom_version = "0.1.0"
     }
 
     #[tokio::test]
-    async fn subagent_run_returns_structured_summary() {
+    async fn subagent_run_standalone_execution_fails_honestly() {
         let registry = ExecutorRegistry::with_builtin_executors();
         let executor = registry
             .get("subagent.run")
@@ -5360,7 +6197,6 @@ min_axiom_version = "0.1.0"
             credential_env_names: vec![],
             skills_dir: None,
         };
-
         let request = ToolRequest {
             skill_id: "subagent.run".to_string(),
             arguments: json!({
@@ -5368,26 +6204,14 @@ min_axiom_version = "0.1.0"
                 "task": "Audit authentication token handling"
             }),
         };
-
         let mut approval = AllowAllApprover;
-        let result = executor
+
+        let error = executor
             .execute(&request, &context, &mut approval)
             .await
-            .expect("execute subagent.run");
+            .expect_err("standalone subagent.run must not fabricate a result");
 
-        assert_eq!(
-            result.get("status").and_then(Value::as_str),
-            Some("completed")
-        );
-        assert_eq!(
-            result.get("role").and_then(Value::as_str),
-            Some("Security Inspector")
-        );
-        assert!(result
-            .get("summary")
-            .and_then(Value::as_str)
-            .unwrap()
-            .contains("Security Inspector"));
+        assert!(matches!(error, SkillExecutionError::UnsupportedSkill(_)));
     }
 
     #[test]

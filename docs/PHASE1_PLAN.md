@@ -382,7 +382,7 @@ Implementation site: `crates/axiom-agent/src/sub_agent.rs`, `crates/axiom-engine
 
 ### D21. Hooks firing in the loop
 
-The manifest `hooks` (D12) are now real. The loop fires `pre_tool`, `post_tool`, `on_error`, and `on_complete` handlers declared on the skill being executed. Hooks are themselves skills (small prompt-type or tool-type skills pointed at by the manifest), so they compose via D11.
+Implemented for `hooks.pre`, `hooks.post`, and `hooks.on_error` (see `docs/SKILLS.md`). Hooks are themselves tool skills pointed at by the manifest, and the loop fires them around the skill being executed with re-entrancy and per-turn budget guards. `on_complete` is not implemented: the loop's completion path has no single skill in scope, so there is nothing for it to hook.
 
 Built-in hook examples land in the ` axiom-skills` registry: `hook.diff_snapshot` (pre_tool on `file.write` — save a snapshot before write), `hook.lint_changed` (post_tool on `file.write` — run lint on the changed file), `hook.git_restore` (on_error — restore from the D3 stash).
 

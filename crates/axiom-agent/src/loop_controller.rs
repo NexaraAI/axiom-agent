@@ -3,9 +3,10 @@ use std::time::Instant;
 
 use anyhow::{anyhow, Result};
 use axiom_engine::{
-    execute_installed_tool_with_policy, extract_tool_request, AllowAllApprover, ExecutorRegistry,
-    InstalledSkill, RecordingSideEffectAuditSink, SideEffectDecision, SideEffectPolicy,
-    SkillApproval, SkillExecutionContext, SkillExecutionError, SkillExecutionResult, ToolRequest,
+    builtin_installed_skill, execute_tool_with_policy, extract_tool_request, AllowAllApprover,
+    ExecutorRegistry, ExternalToolSource, InstalledSkill, RecordingSideEffectAuditSink,
+    SideEffectDecision, SideEffectPolicy, SkillApproval, SkillExecutionContext,
+    SkillExecutionError, SkillExecutionResult, SkillHooks, ToolRequest,
 };
 use axiom_llm::{
     detect_repetition_period, ChatMessage, ChatRequest, ChatStreamUpdate, ChatToolDefinition,
@@ -37,11 +38,81 @@ pub enum ToolExecutionStatus {
     Failed(String),
 }
 
+/// Which manifest hook (`hooks.pre`, `hooks.post`, `hooks.on_error`) is firing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HookPhase {
+    /// Declared as `hooks.pre`; runs before the skill executes.
+    Pre,
+    /// Declared as `hooks.post`; runs after the skill succeeds.
+    Post,
+    /// Declared as `hooks.on_error`; runs after the skill fails.
+    OnError,
+}
+
+impl HookPhase {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Pre => "pre",
+            Self::Post => "post",
+            Self::OnError => "on_error",
+        }
+    }
+}
+
+/// How a manifest hook invocation ended.
+///
+/// Only [`HookStatus::Succeeded`] and [`HookStatus::Failed`] mean the hook
+/// actually ran; every other variant records a guard that refused to run it, so
+/// a hook which did not fire is visible instead of silently dropped.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HookStatus {
+    Succeeded,
+    Failed,
+    /// The hook id is neither an executable installed skill nor a built-in.
+    Unavailable,
+    /// Firing the hook would re-enter the loop (hook depth, or self reference).
+    SkippedReentrancy,
+    /// The turn's hook allowance or wall clock is exhausted.
+    SkippedBudget,
+    SkippedCancelled,
+}
+
+/// One manifest hook the loop fired, or deliberately did not fire.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct HookExecution {
+    pub hook_id: String,
+    pub phase: HookPhase,
+    pub status: HookStatus,
+    pub latency_ms: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+impl HookExecution {
+    fn skipped(hook_id: &str, phase: HookPhase, status: HookStatus) -> Self {
+        Self {
+            hook_id: hook_id.to_string(),
+            phase,
+            status,
+            latency_ms: 0,
+            output: None,
+            error: None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ToolExecutionEvent {
     pub request: ToolRequest,
     pub latency_ms: u64,
     pub status: ToolExecutionStatus,
+    /// Manifest hooks fired around this call, in execution order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub hooks: Vec<HookExecution>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -222,6 +293,84 @@ impl TurnProgress {
     }
 }
 
+/// Manifest hooks a single turn may run before it stops trying more.
+const MAX_HOOKS_PER_TURN: u32 = 24;
+/// Hooks fire one level deep: a hook never fires hooks of its own.
+const MAX_HOOK_DEPTH: u32 = 1;
+/// A single hook may not hold the turn open longer than this.
+const HOOK_TIMEOUT_SECS: u64 = 30;
+
+/// Skill id of the delegation tool handled directly by the agent loop.
+const SUBAGENT_SKILL_ID: &str = "subagent.run";
+/// Sub-agents may not spawn further sub-agents.
+const MAX_SUBAGENT_DEPTH: u32 = 1;
+/// Read-only tool surface available to an isolated sub-agent.
+const SUBAGENT_READONLY_SKILLS: [&str; 9] = [
+    "code.grep",
+    "code.glob",
+    "code.list",
+    "file.read",
+    "file.read_many",
+    "project.scan",
+    "git.status",
+    "git.diff",
+    "web.fetch",
+];
+
+fn subagent_system_prompt(role: &str) -> String {
+    format!(
+        "You are a focused Axiom sub-agent acting as: {role}.\n\
+You run in an isolated context with READ-ONLY workspace tools; you cannot write files or run mutating commands.\n\
+Investigate the assigned task using code.grep, code.glob, code.list, file.read, file.read_many, project.scan, git.status, and git.diff as needed.\n\
+Finish with a concise, evidence-based report: key findings, the file paths and line numbers you relied on, and any uncertainty. Do not ask questions and do not stop at narration."
+    )
+}
+
+/// Per-turn allowance for manifest hooks.
+///
+/// Hooks are extra tool executions the model never asked for, so they are
+/// capped separately from `max_tool_iterations` and share the turn's wall
+/// clock. Consuming a slot is explicit so a skipped hook is recorded rather
+/// than silently dropped.
+struct HookBudget {
+    remaining: u32,
+    started_at: Instant,
+    deadline_secs: u64,
+}
+
+impl HookBudget {
+    fn new(caps: &AgentCaps, started_at: Instant) -> Self {
+        Self {
+            remaining: MAX_HOOKS_PER_TURN,
+            started_at,
+            deadline_secs: caps.max_wall_seconds,
+        }
+    }
+
+    fn wall_clock_exhausted(&self) -> bool {
+        self.started_at.elapsed().as_secs() >= self.deadline_secs
+    }
+
+    /// Consumes one hook slot, reporting whether one was available.
+    fn take(&mut self) -> bool {
+        if self.remaining == 0 {
+            false
+        } else {
+            self.remaining -= 1;
+            true
+        }
+    }
+}
+
+/// The hook a phase declares, if any.
+fn hook_for_phase(hooks: &SkillHooks, phase: HookPhase) -> Option<&str> {
+    match phase {
+        HookPhase::Pre => hooks.pre.as_deref(),
+        HookPhase::Post => hooks.post.as_deref(),
+        HookPhase::OnError => hooks.on_error.as_deref(),
+    }
+}
+
 pub struct AgentLoop<'a> {
     provider: &'a dyn LlmProvider,
     model: String,
@@ -243,6 +392,13 @@ pub struct AgentLoop<'a> {
     stream_observer: Option<&'a mut dyn StreamObserver>,
     side_effect_policy: SideEffectPolicy,
     provider_options: Option<std::collections::BTreeMap<String, serde_json::Value>>,
+    subagent_depth: u32,
+    /// Nesting depth while running a manifest hook. Non-zero means hooks must
+    /// not fire again, which is what makes hook recursion impossible.
+    hook_depth: u32,
+    /// Extra tools owned by another component (for example a connected MCP
+    /// server). Calls are routed through the same policy and approval hooks.
+    external_tools: Option<&'a dyn ExternalToolSource>,
 }
 
 impl<'a> AgentLoop<'a> {
@@ -302,6 +458,9 @@ impl<'a> AgentLoop<'a> {
             stream_observer: None,
             side_effect_policy,
             provider_options: None,
+            subagent_depth: 0,
+            hook_depth: 0,
+            external_tools: None,
         }
     }
 
@@ -310,6 +469,19 @@ impl<'a> AgentLoop<'a> {
         options: Option<std::collections::BTreeMap<String, serde_json::Value>>,
     ) -> Self {
         self.provider_options = options;
+        self
+    }
+
+    pub fn with_subagent_depth(mut self, depth: u32) -> Self {
+        self.subagent_depth = depth;
+        self
+    }
+
+    /// Sets the hook nesting depth. Only nested loops (a sub-agent, or a loop
+    /// embedded in another) ever need this; at [`MAX_HOOK_DEPTH`] or above the
+    /// loop records each hook as skipped instead of firing it.
+    pub fn with_hook_depth(mut self, depth: u32) -> Self {
+        self.hook_depth = depth;
         self
     }
 
@@ -363,6 +535,332 @@ impl<'a> AgentLoop<'a> {
         self
     }
 
+    /// Advertises tools provided by an external source (such as a connected MCP
+    /// server) alongside the built-in ones, and executes them through the same
+    /// side-effect policy and approval hooks.
+    ///
+    /// Definitions that cannot be advertised safely are skipped rather than
+    /// failing the turn, and a definition whose name collides with an existing
+    /// tool is ignored so built-ins always win.
+    pub fn with_external_tools(mut self, source: &'a dyn ExternalToolSource) -> Self {
+        for definition in source.definitions() {
+            if definition.validate().is_err() {
+                continue;
+            }
+            let name = native_tool_name(&definition.id);
+            if self
+                .tool_definitions
+                .iter()
+                .any(|existing| existing.name == name)
+            {
+                continue;
+            }
+            self.tool_definitions.push(ChatToolDefinition {
+                name,
+                description: definition.description.clone(),
+                parameters: definition.input_schema.clone(),
+            });
+        }
+        self.tool_definitions
+            .sort_by(|left, right| left.name.cmp(&right.name));
+        self.external_tools = Some(source);
+        self
+    }
+
+    /// The manifest hooks declared by the skill behind `skill_id`.
+    ///
+    /// Installed manifests win over the built-in ones, so an installed skill can
+    /// attach hooks to a built-in executor's id. A skill with no manifest — an
+    /// MCP tool, or an unknown id — simply has no hooks.
+    fn hooks_for_skill(&self, skill_id: &str) -> SkillHooks {
+        if let Some(skill) = self
+            .installed_skills
+            .iter()
+            .find(|skill| skill.manifest.id == skill_id)
+        {
+            return skill.manifest.hooks.clone();
+        }
+        builtin_installed_skill(skill_id)
+            .map(|skill| skill.manifest.hooks)
+            .unwrap_or_default()
+    }
+
+    /// True when the hook id resolves to something the loop can actually run.
+    fn hook_is_available(&self, hook_id: &str) -> bool {
+        let installed = self.installed_skills.iter().any(|skill| {
+            skill.manifest.id == hook_id
+                && skill.record.is_executable()
+                && skill.manifest.skill_type == axiom_engine::SkillType::Tool
+        });
+        installed
+            || ExecutorRegistry::with_builtin_executors()
+                .get(hook_id)
+                .is_some()
+    }
+
+    /// Fires the hook `phase` declares for the skill behind `request`.
+    ///
+    /// Hooks are ordinary permission-gated tools: they run through
+    /// [`execute_tool_with_policy`] with the live approval hook, side-effect
+    /// policy, and audit sink, and they receive the triggering tool's arguments
+    /// (so a post-write hook sees the path that changed).
+    ///
+    /// Guardrails, all reported rather than silent:
+    /// * re-entrancy — a hook never fires hooks, and a skill cannot hook itself;
+    /// * budget — hooks share the turn's wall clock and a per-turn allowance;
+    /// * availability — a hook id that cannot execute is recorded as skipped;
+    /// * failure — a failing hook is recorded and never fails the turn.
+    async fn fire_hooks(
+        &mut self,
+        phase: HookPhase,
+        request: &ToolRequest,
+        budget: &mut HookBudget,
+        progress: &mut TurnProgress,
+    ) -> Vec<HookExecution> {
+        let hooks = self.hooks_for_skill(&request.skill_id);
+        let Some(hook_id) = hook_for_phase(&hooks, phase).map(ToString::to_string) else {
+            return Vec::new();
+        };
+        if hook_id == request.skill_id || self.hook_depth >= MAX_HOOK_DEPTH {
+            return vec![HookExecution::skipped(
+                &hook_id,
+                phase,
+                HookStatus::SkippedReentrancy,
+            )];
+        }
+        if self.cancellation.is_cancelled() {
+            return vec![HookExecution::skipped(
+                &hook_id,
+                phase,
+                HookStatus::SkippedCancelled,
+            )];
+        }
+        if !self.hook_is_available(&hook_id) {
+            return vec![HookExecution::skipped(
+                &hook_id,
+                phase,
+                HookStatus::Unavailable,
+            )];
+        }
+        if budget.wall_clock_exhausted() || !budget.take() {
+            return vec![HookExecution::skipped(
+                &hook_id,
+                phase,
+                HookStatus::SkippedBudget,
+            )];
+        }
+
+        let hook_request = ToolRequest {
+            skill_id: hook_id.clone(),
+            arguments: request.arguments.clone(),
+        };
+        let started_at = Instant::now();
+        let mut audit = RecordingSideEffectAuditSink::default();
+        let timeout = std::time::Duration::from_secs(HOOK_TIMEOUT_SECS);
+        self.hook_depth += 1;
+        let hook_future = execute_tool_with_policy(
+            &hook_request,
+            self.installed_skills,
+            &self.execution_context,
+            &mut *self.approval,
+            &self.side_effect_policy,
+            &mut audit,
+            None,
+        );
+        let mut execution = tokio::select! {
+            result = tokio::time::timeout(timeout, hook_future) => match result {
+                Ok(Ok(result)) => HookExecution {
+                    hook_id,
+                    phase,
+                    status: HookStatus::Succeeded,
+                    latency_ms: 0,
+                    output: Some(result.output),
+                    error: None,
+                },
+                Ok(Err(error)) => HookExecution {
+                    hook_id,
+                    phase,
+                    status: HookStatus::Failed,
+                    latency_ms: 0,
+                    output: None,
+                    error: Some(error.to_string()),
+                },
+                Err(_) => HookExecution {
+                    hook_id,
+                    phase,
+                    status: HookStatus::Failed,
+                    latency_ms: 0,
+                    output: None,
+                    error: Some(format!("hook timed out after {HOOK_TIMEOUT_SECS}s")),
+                },
+            },
+            _ = self.cancellation.cancelled() => HookExecution::skipped(
+                &hook_id,
+                phase,
+                HookStatus::SkippedCancelled,
+            ),
+        };
+        self.hook_depth -= 1;
+        execution.latency_ms = started_at.elapsed().as_millis().min(u128::from(u64::MAX)) as u64;
+        progress.policy_decisions.extend(audit.into_decisions());
+        vec![execution]
+    }
+
+    /// Runs an isolated, read-only sub-agent turn and returns its structured report.
+    async fn run_subagent_tool(
+        &self,
+        request: &ToolRequest,
+    ) -> (
+        Result<SkillExecutionResult, SkillExecutionError>,
+        UsageLedger,
+    ) {
+        if self.subagent_depth >= MAX_SUBAGENT_DEPTH {
+            return (
+                Err(SkillExecutionError::ExecutionFailed {
+                    skill_id: SUBAGENT_SKILL_ID.to_string(),
+                    message: "nested sub-agents are not supported".to_string(),
+                }),
+                UsageLedger::default(),
+            );
+        }
+        let role = match request.arguments.get("role").and_then(Value::as_str) {
+            Some(role) if !role.trim().is_empty() => role.trim().to_string(),
+            _ => {
+                return (
+                    Err(SkillExecutionError::MissingArgument {
+                        skill_id: SUBAGENT_SKILL_ID.to_string(),
+                        argument: "role",
+                    }),
+                    UsageLedger::default(),
+                )
+            }
+        };
+        let task = match request.arguments.get("task").and_then(Value::as_str) {
+            Some(task) if !task.trim().is_empty() => task.trim().to_string(),
+            _ => {
+                return (
+                    Err(SkillExecutionError::MissingArgument {
+                        skill_id: SUBAGENT_SKILL_ID.to_string(),
+                        argument: "task",
+                    }),
+                    UsageLedger::default(),
+                )
+            }
+        };
+        let context = request
+            .arguments
+            .get("context")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string();
+
+        let mut skills: Vec<InstalledSkill> = self
+            .installed_skills
+            .iter()
+            .filter(|skill| SUBAGENT_READONLY_SKILLS.contains(&skill.manifest.id.as_str()))
+            .cloned()
+            .collect();
+        for skill_id in SUBAGENT_READONLY_SKILLS {
+            if !skills.iter().any(|skill| skill.manifest.id == skill_id) {
+                if let Some(skill) = builtin_installed_skill(skill_id) {
+                    skills.push(skill);
+                }
+            }
+        }
+
+        let caps = AgentCaps {
+            max_iterations: 6,
+            max_tool_iterations: 12,
+            max_tokens: self.caps.max_tokens.min(60_000),
+            max_cost_usd: (self.caps.max_cost_usd * 0.25).max(0.05),
+            max_wall_seconds: self.caps.max_wall_seconds.min(600),
+            max_consecutive_tool_errors: 2,
+        };
+        let mut approver = AllowAllApprover;
+        let mut child = AgentLoop::new(
+            self.provider,
+            self.model.clone(),
+            caps,
+            vec![ChatMessage {
+                role: "system".to_string(),
+                content: subagent_system_prompt(&role),
+            }],
+            Vec::new(),
+            &skills,
+            self.execution_context.clone(),
+            &mut approver,
+        )
+        .with_tools_enabled(true)
+        .with_streaming(false)
+        .with_cancellation(self.cancellation.clone())
+        .with_subagent_depth(self.subagent_depth + 1)
+        .with_generation_options(Some(0.4), None);
+
+        let user_message = if context.trim().is_empty() {
+            task.clone()
+        } else {
+            format!("{task}\n\nContext:\n{context}")
+        };
+        // Boxed to break the run_turn -> run_subagent_tool -> run_turn future cycle.
+        let outcome = Box::pin(child.run_turn(ChatMessage {
+            role: "user".to_string(),
+            content: user_message,
+        }))
+        .await;
+
+        let (output, ledger) = match outcome {
+            Ok(TurnResult::Done(completion)) => (
+                serde_json::json!({
+                    "role": role,
+                    "task": task,
+                    "status": "completed",
+                    "summary": completion.content,
+                    "iterations": completion.iterations,
+                    "tool_calls": completion.tool_events.len(),
+                    "total_tokens": completion.ledger.total_tokens,
+                }),
+                completion.ledger,
+            ),
+            Ok(TurnResult::GiveUp {
+                reason,
+                partial,
+                completion,
+            }) => (
+                serde_json::json!({
+                    "role": role,
+                    "task": task,
+                    "status": "incomplete",
+                    "summary": partial,
+                    "reason": format!("{reason:?}"),
+                    "iterations": completion.iterations,
+                    "tool_calls": completion.tool_events.len(),
+                    "total_tokens": completion.ledger.total_tokens,
+                }),
+                completion.ledger,
+            ),
+            Err(error) => (
+                serde_json::json!({
+                    "role": role,
+                    "task": task,
+                    "status": "failed",
+                    "summary": format!("sub-agent failed: {error}"),
+                    "iterations": 0,
+                    "tool_calls": 0,
+                    "total_tokens": 0,
+                }),
+                UsageLedger::default(),
+            ),
+        };
+
+        (
+            Ok(SkillExecutionResult {
+                skill_id: SUBAGENT_SKILL_ID.to_string(),
+                output,
+            }),
+            ledger,
+        )
+    }
+
     pub async fn run_turn(&mut self, user_message: ChatMessage) -> Result<TurnResult> {
         let started_at = Instant::now();
         let mut messages = self.system_messages.clone();
@@ -380,6 +878,7 @@ impl<'a> AgentLoop<'a> {
             ..TurnProgress::default()
         };
         let mut consecutive_tool_errors = 0;
+        let mut hook_budget = HookBudget::new(&self.caps, started_at);
 
         for iteration in 1..=self.caps.max_iterations {
             if self.cancellation.is_cancelled() {
@@ -622,7 +1121,7 @@ impl<'a> AgentLoop<'a> {
                                     )
                                 })?;
                         Ok::<ToolRequest, anyhow::Error>(ToolRequest {
-                            skill_id: skill_id.to_string(),
+                            skill_id,
                             arguments: tool_call.arguments.clone(),
                         })
                     })
@@ -670,23 +1169,34 @@ impl<'a> AgentLoop<'a> {
                 && tool_requests.iter().all(|r| is_readonly_tool(&r.skill_id));
 
             if run_parallel {
+                // Pre-hooks run before the batch is dispatched: they borrow the
+                // loop mutably, which the parallel futures cannot do.
+                let mut pre_hooks = Vec::new();
+                for request in &tool_requests {
+                    pre_hooks.push(
+                        self.fire_hooks(HookPhase::Pre, request, &mut hook_budget, &mut progress)
+                            .await,
+                    );
+                }
                 let mut futures = Vec::new();
                 for request in &tool_requests {
                     let req = request.clone();
                     let installed = self.installed_skills;
                     let ctx = &self.execution_context;
                     let policy = &self.side_effect_policy;
+                    let external = self.external_tools;
                     futures.push(Box::pin(async move {
                         let tool_started_at = Instant::now();
                         let mut policy_audit = RecordingSideEffectAuditSink::default();
                         let mut approver = AllowAllApprover;
-                        let tool_future = execute_installed_tool_with_policy(
+                        let tool_future = execute_tool_with_policy(
                             &req,
                             installed,
                             ctx,
                             &mut approver,
                             policy,
                             &mut policy_audit,
+                            external,
                         );
                         let res = tool_future.await;
                         (req, tool_started_at, policy_audit, res)
@@ -694,7 +1204,9 @@ impl<'a> AgentLoop<'a> {
                 }
 
                 let results = SimpleJoinAll::new(futures).await;
-                for (request, tool_started_at, policy_audit, tool_result) in results {
+                for (index, (request, tool_started_at, policy_audit, tool_result)) in
+                    results.into_iter().enumerate()
+                {
                     if self.cancellation.is_cancelled() {
                         return self.give_up(GiveUpReason::Cancelled, iteration, progress);
                     }
@@ -733,6 +1245,15 @@ impl<'a> AgentLoop<'a> {
                             ToolExecutionStatus::Failed(err_str)
                         }
                     };
+                    let mut hooks = pre_hooks.get(index).cloned().unwrap_or_default();
+                    let outcome_phase = match &status {
+                        ToolExecutionStatus::Succeeded(_) => HookPhase::Post,
+                        ToolExecutionStatus::Failed(_) => HookPhase::OnError,
+                    };
+                    hooks.extend(
+                        self.fire_hooks(outcome_phase, &request, &mut hook_budget, &mut progress)
+                            .await,
+                    );
                     progress
                         .policy_decisions
                         .extend(policy_audit.into_decisions());
@@ -743,6 +1264,7 @@ impl<'a> AgentLoop<'a> {
                             .as_millis()
                             .min(u128::from(u64::MAX)) as u64,
                         status,
+                        hooks,
                     };
                     let observation = tool_observation(&event);
                     let observation_message = ChatMessage {
@@ -798,19 +1320,29 @@ impl<'a> AgentLoop<'a> {
                             request: request.clone(),
                         },
                     )?;
+                    let pre_hooks = self
+                        .fire_hooks(HookPhase::Pre, &request, &mut hook_budget, &mut progress)
+                        .await;
                     let tool_started_at = Instant::now();
                     let mut policy_audit = RecordingSideEffectAuditSink::default();
-                    let tool_future = execute_installed_tool_with_policy(
-                        &request,
-                        self.installed_skills,
-                        &self.execution_context,
-                        &mut *self.approval,
-                        &self.side_effect_policy,
-                        &mut policy_audit,
-                    );
-                    let tool_result = tokio::select! {
-                        res = tool_future => Some(res),
-                        _ = self.cancellation.cancelled() => None,
+                    let tool_result = if request.skill_id == SUBAGENT_SKILL_ID {
+                        let (result, child_ledger) = self.run_subagent_tool(&request).await;
+                        progress.ledger.merge(&child_ledger);
+                        Some(result)
+                    } else {
+                        let tool_future = execute_tool_with_policy(
+                            &request,
+                            self.installed_skills,
+                            &self.execution_context,
+                            &mut *self.approval,
+                            &self.side_effect_policy,
+                            &mut policy_audit,
+                            self.external_tools,
+                        );
+                        tokio::select! {
+                            res = tool_future => Some(res),
+                            _ = self.cancellation.cancelled() => None,
+                        }
                     };
                     let status = match tool_result {
                         Some(Ok(result)) => {
@@ -832,6 +1364,15 @@ impl<'a> AgentLoop<'a> {
                             "Tool execution cancelled by user".to_string(),
                         ),
                     };
+                    let mut hooks = pre_hooks;
+                    let outcome_phase = match &status {
+                        ToolExecutionStatus::Succeeded(_) => HookPhase::Post,
+                        ToolExecutionStatus::Failed(_) => HookPhase::OnError,
+                    };
+                    hooks.extend(
+                        self.fire_hooks(outcome_phase, &request, &mut hook_budget, &mut progress)
+                            .await,
+                    );
                     progress
                         .policy_decisions
                         .extend(policy_audit.into_decisions());
@@ -842,6 +1383,7 @@ impl<'a> AgentLoop<'a> {
                             .as_millis()
                             .min(u128::from(u64::MAX)) as u64,
                         status,
+                        hooks,
                     };
                     let observation = tool_observation(&event);
                     let observation_message = ChatMessage {
@@ -1054,7 +1596,7 @@ impl<'a> AgentLoop<'a> {
         cost_microusd >= cap_microusd
     }
 
-    fn skill_id_for_native_tool(&self, name: &str) -> Option<&str> {
+    fn skill_id_for_native_tool(&self, name: &str) -> Option<String> {
         let cleaned = name.trim();
         let unprefix = cleaned
             .strip_prefix("axiom_")
@@ -1073,7 +1615,22 @@ impl<'a> AgentLoop<'a> {
                     || skill_id.replace('.', "_") == unprefix
             })
         {
-            return Some(skill_id);
+            return Some(skill_id.to_string());
+        }
+
+        if let Some(definition) = self
+            .external_tools
+            .into_iter()
+            .flat_map(ExternalToolSource::definitions)
+            .find(|definition| {
+                definition.id == cleaned
+                    || native_tool_name(&definition.id) == cleaned
+                    || definition.id == unprefix
+                    || definition.id.replace('.', "_") == cleaned
+                    || definition.id.replace('.', "_") == unprefix
+            })
+        {
+            return Some(definition.id);
         }
 
         const CORE_BUILTIN_IDS: &[&str] = &[
@@ -1091,13 +1648,17 @@ impl<'a> AgentLoop<'a> {
             "skill.create",
             "question.ask",
         ];
-        CORE_BUILTIN_IDS.iter().copied().find(|builtin| {
-            *builtin == cleaned
-                || *builtin == unprefix
-                || native_tool_name(builtin) == cleaned
-                || builtin.replace('.', "_") == cleaned
-                || builtin.replace('.', "_") == unprefix
-        })
+        CORE_BUILTIN_IDS
+            .iter()
+            .copied()
+            .find(|builtin| {
+                *builtin == cleaned
+                    || *builtin == unprefix
+                    || native_tool_name(builtin) == cleaned
+                    || builtin.replace('.', "_") == cleaned
+                    || builtin.replace('.', "_") == unprefix
+            })
+            .map(ToString::to_string)
     }
 }
 
@@ -1174,11 +1735,77 @@ where
 fn is_readonly_tool(skill_id: &str) -> bool {
     matches!(
         skill_id,
-        "file.read" | "project.scan" | "git.status" | "git.diff" | "web.fetch"
+        "file.read"
+            | "file.read_many"
+            | "project.scan"
+            | "git.status"
+            | "git.diff"
+            | "web.fetch"
+            | "github.search"
+            | "code.grep"
+            | "code.glob"
+            | "code.list"
     )
 }
 
+/// The model-facing observation for a finished tool call: the tool result
+/// itself, plus whatever manifest hooks reported around it.
 fn tool_observation(event: &ToolExecutionEvent) -> String {
+    let mut observation = tool_observation_body(event);
+    if let Some(hooks) = hook_observation(&event.hooks) {
+        observation.push_str("\n\n");
+        observation.push_str(&hooks);
+    }
+    observation
+}
+
+/// Summarizes the manifest hooks that ran around a tool call, so hook output
+/// (for example a lint failure) can steer the next iteration.
+fn hook_observation(hooks: &[HookExecution]) -> Option<String> {
+    if hooks.is_empty() {
+        return None;
+    }
+    let mut lines = vec!["Manifest hooks:".to_string()];
+    for hook in hooks {
+        let detail = match hook.status {
+            HookStatus::Succeeded => hook
+                .output
+                .as_ref()
+                .map(|output| truncate_for_observation(&output.to_string(), 400)),
+            HookStatus::Failed => hook.error.clone(),
+            HookStatus::Unavailable => {
+                Some("the hook skill is not executable in this workspace".to_string())
+            }
+            HookStatus::SkippedReentrancy => {
+                Some("skipped: refusing to re-enter the loop".to_string())
+            }
+            HookStatus::SkippedBudget => {
+                Some("skipped: hook budget or wall clock exhausted".to_string())
+            }
+            HookStatus::SkippedCancelled => Some("skipped: turn cancelled".to_string()),
+        };
+        match detail.filter(|detail| !detail.trim().is_empty()) {
+            Some(detail) => lines.push(format!(
+                "- {} [{}] {}",
+                hook.hook_id,
+                hook.phase.as_str(),
+                detail
+            )),
+            None => lines.push(format!("- {} [{}]", hook.hook_id, hook.phase.as_str())),
+        }
+    }
+    Some(lines.join("\n"))
+}
+
+fn truncate_for_observation(text: &str, limit: usize) -> String {
+    if text.chars().count() <= limit {
+        return text.to_string();
+    }
+    let truncated = text.chars().take(limit).collect::<String>();
+    format!("{truncated}… [hook output truncated]")
+}
+
+fn tool_observation_body(event: &ToolExecutionEvent) -> String {
     match &event.status {
         ToolExecutionStatus::Succeeded(result) => {
             if result.skill_id == "question.ask" {
@@ -1197,6 +1824,26 @@ fn tool_observation(event: &ToolExecutionEvent) -> String {
                         "The user responded to your clarification question ({reply_type}):\n\"{selected}\"\n\nIMPORTANT: Prioritize this user answer above all else. Address and fulfill this response directly. Do not ask repeated questions or loop."
                     );
                 }
+            }
+            if result.skill_id == "subagent.run" {
+                let status = result
+                    .output
+                    .get("status")
+                    .and_then(Value::as_str)
+                    .unwrap_or("unknown");
+                let role = result
+                    .output
+                    .get("role")
+                    .and_then(Value::as_str)
+                    .unwrap_or("subagent");
+                let summary = result
+                    .output
+                    .get("summary")
+                    .and_then(Value::as_str)
+                    .unwrap_or("");
+                return format!(
+                    "Sub-agent [{role}] reported status `{status}`:\n{summary}\n\nUse these findings to continue the original task. Dispatch another sub-agent or use your own tools if more evidence is needed."
+                );
             }
             if let Some(124) = result.output.get("exit_code").and_then(Value::as_i64) {
                 let stdout = result
@@ -1283,7 +1930,8 @@ mod tests {
 
     use async_trait::async_trait;
     use axiom_engine::{
-        DenyAllApprover, InstalledSkillRecord, SkillLifecycleState, SkillManifest, TrustLevel,
+        DenyAllApprover, InstalledSkillRecord, PolicyAction, SkillLifecycleState, SkillManifest,
+        TrustLevel,
     };
     use axiom_llm::{
         ChatResponse, ChatStream, ChatToolCall, LlmError, MockProvider, ModelInfo, TokenUsage,
@@ -1362,6 +2010,87 @@ mod tests {
         );
 
         assert!(agent.tool_definitions.is_empty());
+    }
+
+    #[tokio::test]
+    async fn subagent_delegation_runs_an_isolated_turn_and_reports_usage() {
+        let provider = MockProvider::new("mock");
+        let installed = [installed_tool("file.read"), installed_tool("code.grep")];
+        let mut approval = DenyAllApprover;
+        let agent = AgentLoop::new(
+            &provider,
+            "mock-model",
+            AgentCaps::default(),
+            Vec::new(),
+            Vec::new(),
+            &installed,
+            context(),
+            &mut approval,
+        );
+
+        let request = ToolRequest {
+            skill_id: "subagent.run".to_string(),
+            arguments: json!({"role": "Explorer", "task": "Audit token handling"}),
+        };
+        let (result, ledger) = agent.run_subagent_tool(&request).await;
+        let result = result.expect("sub-agent runs through the provider");
+
+        assert_eq!(result.skill_id, "subagent.run");
+        assert_eq!(result.output["status"], "completed");
+        assert_eq!(result.output["role"], "Explorer");
+        assert!(result.output["summary"]
+            .as_str()
+            .expect("summary")
+            .contains("Audit token handling"));
+        assert!(ledger.total_tokens > 0);
+    }
+
+    #[tokio::test]
+    async fn subagent_delegation_refuses_nesting_and_requires_role_and_task() {
+        let provider = MockProvider::new("mock");
+        let mut approval = DenyAllApprover;
+        let nested = AgentLoop::new(
+            &provider,
+            "mock-model",
+            AgentCaps::default(),
+            Vec::new(),
+            Vec::new(),
+            &[],
+            context(),
+            &mut approval,
+        )
+        .with_subagent_depth(1);
+        let (nested_result, _) = nested
+            .run_subagent_tool(&ToolRequest {
+                skill_id: "subagent.run".to_string(),
+                arguments: json!({"role": "Explorer", "task": "x"}),
+            })
+            .await;
+        assert!(matches!(
+            nested_result.expect_err("nested sub-agent must fail"),
+            SkillExecutionError::ExecutionFailed { .. }
+        ));
+
+        let agent = AgentLoop::new(
+            &provider,
+            "mock-model",
+            AgentCaps::default(),
+            Vec::new(),
+            Vec::new(),
+            &[],
+            context(),
+            &mut approval,
+        );
+        let (missing, _) = agent
+            .run_subagent_tool(&ToolRequest {
+                skill_id: "subagent.run".to_string(),
+                arguments: json!({"task": "x"}),
+            })
+            .await;
+        assert!(matches!(
+            missing.expect_err("missing role must fail"),
+            SkillExecutionError::MissingArgument { .. }
+        ));
     }
 
     #[tokio::test]
@@ -1947,6 +2676,460 @@ min_axiom_version = "0.1.0"
         }
     }
 
+    /// An installed tool manifest carrying `[hooks]` declarations.
+    fn installed_tool_with_hooks(
+        skill_id: &str,
+        pre: Option<&str>,
+        post: Option<&str>,
+        on_error: Option<&str>,
+    ) -> InstalledSkill {
+        let mut skill = installed_tool(skill_id);
+        skill.manifest.hooks = SkillHooks {
+            pre: pre.map(ToString::to_string),
+            post: post.map(ToString::to_string),
+            on_error: on_error.map(ToString::to_string),
+        };
+        skill
+    }
+
+    /// Requests the configured tool calls once, then answers with plain text.
+    struct ToolCallProvider {
+        tool_calls: Vec<(String, Value)>,
+        calls: AtomicUsize,
+    }
+
+    impl ToolCallProvider {
+        fn new(tool_calls: Vec<(String, Value)>) -> Self {
+            Self {
+                tool_calls,
+                calls: AtomicUsize::new(0),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl LlmProvider for ToolCallProvider {
+        async fn chat(&self, request: ChatRequest) -> axiom_llm::Result<ChatResponse> {
+            let call = self.calls.fetch_add(1, Ordering::SeqCst);
+            let (content, tool_calls) = if call == 0 {
+                (
+                    String::new(),
+                    self.tool_calls
+                        .iter()
+                        .enumerate()
+                        .map(|(index, (name, arguments))| ChatToolCall {
+                            id: Some(format!("call_{index}")),
+                            name: name.clone(),
+                            arguments: arguments.clone(),
+                        })
+                        .collect(),
+                )
+            } else {
+                ("hook turn finished".to_string(), Vec::new())
+            };
+            Ok(ChatResponse {
+                content,
+                usage: Some(TokenUsage {
+                    prompt_tokens: 10,
+                    completion_tokens: 5,
+                    total_tokens: 15,
+                }),
+                model: request.model,
+                provider: "tool-call".to_string(),
+                raw: None,
+                tool_calls,
+            })
+        }
+
+        async fn stream_chat(&self, _request: ChatRequest) -> axiom_llm::Result<ChatStream> {
+            Err(LlmError::NotImplemented("not used in this test"))
+        }
+
+        async fn models(&self) -> axiom_llm::Result<Vec<ModelInfo>> {
+            Ok(Vec::new())
+        }
+
+        fn provider_name(&self) -> &str {
+            "tool-call"
+        }
+    }
+
+    fn user_message(content: &str) -> ChatMessage {
+        ChatMessage {
+            role: "user".to_string(),
+            content: content.to_string(),
+        }
+    }
+
+    /// The observation the model saw for the first tool call of a turn.
+    fn first_tool_observation(completion: &TurnCompletion) -> String {
+        completion
+            .transitions
+            .iter()
+            .find_map(|transition| match &transition.kind {
+                AgentTransitionKind::ToolCompleted { observation, .. } => {
+                    Some(observation.content.clone())
+                }
+                _ => None,
+            })
+            .expect("a tool completion transition is recorded")
+    }
+
+    fn done_turn(result: TurnResult) -> TurnCompletion {
+        match result {
+            TurnResult::Done(completion) => completion,
+            TurnResult::GiveUp { reason, .. } => {
+                panic!("expected a completed turn, got {reason:?}")
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn manifest_hooks_fire_around_a_successful_tool_call() {
+        let provider = ToolCallProvider::new(vec![(
+            "axiom_project_scan".to_string(),
+            json!({"path": "."}),
+        )]);
+        // Hooks receive the triggering tool's arguments, so `code.list` is
+        // pointed at the same directory `project.scan` was asked to scan.
+        let installed = [installed_tool_with_hooks(
+            "project.scan",
+            Some("code.list"),
+            Some("code.list"),
+            None,
+        )];
+        let mut approval = DenyAllApprover;
+        let mut agent = AgentLoop::new(
+            &provider,
+            "test-model",
+            AgentCaps::default(),
+            Vec::new(),
+            Vec::new(),
+            &installed,
+            context(),
+            &mut approval,
+        );
+
+        let completion = done_turn(
+            agent
+                .run_turn(user_message("read the manifest"))
+                .await
+                .expect("turn succeeds"),
+        );
+
+        let event = completion.tool_events.first().expect("one tool event");
+        assert!(matches!(event.status, ToolExecutionStatus::Succeeded(_)));
+        let phases = event
+            .hooks
+            .iter()
+            .map(|hook| hook.phase)
+            .collect::<Vec<_>>();
+        assert_eq!(phases, vec![HookPhase::Pre, HookPhase::Post]);
+        for hook in &event.hooks {
+            assert_eq!(hook.hook_id, "code.list");
+            assert_eq!(hook.status, HookStatus::Succeeded, "{hook:?}");
+            assert!(hook.output.is_some(), "{hook:?}");
+        }
+
+        let observation = first_tool_observation(&completion);
+        assert!(observation.contains("Manifest hooks:"));
+        assert!(observation.contains("- code.list [pre]"));
+        assert!(observation.contains("- code.list [post]"));
+    }
+
+    #[tokio::test]
+    async fn on_error_hooks_fire_when_the_tool_fails_and_post_does_not() {
+        let provider = ToolCallProvider::new(vec![(
+            "axiom_project_scan".to_string(),
+            json!({"path": "no-such-directory-axiom-hooks"}),
+        )]);
+        let installed = [installed_tool_with_hooks(
+            "project.scan",
+            None,
+            Some("code.list"),
+            Some("code.list"),
+        )];
+        let mut approval = DenyAllApprover;
+        let mut agent = AgentLoop::new(
+            &provider,
+            "test-model",
+            AgentCaps::default(),
+            Vec::new(),
+            Vec::new(),
+            &installed,
+            context(),
+            &mut approval,
+        );
+
+        let completion = done_turn(
+            agent
+                .run_turn(user_message("read a missing file"))
+                .await
+                .expect("turn succeeds"),
+        );
+
+        let event = completion.tool_events.first().expect("one tool event");
+        assert!(matches!(event.status, ToolExecutionStatus::Failed(_)));
+        assert_eq!(event.hooks.len(), 1, "post must not run for a failed tool");
+        assert_eq!(event.hooks[0].phase, HookPhase::OnError);
+        assert!(
+            matches!(
+                event.hooks[0].status,
+                HookStatus::Succeeded | HookStatus::Failed
+            ),
+            "the on_error hook actually ran"
+        );
+        assert!(first_tool_observation(&completion).contains("[on_error]"));
+    }
+
+    #[tokio::test]
+    async fn manifest_hooks_fire_for_parallel_read_only_batches() {
+        let provider = ToolCallProvider::new(vec![
+            ("axiom_project_scan".to_string(), json!({"path": "."})),
+            ("axiom_project_scan".to_string(), json!({"path": "src"})),
+        ]);
+        let installed = [installed_tool_with_hooks(
+            "project.scan",
+            Some("code.list"),
+            Some("code.list"),
+            None,
+        )];
+        let mut approval = DenyAllApprover;
+        let mut agent = AgentLoop::new(
+            &provider,
+            "test-model",
+            AgentCaps::default(),
+            Vec::new(),
+            Vec::new(),
+            &installed,
+            context(),
+            &mut approval,
+        );
+
+        let completion = done_turn(
+            agent
+                .run_turn(user_message("read both files"))
+                .await
+                .expect("turn succeeds"),
+        );
+
+        assert_eq!(completion.tool_events.len(), 2);
+        for event in &completion.tool_events {
+            let phases = event
+                .hooks
+                .iter()
+                .map(|hook| hook.phase)
+                .collect::<Vec<_>>();
+            assert_eq!(phases, vec![HookPhase::Pre, HookPhase::Post]);
+            for hook in &event.hooks {
+                assert_eq!(hook.status, HookStatus::Succeeded, "{hook:?}");
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn a_hook_that_cannot_execute_is_recorded_as_unavailable() {
+        let provider = ToolCallProvider::new(vec![(
+            "axiom_project_scan".to_string(),
+            json!({"path": "."}),
+        )]);
+        let installed = [installed_tool_with_hooks(
+            "project.scan",
+            None,
+            Some("demo.lint"),
+            None,
+        )];
+        let mut approval = DenyAllApprover;
+        let mut agent = AgentLoop::new(
+            &provider,
+            "test-model",
+            AgentCaps::default(),
+            Vec::new(),
+            Vec::new(),
+            &installed,
+            context(),
+            &mut approval,
+        );
+
+        let completion = done_turn(
+            agent
+                .run_turn(user_message("read the manifest"))
+                .await
+                .expect("turn succeeds"),
+        );
+
+        let event = completion.tool_events.first().expect("one tool event");
+        assert!(matches!(event.status, ToolExecutionStatus::Succeeded(_)));
+        assert_eq!(event.hooks.len(), 1);
+        assert_eq!(event.hooks[0].hook_id, "demo.lint");
+        assert_eq!(event.hooks[0].status, HookStatus::Unavailable);
+        assert!(first_tool_observation(&completion).contains("not executable"));
+    }
+
+    #[tokio::test]
+    async fn hooks_run_through_the_side_effect_policy_and_approval_gate() {
+        let provider = ToolCallProvider::new(vec![(
+            "axiom_project_scan".to_string(),
+            json!({"path": "."}),
+        )]);
+        let installed = [installed_tool_with_hooks(
+            "project.scan",
+            Some("code.list"),
+            None,
+            None,
+        )];
+        let mut approval = DenyAllApprover;
+        let mut agent = AgentLoop::new(
+            &provider,
+            "test-model",
+            AgentCaps::default(),
+            Vec::new(),
+            Vec::new(),
+            &installed,
+            context(),
+            &mut approval,
+        )
+        .with_side_effect_policy(SideEffectPolicy {
+            filesystem_read: PolicyAction::Ask,
+            ..SideEffectPolicy::deny_all()
+        });
+
+        let completion = done_turn(
+            agent
+                .run_turn(user_message("read the manifest"))
+                .await
+                .expect("turn succeeds"),
+        );
+
+        let event = completion.tool_events.first().expect("one tool event");
+        assert_eq!(event.hooks.len(), 1);
+        assert_eq!(event.hooks[0].status, HookStatus::Failed);
+        assert!(event.hooks[0]
+            .error
+            .as_deref()
+            .unwrap_or_default()
+            .contains("approval denied"));
+        assert!(matches!(event.status, ToolExecutionStatus::Failed(_)));
+        assert!(
+            completion
+                .policy_decisions
+                .iter()
+                .any(|decision| decision.evaluation.request.skill_id == "code.list"),
+            "the hook's own policy decision is recorded"
+        );
+    }
+
+    #[tokio::test]
+    async fn hooks_skip_on_reentrancy_and_exhausted_budget_instead_of_running() {
+        let provider = MockProvider::new("mock");
+        let installed = [installed_tool_with_hooks(
+            "project.scan",
+            Some("code.list"),
+            Some("code.list"),
+            None,
+        )];
+        let mut approval = DenyAllApprover;
+        let mut agent = AgentLoop::new(
+            &provider,
+            "test-model",
+            AgentCaps::default(),
+            Vec::new(),
+            Vec::new(),
+            &installed,
+            context(),
+            &mut approval,
+        );
+        let request = ToolRequest {
+            skill_id: "project.scan".to_string(),
+            arguments: json!({"path": "."}),
+        };
+        let mut progress = TurnProgress::default();
+
+        let mut exhausted = HookBudget {
+            remaining: 0,
+            started_at: Instant::now(),
+            deadline_secs: 3600,
+        };
+        let hooks = agent
+            .fire_hooks(HookPhase::Pre, &request, &mut exhausted, &mut progress)
+            .await;
+        assert_eq!(hooks[0].status, HookStatus::SkippedBudget);
+        assert!(hooks[0].output.is_none());
+
+        let mut late = HookBudget {
+            remaining: 5,
+            started_at: Instant::now() - std::time::Duration::from_secs(60),
+            deadline_secs: 1,
+        };
+        let hooks = agent
+            .fire_hooks(HookPhase::Pre, &request, &mut late, &mut progress)
+            .await;
+        assert_eq!(hooks[0].status, HookStatus::SkippedBudget);
+        assert_eq!(late.remaining, 5, "a wall-clock skip spends no allowance");
+
+        let mut nested = AgentLoop::new(
+            &provider,
+            "test-model",
+            AgentCaps::default(),
+            Vec::new(),
+            Vec::new(),
+            &installed,
+            context(),
+            &mut approval,
+        )
+        .with_hook_depth(1);
+        let mut budget = HookBudget::new(&AgentCaps::default(), Instant::now());
+        let hooks = nested
+            .fire_hooks(HookPhase::Pre, &request, &mut budget, &mut progress)
+            .await;
+        assert_eq!(hooks[0].status, HookStatus::SkippedReentrancy);
+        assert_eq!(
+            budget.remaining, MAX_HOOKS_PER_TURN,
+            "a re-entrancy skip spends no allowance"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_skill_cannot_hook_itself() {
+        let provider = MockProvider::new("mock");
+        let installed = [installed_tool_with_hooks(
+            "project.scan",
+            Some("project.scan"),
+            Some("project.scan"),
+            Some("project.scan"),
+        )];
+        let mut approval = DenyAllApprover;
+        let mut agent = AgentLoop::new(
+            &provider,
+            "test-model",
+            AgentCaps::default(),
+            Vec::new(),
+            Vec::new(),
+            &installed,
+            context(),
+            &mut approval,
+        );
+        let request = ToolRequest {
+            skill_id: "project.scan".to_string(),
+            arguments: json!({"path": "."}),
+        };
+        let mut progress = TurnProgress::default();
+        let mut budget = HookBudget::new(&AgentCaps::default(), Instant::now());
+
+        for phase in [HookPhase::Pre, HookPhase::Post, HookPhase::OnError] {
+            let hooks = agent
+                .fire_hooks(phase, &request, &mut budget, &mut progress)
+                .await;
+            assert_eq!(hooks.len(), 1);
+            assert_eq!(
+                hooks[0].status,
+                HookStatus::SkippedReentrancy,
+                "{phase:?} must refuse to re-enter the loop"
+            );
+        }
+        assert_eq!(budget.remaining, MAX_HOOKS_PER_TURN);
+    }
+
     #[test]
     fn tool_observation_formats_question_ask_as_trusted_user_instruction() {
         let custom_event = ToolExecutionEvent {
@@ -1963,6 +3146,7 @@ min_axiom_version = "0.1.0"
                     "index": 3
                 }),
             }),
+            hooks: Vec::new(),
         };
 
         let obs = tool_observation(&custom_event);
@@ -1989,6 +3173,7 @@ min_axiom_version = "0.1.0"
                     "stderr": "Command timed out after 30s."
                 }),
             }),
+            hooks: Vec::new(),
         };
 
         let obs = tool_observation(&timeout_event);
@@ -2006,6 +3191,7 @@ min_axiom_version = "0.1.0"
             },
             latency_ms: 500,
             status: ToolExecutionStatus::Failed("approval denied by user policy".to_string()),
+            hooks: Vec::new(),
         };
 
         let obs = tool_observation(&denied_event);

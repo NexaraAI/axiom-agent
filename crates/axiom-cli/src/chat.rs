@@ -22,7 +22,7 @@ use axiom_core::{
     CURRENT_IDENTITY_VERSION, CURRENT_SESSION_VERSION,
 };
 use axiom_engine::{
-    check_skill_update_statuses, current_axiom_version, execute_installed_tool_with_policy,
+    check_skill_update_statuses, current_axiom_version, execute_tool_with_policy,
     extract_tool_request, load_installed_skills, load_registry_from_path,
     record_skill_execution_failure, record_skill_execution_success, registry_cache_dir,
     registry_cache_registry_path, ApprovalRequest, Platform, PolicyAction, QuestionAnswer,
@@ -34,6 +34,7 @@ use axiom_llm::{
     ChatMessage, ChatRequest, ChatResponse, ChatStreamUpdate, CloudflareAiGatewayProvider,
     LlmProvider, MockProvider, ModelInfo, OpenAiCompatibleProvider,
 };
+use axiom_mcp::McpToolSource;
 use axiom_proof::{
     new_approval, new_tool_call, AgentRuntimeProof, CheckpointProof, FileReadProof, FileWriteProof,
     LensSelectionRecord, PolicyDecisionProof, ProofMode, ProofRecorder, SkillCardProof,
@@ -56,7 +57,7 @@ use serde_json::Value;
 
 use crate::{
     startup::StartupRoute,
-    ui::{Renderer, Spinner},
+    ui::{visible_width, Renderer, Spinner},
     RunCommand,
 };
 
@@ -73,6 +74,10 @@ pub(crate) struct ChatSession {
     pub(crate) workspace_path: PathBuf,
     credential_env_names: Vec<String>,
     pub(crate) prompt_queue: VecDeque<String>,
+    /// Live MCP connections, established lazily on the first turn so a slow or
+    /// broken server never delays startup.
+    mcp: Option<McpToolSource>,
+    mcp_connect_attempted: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -332,6 +337,8 @@ impl ChatSession {
             workspace_path,
             credential_env_names,
             prompt_queue: VecDeque::new(),
+            mcp: None,
+            mcp_connect_attempted: false,
         })
     }
 
@@ -919,6 +926,7 @@ impl ChatSession {
         let provider = self.build_provider(&provider_name)?;
         let mut proof = self.start_proof_trace(&content, &provider_name, &model);
         self.record_proof_lens(&mut proof, skill_cards)?;
+        self.ensure_mcp_connected().await;
 
         let user_message = ChatMessage {
             role: "user".to_string(),
@@ -998,13 +1006,14 @@ impl ChatSession {
                         proof: &mut proof,
                         approvals,
                     };
-                    execute_installed_tool_with_policy(
+                    execute_tool_with_policy(
                         &tool_request,
                         &installed_skills,
                         &execution_context,
                         &mut recording_approval,
                         &policy,
                         &mut policy_audit,
+                        self.external_tool_source(),
                     )
                     .await
                 };
@@ -1249,6 +1258,11 @@ impl ChatSession {
         .with_side_effect_policy(side_effect_policy)
         .with_provider_options(self.provider_options())
         .with_transition_observer(&mut checkpoint_writer);
+        if allow_tools {
+            if let Some(source) = self.external_tool_source() {
+                agent = agent.with_external_tools(source);
+            }
+        }
         if let Some(observer) = stream_observer {
             agent = agent.with_stream_observer(observer);
         }
@@ -1525,28 +1539,7 @@ impl ChatSession {
         CostLedgerStore::new(crate::cost_commands::cost_ledger_path(&self.config_path))
     }
     fn side_effect_policy(&self) -> Result<SideEffectPolicy> {
-        let mode = self.config.policy.permission_mode();
-        let mut policy = SideEffectPolicy {
-            filesystem_read: parse_policy_action(&self.config.policy.filesystem_read)?,
-            filesystem_write: parse_policy_action(&self.config.policy.filesystem_write)?,
-            network: parse_policy_action(&self.config.policy.network)?,
-            process: parse_policy_action(&self.config.policy.process)?,
-            git: parse_policy_action(&self.config.policy.git)?,
-        };
-        if mode == PermissionMode::Velocity {
-            if policy.filesystem_write == PolicyAction::Ask {
-                policy.filesystem_write = PolicyAction::Allow;
-            }
-            if policy.network == PolicyAction::Ask {
-                policy.network = PolicyAction::Allow;
-            }
-            if policy.process == PolicyAction::Ask {
-                policy.process = PolicyAction::Allow;
-            }
-        } else if mode == PermissionMode::FullMachine {
-            policy = SideEffectPolicy::allow_all();
-        }
-        Ok(policy)
+        side_effect_policy_for_config(&self.config)
     }
 
     fn build_provider(&self, provider_name: &str) -> Result<Box<dyn LlmProvider>> {
@@ -1621,6 +1614,42 @@ impl ChatSession {
             credential_env_names: self.credential_env_names.clone(),
             skills_dir: Some(self.skills_dir()),
         }
+    }
+
+    /// Connects the configured MCP servers once per session.
+    ///
+    /// A server that fails to start is reported as a warning and contributes no
+    /// tools, so a broken MCP server never breaks an otherwise working session.
+    async fn ensure_mcp_connected(&mut self) {
+        if self.mcp_connect_attempted {
+            return;
+        }
+        self.mcp_connect_attempted = true;
+        if !self.config.mcp.enabled || self.config.mcp.servers.is_empty() {
+            return;
+        }
+        let resolved = match crate::mcp_commands::resolve_env(self.config.mcp.enabled_servers()) {
+            Ok(resolved) => resolved,
+            Err(error) => {
+                eprintln!("warning: could not resolve MCP credentials: {error}");
+                return;
+            }
+        };
+        let source = McpToolSource::connect(&self.config.mcp, &resolved).await;
+        for warning in source.warnings() {
+            eprintln!("warning: {warning}");
+        }
+        if source.is_empty() {
+            return;
+        }
+        self.mcp = Some(source);
+    }
+
+    /// The connected MCP tools as an external tool source, when any are live.
+    fn external_tool_source(&self) -> Option<&dyn axiom_engine::ExternalToolSource> {
+        self.mcp
+            .as_ref()
+            .map(|source| source as &dyn axiom_engine::ExternalToolSource)
     }
 
     fn save_config(&self) -> Result<()> {
@@ -2978,6 +3007,35 @@ fn session_store_for_config(config_path: &Path) -> SessionStore {
     SessionStore::new(root)
 }
 
+/// Effective side-effect policy for a config, including the permission-mode
+/// shortcuts (velocity relaxes `ask`, full-machine allows everything).
+///
+/// Shared with `axiom mcp serve` so both directions gate on the same rules.
+pub(crate) fn side_effect_policy_for_config(config: &AxiomConfig) -> Result<SideEffectPolicy> {
+    let mode = config.policy.permission_mode();
+    let mut policy = SideEffectPolicy {
+        filesystem_read: parse_policy_action(&config.policy.filesystem_read)?,
+        filesystem_write: parse_policy_action(&config.policy.filesystem_write)?,
+        network: parse_policy_action(&config.policy.network)?,
+        process: parse_policy_action(&config.policy.process)?,
+        git: parse_policy_action(&config.policy.git)?,
+    };
+    if mode == PermissionMode::Velocity {
+        if policy.filesystem_write == PolicyAction::Ask {
+            policy.filesystem_write = PolicyAction::Allow;
+        }
+        if policy.network == PolicyAction::Ask {
+            policy.network = PolicyAction::Allow;
+        }
+        if policy.process == PolicyAction::Ask {
+            policy.process = PolicyAction::Allow;
+        }
+    } else if mode == PermissionMode::FullMachine {
+        policy = SideEffectPolicy::allow_all();
+    }
+    Ok(policy)
+}
+
 fn parse_policy_action(value: &str) -> Result<PolicyAction> {
     match value {
         "allow" => Ok(PolicyAction::Allow),
@@ -3569,7 +3627,15 @@ pub(crate) fn render_animated_file_write(path: &str, content: &str) {
     let reset = "\x1b[0m";
 
     if is_terminal {
-        println!("  {peach}╭── {bold}{cyan}Writing {path}{reset} {dim}({total_lines} lines){reset} {peach}──────────────────────────────╮{reset}");
+        // Size the frame to its header so long paths widen the top bar instead
+        // of pushing its right corner out past the body rows.
+        let header_text_len =
+            visible_width(path) + visible_width(&format!("({total_lines} lines)")) + 12;
+        let top_dashes = "─".repeat(header_text_len.max(24));
+        let bottom_dashes = "─".repeat(header_text_len.max(24).saturating_sub(12));
+        println!(
+            "  {peach}╭── {bold}{cyan}Writing {path}{reset} {dim}({total_lines} lines){reset} {peach}{top_dashes}╮{reset}"
+        );
 
         let preview_limit = 35;
         let preview_lines = if total_lines > preview_limit {
@@ -3599,7 +3665,9 @@ pub(crate) fn render_animated_file_write(path: &str, content: &str) {
             println!("  {peach}│{reset} {dim}    │ ... +{remaining} more lines written to {path} ...{reset}");
         }
 
-        println!("  {peach}╰── {green}✔ {path} written locally{reset} {peach}──────────────────────────────────╯{reset}");
+        println!(
+            "  {peach}╰── {green}✔ {path} written locally{reset} {peach}{bottom_dashes}╯{reset}"
+        );
     } else {
         println!("  Writing {path} ({total_lines} lines)...");
     }
@@ -5542,6 +5610,12 @@ fn print_help() {
     );
     println!("  /clear                              Clear session history");
     println!("  /proof on | off | status | latest   Audit and execution provenance");
+    println!(
+        "  /plan                               Switch to plan mode (read-only until you apply)"
+    );
+    println!("  /build                              Switch to build mode (normal tool execution)");
+    println!("  /history [SESSION_ID]               List past sessions or switch to one");
+    println!("  /resume SESSION_ID                  Continue a previous conversation");
     println!("  /multi                              Enter multiline prompt mode (/send to run)");
     println!("  /show [OUTPUT_ID]                   Display durable tool output");
     println!("  /commands                           Display interactive command palette");
@@ -5660,27 +5734,124 @@ enum CommandResult {
 }
 
 pub(crate) fn load_workspace_rules(workspace_root: &std::path::Path) -> Option<String> {
-    const MAX_RULES_BYTES: u64 = 16 * 1024;
-    for candidate in &[
-        ".axiomrules",
-        "AXIOM.md",
-        "AGENTS.md",
-        "MEMORY.md",
-        ".axiom/memory.md",
+    const MAX_RULES_BYTES: usize = 32 * 1024;
+    const MAX_IMPORT_DEPTH: usize = 3;
+    const MAX_FILES: usize = 16;
+
+    let mut candidates: Vec<(String, std::path::PathBuf)> = Vec::new();
+    if let Some(home) = std::env::var_os("AXIOM_HOME") {
+        candidates.push((
+            "Global AXIOM.md".to_string(),
+            std::path::PathBuf::from(home).join("AXIOM.md"),
+        ));
+    }
+    for (label, relative) in [
+        ("Workspace .axiomrules", ".axiomrules"),
+        ("Workspace AXIOM.md", "AXIOM.md"),
+        ("Workspace AGENTS.md", "AGENTS.md"),
+        ("Workspace .axiom/memory.md", ".axiom/memory.md"),
+        ("Workspace MEMORY.md", "MEMORY.md"),
     ] {
-        let path = workspace_root.join(candidate);
-        if let Ok(metadata) = std::fs::metadata(&path) {
-            if metadata.is_file() && metadata.len() <= MAX_RULES_BYTES {
-                if let Ok(content) = std::fs::read_to_string(&path) {
-                    let trimmed = content.trim();
-                    if !trimmed.is_empty() {
-                        return Some(trimmed.to_string());
-                    }
-                }
-            }
+        candidates.push((label.to_string(), workspace_root.join(relative)));
+    }
+    if let Ok(entries) = std::fs::read_dir(workspace_root.join(".axiom").join("rules")) {
+        let mut rule_files = entries
+            .filter_map(Result::ok)
+            .map(|entry| entry.path())
+            .filter(|path| {
+                path.extension()
+                    .is_some_and(|extension| extension.eq_ignore_ascii_case("md"))
+            })
+            .collect::<Vec<_>>();
+        rule_files.sort();
+        for path in rule_files {
+            let name = path
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            candidates.push((format!(".axiom/rules/{name}"), path));
         }
     }
-    None
+
+    let mut sections: Vec<String> = Vec::new();
+    let mut seen: std::collections::BTreeSet<std::path::PathBuf> =
+        std::collections::BTreeSet::new();
+    let mut remaining = MAX_RULES_BYTES;
+    for (label, path) in candidates {
+        if sections.len() >= MAX_FILES || remaining == 0 {
+            break;
+        }
+        append_instruction_file(
+            &mut sections,
+            &mut seen,
+            &path,
+            &label,
+            0,
+            MAX_IMPORT_DEPTH,
+            &mut remaining,
+        );
+    }
+
+    if sections.is_empty() {
+        None
+    } else {
+        Some(sections.join("\n\n"))
+    }
+}
+
+/// Appends one instruction file and its bounded `@import` graph to the merged ruleset.
+fn append_instruction_file(
+    sections: &mut Vec<String>,
+    seen: &mut std::collections::BTreeSet<std::path::PathBuf>,
+    path: &std::path::Path,
+    label: &str,
+    depth: usize,
+    max_depth: usize,
+    remaining: &mut usize,
+) {
+    if *remaining == 0 || depth > max_depth || sections.len() >= 16 {
+        return;
+    }
+    let canonical = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    if !seen.insert(canonical) {
+        return;
+    }
+    let Ok(content) = std::fs::read_to_string(path) else {
+        return;
+    };
+    let mut body = String::new();
+    for line in content.lines() {
+        if let Some(import) = line.trim().strip_prefix("@import ") {
+            let import = import.trim();
+            if !import.is_empty() {
+                let import_path = path
+                    .parent()
+                    .unwrap_or_else(|| std::path::Path::new("."))
+                    .join(import);
+                append_instruction_file(
+                    sections,
+                    seen,
+                    &import_path,
+                    &format!("{label} -> {import}"),
+                    depth + 1,
+                    max_depth,
+                    remaining,
+                );
+            }
+            continue;
+        }
+        if body.len() + line.len() + 1 > *remaining {
+            break;
+        }
+        body.push_str(line);
+        body.push('\n');
+    }
+    let trimmed = body.trim();
+    if trimmed.is_empty() {
+        return;
+    }
+    *remaining = (*remaining).saturating_sub(trimmed.len());
+    sections.push(format!("[{label}]\n{trimmed}"));
 }
 
 #[cfg(test)]
@@ -5693,6 +5864,40 @@ mod tests {
     };
 
     use super::*;
+
+    #[test]
+    fn workspace_rules_merge_root_rules_with_nested_imports() {
+        let dir = std::env::temp_dir().join(format!(
+            "axiom-rules-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("clock")
+                .as_nanos()
+        ));
+        fs::create_dir_all(dir.join(".axiom").join("rules")).expect("rules dir");
+        fs::write(dir.join("AGENTS.md"), "root instruction").expect("agents");
+        fs::write(
+            dir.join(".axiom").join("rules").join("a.md"),
+            "alpha rule\n@import extra.md\n",
+        )
+        .expect("alpha");
+        fs::write(dir.join(".axiom").join("rules").join("b.md"), "beta rule").expect("beta");
+        fs::write(
+            dir.join(".axiom").join("rules").join("extra.md"),
+            "imported rule",
+        )
+        .expect("extra");
+
+        let merged = load_workspace_rules(&dir).expect("merged rules");
+
+        assert!(merged.contains("root instruction"));
+        assert!(merged.contains("alpha rule"));
+        assert!(merged.contains("imported rule"));
+        assert!(merged.contains("beta rule"));
+        assert!(merged.find("alpha rule") < merged.find("beta rule"));
+        let _ = fs::remove_dir_all(dir);
+    }
 
     #[test]
     fn model_catalog_display_is_filtered_and_bounded() {

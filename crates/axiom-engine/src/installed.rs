@@ -245,6 +245,10 @@ pub fn load_installed_skills(skills_dir: impl AsRef<Path>) -> Result<Vec<Install
         "skill.create",
         "question.ask",
         "test.run",
+        "code.grep",
+        "code.glob",
+        "code.list",
+        "file.read_many",
     ] {
         if !skills.iter().any(|s| s.manifest.id == core_id) {
             if let Some(builtin) = crate::builtin_installed_skill(core_id) {

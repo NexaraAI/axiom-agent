@@ -9,11 +9,12 @@ members = [
     "crates/axiom-proof",
     "crates/axiom-update",
     "crates/axiom-agent",
+    "crates/axiom-mcp",
 ]
 resolver = "2"
 
 [workspace.package]
-version = "1.0.16"
+version = "1.0.17"
 edition = "2021"
 license = "MIT"
 authors = ["Axiom Agent Contributors"]

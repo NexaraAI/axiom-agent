@@ -1,5 +1,6 @@
 use nu_ansi_term::{Color, Style};
 use std::io::IsTerminal;
+use unicode_width::UnicodeWidthChar as _;
 
 use axiom_core::AxiomConfig;
 
@@ -108,10 +109,6 @@ impl Renderer {
         ];
         let subtitle = "a  x  i  o  m     a  g  e  n  t";
 
-        let border_top = "  ┌─────────────────────────────────────────────────────────────┐";
-        let border_bottom = "  └─────────────────────────────────────────────────────────────┘";
-        let card_empty = pad_card_line("│", "", 58);
-
         let logo_colors = [
             Color::Fixed(39),
             Color::Fixed(75),
@@ -132,19 +129,14 @@ impl Renderer {
         out.push(format!("                    {}", self.smoke(subtitle)));
         out.push(String::new());
 
-        out.push(self.border(border_top));
-        out.push(self.border(&card_empty));
-
-        // Input prompt line
+        // Build the card's dynamic rows first, then size the frame to the
+        // widest row so long model/provider names widen the card instead of
+        // overflowing a fixed-width box.
         let input_accent = self.paint(self.palette.primary, "│");
         let input_cursor = self.paint(self.palette.primary, "▌");
         let input_hint = self.smoke("Ask anything... \"Fix a TODO in the codebase\"");
         let input_content = format!("{input_accent} {input_cursor} {input_hint}");
-        out.push(pad_card_line(&self.border("│"), &input_content, 58));
 
-        out.push(self.border(&card_empty));
-
-        // Status line with Work Mode badge
         let status_role = self.smoke("Agent ·");
         let status_model = self.bone(model);
         let status_variant = self.paint(self.palette.warning, &format!("[variant: {effort_val}]"));
@@ -156,11 +148,7 @@ impl Renderer {
         let status_content = format!(
             "{status_role} {status_model} {status_variant} {work_mode_badge} {status_provider}"
         );
-        out.push(pad_card_line(&self.border("│"), &status_content, 58));
 
-        out.push(self.border(&card_empty));
-
-        // Mode & Session line
         let mode_norm = if mode.is_empty() { "velocity" } else { mode };
         let mode_styled = match mode_norm {
             "full_machine" => self.red("full_machine"),
@@ -175,10 +163,7 @@ impl Renderer {
         } else {
             format!("{mode_label} {mode_styled}")
         };
-        out.push(pad_card_line(&self.border("│"), &session_line_content, 58));
-        out.push(self.border(&card_empty));
 
-        // Navigation buttons & shortcuts row
         let btn_palette = self.paint(Color::Fixed(215), "Ctrl+P");
         let btn_palette_lbl = self.smoke("palette");
         let btn_plan = self.paint(Color::Fixed(208), "/plan");
@@ -189,21 +174,42 @@ impl Renderer {
         let kb_content = format!(
             "{btn_palette} {btn_palette_lbl}  {btn_plan}  {btn_build}  {btn_var}  {btn_slash} {btn_slash_lbl}"
         );
-        out.push(pad_card_line(&self.border("│"), &kb_content, 58));
 
-        out.push(self.border(&card_empty));
-        out.push(self.border(border_bottom));
+        let inner_width = [
+            visible_width(&input_content),
+            visible_width(&status_content),
+            visible_width(&session_line_content),
+            visible_width(&kb_content),
+        ]
+        .into_iter()
+        .max()
+        .unwrap_or(0)
+        .max(58);
 
-        // Footer line
-        let total_chars = ws_display
-            .len()
-            .saturating_add(version.len().saturating_add(1));
-        let footer_spaces = " ".repeat(63_usize.saturating_sub(total_chars));
-        out.push(format!(
-            "  {}{footer_spaces}{}",
-            self.smoke(&ws_display),
-            self.smoke(&format!("v{version}"))
-        ));
+        let dashes = "─".repeat(inner_width + 3);
+        let border_top = self.border(&format!("  ┌{dashes}┐"));
+        let border_bottom = self.border(&format!("  └{dashes}┘"));
+        let card_empty = pad_card_line(&self.border("│"), "", inner_width);
+        let pipe = self.border("│");
+
+        out.push(border_top);
+        out.push(card_empty.clone());
+        out.push(pad_card_line(&pipe, &input_content, inner_width));
+        out.push(card_empty.clone());
+        out.push(pad_card_line(&pipe, &status_content, inner_width));
+        out.push(card_empty.clone());
+        out.push(pad_card_line(&pipe, &session_line_content, inner_width));
+        out.push(card_empty.clone());
+        out.push(pad_card_line(&pipe, &kb_content, inner_width));
+        out.push(card_empty);
+        out.push(border_bottom);
+
+        // Footer line, padded by display width (not byte length).
+        let footer_left = self.smoke(&ws_display);
+        let footer_right = self.smoke(&format!("v{version}"));
+        let footer_vis = visible_width(&ws_display) + visible_width(&footer_right);
+        let footer_spaces = " ".repeat((inner_width + 5).saturating_sub(footer_vis));
+        out.push(format!("  {footer_left}{footer_spaces}{footer_right}"));
 
         out.join("\n")
     }
@@ -274,7 +280,7 @@ impl Renderer {
                     .fg(nu_ansi_term::Color::Fixed(16))
                     .bold();
                 let raw_content = format!("  {:<13} {}", cmd, desc);
-                let padding = 59_usize.saturating_sub(raw_content.len());
+                let padding = 59_usize.saturating_sub(visible_width(&raw_content));
                 let padded = format!("{raw_content}{:>padding$}", "", padding = padding);
                 out.push(format!(
                     "  {} {} {}",
@@ -640,7 +646,7 @@ fn palette_for(theme: &str) -> Palette {
 
 pub(crate) fn visible_width(s: &str) -> usize {
     let mut in_escape = false;
-    let mut count = 0;
+    let mut width = 0usize;
     for c in s.chars() {
         if c == '\x1b' {
             in_escape = true;
@@ -649,10 +655,29 @@ pub(crate) fn visible_width(s: &str) -> usize {
                 in_escape = false;
             }
         } else {
-            count += 1;
+            width += c.width().unwrap_or(0);
         }
     }
-    count
+    width
+}
+
+pub(crate) fn split_to_width(text: &str, max_width: usize) -> Vec<String> {
+    let mut chunks = Vec::new();
+    let mut current = String::new();
+    let mut current_width = 0usize;
+    for c in text.chars() {
+        let w = c.width().unwrap_or(0);
+        if current_width + w > max_width && !current.is_empty() {
+            chunks.push(std::mem::take(&mut current));
+            current_width = 0;
+        }
+        current.push(c);
+        current_width += w;
+    }
+    if !current.is_empty() {
+        chunks.push(current);
+    }
+    chunks
 }
 
 pub(crate) fn pad_card_line(border_char: &str, content: &str, target_inner_width: usize) -> String {
@@ -673,7 +698,20 @@ fn wrap_card_lines(
 ) -> Vec<String> {
     let prefix_vis = visible_width(prefix);
     let indent = " ".repeat(prefix_vis);
-    let words = text.split_whitespace().collect::<Vec<_>>();
+    let words = text
+        .split_whitespace()
+        .flat_map(|word| {
+            // A single word wider than the card cannot be padded into it;
+            // hard-break it on display-width boundaries.
+            let budget = target_inner_width.saturating_sub(prefix_vis).max(1);
+            if visible_width(word) > budget {
+                Box::new(split_to_width(word, budget).into_iter())
+                    as Box<dyn Iterator<Item = String>>
+            } else {
+                Box::new(std::iter::once(word.to_string())) as Box<dyn Iterator<Item = String>>
+            }
+        })
+        .collect::<Vec<_>>();
     if words.is_empty() {
         return vec![pad_card_line(border_char, prefix, target_inner_width)];
     }
@@ -682,15 +720,15 @@ fn wrap_card_lines(
     let mut current_line = prefix.to_string();
     let mut current_vis = prefix_vis;
 
-    for word in words {
+    for word in &words {
         let word_vis = visible_width(word);
         if current_vis.saturating_add(1).saturating_add(word_vis) <= target_inner_width {
             if current_vis > prefix_vis {
                 current_line.push(' ');
-                current_line.push_str(word);
+                current_line.push_str(word.as_str());
                 current_vis = current_vis.saturating_add(1).saturating_add(word_vis);
             } else {
-                current_line.push_str(word);
+                current_line.push_str(word.as_str());
                 current_vis = current_vis.saturating_add(word_vis);
             }
         } else {
@@ -716,11 +754,13 @@ fn wrap_card_lines(
 #[cfg(test)]
 mod tests {
     use std::ffi::OsString;
+    use std::sync::Mutex;
 
     use super::*;
 
     #[test]
     fn renderer_uses_blood_red_ansi_color_when_configured() {
+        let _env = ENV_LOCK.lock();
         let mut config = AxiomConfig::default();
         config.ui.theme = "blood_red".to_string();
         config.ui.color = true;
@@ -733,6 +773,7 @@ mod tests {
 
     #[test]
     fn renderer_uses_axiom_ansi_color_by_default() {
+        let _env = ENV_LOCK.lock();
         let mut config = AxiomConfig::default();
         config.ui.color = true;
         let _guard = EnvVarGuard::remove("NO_COLOR");
@@ -742,8 +783,13 @@ mod tests {
             .contains("\u{1b}[38;5;75m"));
     }
 
+    // These tests mutate process-global env state (NO_COLOR), so they must not
+    // run in parallel with each other or with tests that read it.
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+
     #[test]
     fn renderer_respects_color_config_and_no_color() {
+        let _env = ENV_LOCK.lock();
         let mut config = AxiomConfig::default();
         config.ui.color = false;
         assert_eq!(
@@ -761,6 +807,7 @@ mod tests {
 
     #[test]
     fn none_theme_is_plain_and_high_contrast_avoids_dim_colors() {
+        let _env = ENV_LOCK.lock();
         let _guard = EnvVarGuard::remove("NO_COLOR");
         let mut config = AxiomConfig::default();
         config.ui.theme = "none".to_string();
@@ -777,6 +824,7 @@ mod tests {
 
     #[test]
     fn redirected_output_is_plain_even_when_color_is_enabled() {
+        let _env = ENV_LOCK.lock();
         let _guard = EnvVarGuard::remove("NO_COLOR");
         let config = AxiomConfig::default();
         assert_eq!(
@@ -800,6 +848,7 @@ mod tests {
 
     #[test]
     fn plain_banner_uses_final_brand_tagline_and_copyright() {
+        let _env = ENV_LOCK.lock();
         let mut config = AxiomConfig::default();
         config.ui.color = false;
         let banner = Renderer::from_config_with_terminal(&config, true).banner();
@@ -810,6 +859,7 @@ mod tests {
 
     #[test]
     fn onboarding_banner_does_not_advertise_chat_commands() {
+        let _env = ENV_LOCK.lock();
         let mut config = AxiomConfig::default();
         config.ui.color = false;
         let banner = Renderer::from_config_with_terminal(&config, true).onboarding_banner();
@@ -848,6 +898,96 @@ mod tests {
         assert!(card.contains("[2]"));
         assert!(card.contains("[3]"));
         assert!(card.contains("Type custom answer..."));
+    }
+
+    #[test]
+    fn visible_width_counts_wide_chars_as_two_columns() {
+        assert_eq!(visible_width("abc"), 3);
+        assert_eq!(visible_width("你好"), 4);
+        assert_eq!(visible_width("\u{1b}[38;5;75mhi\u{1b}[0m"), 2);
+        assert_eq!(visible_width("│ axiom ❯ "), 10);
+    }
+
+    #[test]
+    fn dashboard_banner_stays_a_rectangle_with_long_model_names() {
+        let mut config = AxiomConfig::default();
+        config.ui.color = false;
+        let renderer = Renderer::from_config_with_terminal(&config, true);
+
+        let short = renderer.dashboard_banner(
+            "p",
+            "m",
+            "medium",
+            "velocity",
+            "/home/user/project",
+            "session-12345678-abcdef01",
+            "build",
+        );
+        let long = renderer.dashboard_banner(
+            "opencode",
+            "nemotron-3.5-lightning-free-super-long-variant",
+            "medium",
+            "velocity",
+            r"C:\Users\satya\Axiom",
+            "session-1a09a8c91fa-0000",
+            "build",
+        );
+
+        for (name, banner) in [("short", short.as_str()), ("long", long.as_str())] {
+            // The decorative logo above the card is intentionally free-form;
+            // the card frame itself (top border .. footer) must be rectangular.
+            let lines: Vec<&str> = banner.lines().collect();
+            let start = lines
+                .iter()
+                .position(|line| line.trim_start().starts_with('┌'))
+                .expect("card top border");
+            let end = lines
+                .iter()
+                .position(|line| line.trim_start().starts_with('└'))
+                .expect("card bottom border");
+            let mut frame: Vec<usize> = lines[start..=end]
+                .iter()
+                .map(|line| visible_width(line))
+                .collect();
+            if let Some(footer) = lines.get(end + 1).filter(|line| !line.trim().is_empty()) {
+                frame.push(visible_width(footer));
+            }
+            assert!(
+                frame.iter().all(|w| *w == frame[0]),
+                "{name} card is not rectangular: {frame:?}"
+            );
+        }
+
+        let long_width = long
+            .lines()
+            .find(|line| line.trim().starts_with('┌'))
+            .map(visible_width)
+            .expect("top border");
+        let short_width = short
+            .lines()
+            .find(|line| line.trim().starts_with('┌'))
+            .map(visible_width)
+            .expect("top border");
+        assert!(
+            long_width > short_width,
+            "long model name must widen the card ({long_width} <= {short_width})"
+        );
+    }
+
+    #[test]
+    fn mcq_card_hard_breaks_words_that_cannot_fit() {
+        let mut config = AxiomConfig::default();
+        config.ui.color = false;
+        let renderer = Renderer::from_config_with_terminal(&config, true);
+        let giant_word = "x".repeat(200);
+        let card = renderer.mcq_card("Choose:", &[giant_word], false);
+        for line in card.lines() {
+            assert!(
+                visible_width(line) <= 65,
+                "oversized word broke the card: {:?}",
+                line
+            );
+        }
     }
 
     #[test]

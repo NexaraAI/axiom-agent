@@ -5,6 +5,7 @@ mod credentials;
 mod gateway_discord;
 mod gateway_runtime;
 mod identity;
+mod mcp_commands;
 mod onboarding;
 mod proof_commands;
 mod side_effects;
@@ -31,8 +32,10 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Commands {
+    /// Diagnose your setup: config, workspace, provider, credentials, policy
     Doctor(DoctorCommand),
 
+    /// Show or migrate the config file
     Config {
         #[command(subcommand)]
         command: ConfigCommands,
@@ -42,42 +45,54 @@ enum Commands {
     #[command(alias = "setup")]
     Onboarding(OnboardingCommand),
 
+    /// Start an interactive chat session with the agent
     Chat,
 
+    /// Continue a previous conversation by session id (see `axiom sessions`)
     Resume {
+        /// Session id, as listed by `axiom sessions`
         session_id: String,
     },
 
+    /// List past chat sessions you can resume
     Sessions,
 
+    /// Show token and dollar cost tracked for this month
     Cost,
 
+    /// Inspect or switch the active LLM model (alias: models)
     #[command(alias = "models")]
     Model {
         #[command(subcommand)]
         command: ModelCommands,
     },
 
+    /// Inspect, switch, or add LLM providers (alias: providers)
     #[command(alias = "providers")]
     Provider {
         #[command(subcommand)]
         command: ProviderCommands,
     },
 
+    /// Send one message to the agent and print the result, then exit
     Run(RunCommand),
 
+    /// Guided coding session: scan, plan, patch, and test a task
     Code(CodeCommand),
 
+    /// Browse and verify the recorded audit trail for agent actions
     Proof {
         #[command(subcommand)]
         command: ProofCommands,
     },
 
+    /// Install, update, and manage the agent's skills
     Skill {
         #[command(subcommand)]
         command: SkillCommands,
     },
 
+    /// Check for, install, or roll back Axiom updates
     Update {
         #[command(subcommand)]
         command: UpdateCommands,
@@ -89,31 +104,48 @@ enum Commands {
         command: GatewayCommands,
     },
 
+    /// Connect external MCP servers, or expose Axiom's tools over MCP.
+    Mcp {
+        #[command(subcommand)]
+        command: McpCommands,
+    },
+
     /// Remove Axiom (binary via npm, local data on request).
     Uninstall(UninstallCommand),
 }
 
 #[derive(Debug, Subcommand)]
 enum ProofCommands {
+    /// List recorded proof traces, newest first
     List,
 
+    /// Show the most recent proof trace
     Latest,
 
+    /// Print one proof trace
     Show {
+        /// Id as shown by `axiom proof list`
         proof_id: String,
     },
 
+    /// Save a proof trace as markdown or JSON
     Export {
+        /// Id as shown by `axiom proof list`
         proof_id: String,
+        /// Output format: markdown (default) or json
         #[arg(long, default_value = "markdown")]
         format: String,
     },
 
+    /// Open a proof trace in the default viewer
     Open {
+        /// Id as shown by `axiom proof list`
         proof_id: String,
     },
 
+    /// Delete proof traces older than the given number of days
     Clean {
+        /// Delete traces older than this many days
         #[arg(long = "older-than")]
         older_than: u64,
     },
@@ -121,101 +153,135 @@ enum ProofCommands {
 
 #[derive(Debug, Args)]
 struct CodeCommand {
+    /// Produce a plan without applying anything
     #[arg(long)]
     plan_only: bool,
 
+    /// Print a project overview: languages, entry points, layout
     #[arg(long)]
     scan: bool,
 
+    /// Print the current uncommitted git diff
     #[arg(long)]
     diff: bool,
 
+    /// Plan and apply a task in one step (skips plan review)
     #[arg(long)]
     apply: bool,
 
+    /// Auto-detect and run the workspace test suite
     #[arg(long = "test")]
     test: bool,
 
+    /// Explain what this project does and how it is structured
     #[arg(long)]
     explain: bool,
 
+    /// The coding task (omit to enter interactive mode)
     #[arg(value_name = "TASK", trailing_var_arg = true)]
     task: Vec<String>,
 }
 
 #[derive(Debug, Default, Args)]
 struct OnboardingCommand {
+    /// Answer prompts from flags instead of interactively
     #[arg(long)]
     non_interactive: bool,
 
+    /// Workspace directory for agent file operations
     #[arg(long)]
     workspace: Option<String>,
 
+    /// Provider id to configure (for example groq, openrouter, mock)
     #[arg(long)]
     provider: Option<String>,
 
+    /// Model id to activate for the provider
     #[arg(long)]
     model: Option<String>,
 
+    /// Cloudflare account id (Cloudflare AI Gateway only)
     #[arg(long)]
     account_id: Option<String>,
 
+    /// Skill registry URL to use instead of the default
     #[arg(long)]
     registry: Option<String>,
 
+    /// Skip provider setup (offline/mock usage)
     #[arg(long)]
     skip_provider: bool,
 
+    /// Accept defaults without prompting
     #[arg(long)]
     yes: bool,
 }
 
 #[derive(Debug, Args)]
 struct RunCommand {
+    /// The message to send to the agent
     message: String,
 
+    /// Disable tool use; the model can only answer with text
     #[arg(long = "no-tools")]
     no_tools: bool,
 
+    /// Skip writing the proof trace for this run
     #[arg(long = "no-proof")]
     no_proof: bool,
 
+    /// Use this configured provider for the run
     #[arg(long)]
     provider: Option<String>,
 
+    /// Use this model for the run
     #[arg(long)]
     model: Option<String>,
 }
 
 #[derive(Debug, Default, Args)]
 struct DoctorCommand {
+    /// Print machine-readable output for scripts
     #[arg(long)]
     json: bool,
 }
 
 #[derive(Debug, Subcommand)]
 enum ConfigCommands {
+    /// Print the current config file contents
     List,
 
+    /// Print the config file location without reading it
+    Path,
+
+    /// Upgrade an older config file to the current schema (backs it up first)
     Migrate,
 }
 
 #[derive(Debug, Subcommand)]
 enum ModelCommands {
+    /// Show the active provider and model
     Current,
 
+    /// List models offered by the provider catalog
     List {
+        /// Query a specific provider instead of the active one
         #[arg(long)]
         provider: Option<String>,
 
+        /// Only show models whose id contains this text
         #[arg(long)]
         filter: Option<String>,
     },
 
+    /// Switch the active model (fuzzy-matches; use --force to skip checks)
     Use {
+        /// Model id (partial ids are resolved against the catalog)
         model: String,
+        /// Switch this provider first
         #[arg(long)]
         provider: Option<String>,
+        /// Accept an unknown model id without catalog verification
         #[arg(long)]
         force: bool,
     },
@@ -223,30 +289,41 @@ enum ModelCommands {
 
 #[derive(Debug, Subcommand)]
 enum ProviderCommands {
+    /// Show the active provider
     Current,
 
+    /// List configured providers and their models
     List,
 
+    /// Switch the active provider (optionally setting a model too)
     Use {
+        /// Provider name as shown by `axiom provider list`
         provider: String,
 
+        /// Also switch to this model on the provider
         #[arg(long)]
         model: Option<String>,
     },
 
+    /// Configure an additional provider (interactive when --name is omitted)
     Add {
+        /// Provider id or preset name (for example groq, openrouter)
         #[arg(long)]
         name: Option<String>,
 
+        /// Default model id for the provider
         #[arg(long)]
         model: Option<String>,
 
+        /// API key to store in the OS credential manager
         #[arg(long)]
         api_key: Option<String>,
 
+        /// OpenAI-compatible endpoint base URL (custom providers)
         #[arg(long)]
         base_url: Option<String>,
 
+        /// Make this the active provider after configuring it
         #[arg(long)]
         activate: bool,
     },
@@ -254,98 +331,172 @@ enum ProviderCommands {
 
 #[derive(Debug, Subcommand)]
 enum SkillCommands {
+    /// Show, set, or refresh the skill registry
     Registry {
         #[command(subcommand)]
         command: SkillRegistryCommands,
     },
 
+    /// List skills available in the registry
     List,
 
+    /// Search registry skills by name or description
     Search {
+        /// Search text
         query: String,
     },
 
+    /// List installed skills and their health
     Installed,
 
+    /// List installable skill bundles
     Bundles,
 
+    /// Show one skill's manifest, permissions, and stats
     Info {
+        /// Skill id, as shown by `axiom skill list`
         skill_id: String,
     },
 
+    /// Run one skill directly with a JSON arguments blob
     Run {
+        /// Skill id to execute
         skill_id: String,
+        /// Arguments as JSON, for example '{"path":"README.md"}'
         #[arg(long)]
         args: Option<String>,
     },
 
+    /// Install a skill from the registry
     Install {
+        /// Skill id to install
         skill_id: String,
+        /// Registry URL to fetch from
         #[arg(long)]
         registry: Option<String>,
+        /// Install from a registry directory on disk instead
         #[arg(long = "from-local-registry")]
         from_local_registry: Option<PathBuf>,
     },
 
+    /// Install a bundle of skills from the registry
     InstallBundle {
+        /// Bundle id to install
         bundle_id: String,
+        /// Registry URL to fetch from
         #[arg(long)]
         registry: Option<String>,
+        /// Install from a registry directory on disk instead
         #[arg(long = "from-local-registry")]
         from_local_registry: Option<PathBuf>,
     },
 
+    /// Check for skill updates, optionally applying them
     Update {
+        /// Only report available updates
         #[arg(long)]
         check: bool,
+        /// Update every installed skill
         #[arg(long)]
         all: bool,
+        /// Apply patch-version updates during the check
         #[arg(long = "apply-patches")]
         apply_patches: bool,
+        /// Restrict to one skill
         skill_id: Option<String>,
     },
 
+    /// Report the health of installed skills
     Health,
 
+    /// Re-enable a disabled skill
     Enable {
+        /// Skill id to enable
         skill_id: String,
     },
 
+    /// Disable a skill without uninstalling it
     Disable {
+        /// Skill id to disable
         skill_id: String,
     },
 
+    /// Reset a skill's recorded execution statistics
     ResetStats {
+        /// Skill id whose stats to reset
         skill_id: String,
     },
 
+    /// Uninstall a skill and remove its files
     Remove {
+        /// Skill id to remove
         skill_id: String,
     },
 }
 
 #[derive(Debug, Subcommand)]
 enum SkillRegistryCommands {
+    /// Show the registry currently in use
     Current,
 
+    /// Point Axiom at a different registry URL
     Set { url: String },
 
+    /// Re-fetch the registry catalog
     Refresh,
 }
 
 #[derive(Debug, Subcommand)]
 enum UpdateCommands {
+    /// Show the current update channel and last installed version
     Status,
 
+    /// Check for a newer release without installing it
     Check,
 
+    /// Download and install the latest release
     Install,
 
+    /// Revert to the backed-up previous binary
     Rollback,
 
+    /// Switch release channel (stable, beta, nightly)
     SetChannel { channel: String },
 
+    /// Set when updates are applied (notify, auto, off)
     SetPolicy { policy: String },
+}
+
+#[derive(Debug, Subcommand)]
+enum McpCommands {
+    /// Show the configured MCP servers without starting them.
+    List,
+
+    /// Connect the configured servers and list the tools they contribute.
+    Tools {
+        /// Inspect a single server, even when it is disabled in config.
+        #[arg(long)]
+        server: Option<String>,
+        /// Also connect servers marked `enabled = false`.
+        #[arg(long = "include-disabled")]
+        include_disabled: bool,
+    },
+
+    /// Expose Axiom's tools to other MCP clients over stdio.
+    Serve {
+        /// Approve (`ask`) policy decisions instead of refusing them.
+        #[arg(long)]
+        approve: bool,
+        /// Expose only tools that cannot mutate anything outside the workspace.
+        #[arg(long = "read-only")]
+        read_only: bool,
+        /// Restrict the server to these tool ids (repeatable).
+        #[arg(long = "allow", value_name = "TOOL")]
+        allow: Vec<String>,
+        /// Never expose these tool ids (repeatable).
+        #[arg(long = "deny", value_name = "TOOL")]
+        deny: Vec<String>,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -413,6 +564,7 @@ async fn main() -> Result<()> {
         Some(Commands::Skill { command }) => skill_commands::run(command).await,
         Some(Commands::Update { command }) => update_commands::run(command).await,
         Some(Commands::Gateway { command }) => gateway(command).await,
+        Some(Commands::Mcp { command }) => mcp_commands::run(command).await,
         Some(Commands::Uninstall(command)) => uninstall(command),
         None => startup().await,
     }
@@ -470,7 +622,7 @@ async fn gateway(command: GatewayCommands) -> Result<()> {
         GatewayCommands::Disable { telegram, discord } => {
             if !telegram && !discord {
                 return Err(anyhow::anyhow!(
-                    "pick at least one: `axiom gateway disable --telegram` and/or `--discord`"
+                    "pick at least one: `axiom gateway disable --telegram` and/or `--discord` (see `axiom gateway status`)"
                 ));
             }
             let mut config = AxiomConfig::load_from_path(&config_path)?;
@@ -505,8 +657,15 @@ async fn gateway(command: GatewayCommands) -> Result<()> {
                     "run one gateway per process: `axiom gateway run --telegram` or `--discord`"
                 )),
                 (false, false) => {
-                    println!("Pick a gateway: `axiom gateway run --telegram` or `--discord`.");
-                    Ok(())
+                    println!("No --telegram/--discord flag given; starting both bots.");
+                    println!(
+                        "(To run a single bot, use `axiom gateway run --telegram` or `--discord`.)"
+                    );
+                    tokio::try_join!(
+                        gateway_runtime::run_telegram_gateway(config_path.clone()),
+                        gateway_discord::run_discord_gateway(config_path)
+                    )
+                    .map(|_| ())
                 }
             }
         }
@@ -764,6 +923,10 @@ fn config(command: ConfigCommands) -> Result<()> {
             println!("{}", config.to_toml_string()?);
             Ok(())
         }
+        ConfigCommands::Path => {
+            println!("{}", path.display());
+            Ok(())
+        }
         ConfigCommands::Migrate => {
             if !path.exists() {
                 let config = AxiomConfig::default();
@@ -949,13 +1112,20 @@ fn doctor(json_output: bool) -> Result<()> {
                     "installed": installed_skills.len(),
                     "executable": executable_skills,
                     "built_in_executors": built_in_executors,
-                    "external_execution": "disabled_v1",
+                    "external_execution": "mcp",
+                    "mcp": {
+                        "enabled": config.mcp.enabled,
+                        "servers_configured": config.mcp.servers.len(),
+                        "servers_enabled":
+                            config.mcp.servers.iter().filter(|s| s.enabled).count(),
+                    },
                 },
                 "sandbox": {
                     "workspace_path_containment": true,
                     "central_side_effect_policy": true,
                     "external_skill_sandbox_available": false,
                     "external_skills_fail_closed": true,
+                    "mcp_tools_policy_gated": true,
                 },
                 "policy": {
                     "filesystem_read": config.policy.filesystem_read,
@@ -1018,9 +1188,17 @@ fn doctor(json_output: bool) -> Result<()> {
         doctor_gateway_status("discord", config.gateway.discord_bot_token_env.as_deref())
     );
     println!("executable skills: {}", executable_skills.join(", "));
-    println!("external skill execution: disabled in v1 (fails closed)");
+    if config.mcp.enabled {
+        println!(
+            "external execution: MCP ({} of {} configured server(s) enabled; policy-gated)",
+            config.mcp.servers.iter().filter(|s| s.enabled).count(),
+            config.mcp.servers.len()
+        );
+    } else {
+        println!("external execution: MCP disabled in config (enable under [mcp])");
+    }
     println!(
-        "side-effect policy: read={} write={} network={} process={} git={}",
+        "side-effect policy: read={} write={} network={} process={} git={} (also gates MCP tools)",
         config.policy.filesystem_read,
         config.policy.filesystem_write,
         config.policy.network,

@@ -54,6 +54,8 @@ pub struct AxiomConfig {
     pub proof: ProofConfig,
     #[serde(default)]
     pub gateway: GatewayConfig,
+    #[serde(default)]
+    pub mcp: McpConfig,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -550,6 +552,131 @@ pub struct GatewayConfig {
     pub discord_allowed_guild_ids: Vec<String>,
 }
 
+/// Model Context Protocol (MCP) integration settings.
+///
+/// Axiom speaks MCP in both directions: it can act as an MCP *client* (each
+/// configured server is wrapped as ordinary, permission-gated Axiom tools) and
+/// as an MCP *server* through `axiom mcp serve`. Server definitions are inert
+/// until `enabled` is true, so declaring a server never grants access on its
+/// own; every call still flows through the side-effect policy.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct McpConfig {
+    #[serde(default = "default_mcp_enabled")]
+    pub enabled: bool,
+    #[serde(default = "default_mcp_connect_timeout_secs")]
+    pub connect_timeout_secs: u64,
+    #[serde(default = "default_mcp_request_timeout_secs")]
+    pub request_timeout_secs: u64,
+    #[serde(default = "default_mcp_max_response_bytes")]
+    pub max_response_bytes: usize,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub servers: Vec<McpServerConfig>,
+}
+
+impl Default for McpConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_mcp_enabled(),
+            connect_timeout_secs: default_mcp_connect_timeout_secs(),
+            request_timeout_secs: default_mcp_request_timeout_secs(),
+            max_response_bytes: default_mcp_max_response_bytes(),
+            servers: Vec::new(),
+        }
+    }
+}
+
+impl McpConfig {
+    /// Servers that should be connected for the current process.
+    pub fn enabled_servers(&self) -> impl Iterator<Item = &McpServerConfig> {
+        let enabled = self.enabled;
+        self.servers
+            .iter()
+            .filter(move |server| enabled && server.enabled)
+    }
+
+    pub fn server(&self, name: &str) -> Option<&McpServerConfig> {
+        self.servers.iter().find(|server| server.name == name)
+    }
+}
+
+/// A single external MCP server, launched over stdio when Axiom connects.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct McpServerConfig {
+    /// Short identifier used in tool names (`mcp.<name>.<tool>`).
+    pub name: String,
+    pub command: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub args: Vec<String>,
+    /// Literal environment variables passed to the server process. Values here
+    /// are stored in plaintext; prefer `env_from_secret` for credentials.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub env: BTreeMap<String, String>,
+    /// Environment variable names resolved from Axiom's credential store (or
+    /// the process environment) and forwarded to the server process.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub env_from_secret: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<String>,
+    #[serde(default = "default_mcp_server_enabled")]
+    pub enabled: bool,
+    /// Automatically approve `ask` policy decisions for this server's tools.
+    /// Deny decisions are never overridden.
+    #[serde(default)]
+    pub auto_approve: bool,
+    /// Side-effect classes applied to every tool of this server, overriding the
+    /// classes derived from MCP annotations.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub side_effects: Option<Vec<String>>,
+    /// Tools exposed to the model. Empty means "all tools the server lists".
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub allow_tools: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub deny_tools: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tools: Vec<McpToolConfig>,
+}
+
+impl McpServerConfig {
+    pub fn is_exposed(&self, tool_name: &str) -> bool {
+        if self.deny_tools.iter().any(|denied| denied == tool_name) {
+            return false;
+        }
+        if self
+            .tools
+            .iter()
+            .any(|tool| tool.name == tool_name && !tool.enabled)
+        {
+            return false;
+        }
+        self.allow_tools.is_empty() || self.allow_tools.iter().any(|allowed| allowed == tool_name)
+    }
+
+    pub fn tool_config(&self, tool_name: &str) -> Option<&McpToolConfig> {
+        self.tools.iter().find(|tool| tool.name == tool_name)
+    }
+}
+
+/// Per-tool overrides for an MCP server.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct McpToolConfig {
+    pub name: String,
+    #[serde(default = "default_mcp_tool_enabled")]
+    pub enabled: bool,
+    #[serde(default)]
+    pub auto_approve: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub side_effects: Option<Vec<String>>,
+}
+
+/// Side-effect class names accepted in MCP configuration.
+pub const MCP_SIDE_EFFECT_NAMES: &[&str] = &[
+    "filesystem_read",
+    "filesystem_write",
+    "network",
+    "process",
+    "git",
+];
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProofConfig {
     #[serde(default = "default_proof_enabled")]
@@ -662,6 +789,7 @@ impl Default for AxiomConfig {
                 retention_days: default_proof_retention_days(),
             },
             gateway: GatewayConfig::default(),
+            mcp: McpConfig::default(),
         }
     }
 }
@@ -1137,6 +1265,30 @@ fn default_proof_retention_days() -> u64 {
     30
 }
 
+fn default_mcp_enabled() -> bool {
+    true
+}
+
+fn default_mcp_connect_timeout_secs() -> u64 {
+    20
+}
+
+fn default_mcp_request_timeout_secs() -> u64 {
+    60
+}
+
+fn default_mcp_max_response_bytes() -> usize {
+    1_000_000
+}
+
+fn default_mcp_server_enabled() -> bool {
+    true
+}
+
+fn default_mcp_tool_enabled() -> bool {
+    true
+}
+
 impl AxiomConfig {
     pub fn default_config_dir() -> Result<PathBuf> {
         if let Ok(home) = std::env::var("AXIOM_HOME") {
@@ -1317,8 +1469,103 @@ impl AxiomConfig {
         {
             validate_gateway_token_env_name(gateway_variable)?;
         }
+        if self.mcp.connect_timeout_secs == 0
+            || self.mcp.request_timeout_secs == 0
+            || self.mcp.max_response_bytes == 0
+        {
+            return Err(AxiomError::InvalidConfig {
+                field: "mcp limits",
+                message: "connect_timeout_secs, request_timeout_secs, and max_response_bytes must be greater than zero"
+                    .to_string(),
+            });
+        }
+        let mut mcp_server_names = std::collections::BTreeSet::new();
+        for server in &self.mcp.servers {
+            validate_mcp_name_segment("mcp.servers.name", &server.name, 32)?;
+            if !mcp_server_names.insert(server.name.as_str()) {
+                return Err(AxiomError::InvalidConfig {
+                    field: "mcp.servers.name",
+                    message: format!("duplicate MCP server name `{}`", server.name),
+                });
+            }
+            if server.command.trim().is_empty() {
+                return Err(AxiomError::InvalidConfig {
+                    field: "mcp.servers.command",
+                    message: format!("MCP server `{}` has an empty command", server.name),
+                });
+            }
+            if let Some(classes) = &server.side_effects {
+                validate_mcp_side_effects("mcp.servers.side_effects", classes)?;
+            }
+            for variable in &server.env_from_secret {
+                validate_gateway_token_env_name(variable)?;
+            }
+            let mut tool_names = std::collections::BTreeSet::new();
+            for tool in &server.tools {
+                if tool.name.trim().is_empty() || tool.name.contains(char::is_control) {
+                    return Err(AxiomError::InvalidConfig {
+                        field: "mcp.servers.tools.name",
+                        message: "MCP tool names cannot be empty or contain control characters"
+                            .to_string(),
+                    });
+                }
+                if !tool_names.insert(tool.name.as_str()) {
+                    return Err(AxiomError::InvalidConfig {
+                        field: "mcp.servers.tools.name",
+                        message: format!(
+                            "duplicate MCP tool `{}` in server `{}`",
+                            tool.name, server.name
+                        ),
+                    });
+                }
+                if let Some(classes) = &tool.side_effects {
+                    validate_mcp_side_effects("mcp.servers.tools.side_effects", classes)?;
+                }
+            }
+            for tool in server.allow_tools.iter().chain(server.deny_tools.iter()) {
+                if tool.trim().is_empty() {
+                    return Err(AxiomError::InvalidConfig {
+                        field: "mcp.servers.allow_tools",
+                        message: "tool names cannot be empty".to_string(),
+                    });
+                }
+            }
+        }
         Ok(())
     }
+}
+
+fn validate_mcp_name_segment(field: &'static str, value: &str, max_len: usize) -> Result<()> {
+    let valid = !value.is_empty()
+        && value.len() <= max_len
+        && value.bytes().all(|byte| {
+            byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'-' | b'_')
+        });
+    if valid {
+        Ok(())
+    } else {
+        Err(AxiomError::InvalidConfig {
+            field,
+            message: format!(
+                "`{value}` must be 1-{max_len} characters of lowercase letters, digits, `-`, or `_`"
+            ),
+        })
+    }
+}
+
+fn validate_mcp_side_effects(field: &'static str, classes: &[String]) -> Result<()> {
+    for class in classes {
+        if !MCP_SIDE_EFFECT_NAMES.contains(&class.as_str()) {
+            return Err(AxiomError::InvalidConfig {
+                field,
+                message: format!(
+                    "unknown side-effect class `{class}`; expected one of {}",
+                    MCP_SIDE_EFFECT_NAMES.join(", ")
+                ),
+            });
+        }
+    }
+    Ok(())
 }
 
 pub fn validate_variant(variant: &str) -> Result<&'static str> {

@@ -265,6 +265,20 @@ The default remote registry is `https://raw.githubusercontent.com/NexaraAI/axiom
 
 Installed skills carry lifecycle state and trust metadata. Skill Lens skips disabled, incompatible, quarantined, and blocked skills, and they cannot execute. External executable skill binaries are not supported yet; Axiom installs unknown external entrypoints as disabled or quarantined.
 
+## MCP (Model Context Protocol)
+
+Axiom speaks MCP in both directions. As a client it launches the servers declared under `[[mcp.servers]]` and wraps the tools they publish as ordinary, permission-gated Axiom tools; as a server, `axiom mcp serve` exposes Axiom's own tools to other MCP clients over stdio.
+
+Remote tools are never silently trusted. Their side-effect classes come from the server's own annotations, using the protocol's pessimistic defaults when a server omits them (so an un-annotated third-party tool is gated as a process that writes and reaches the network), and every call runs through the same `[policy]` rules, approvals, and Proof Mode records as a built-in tool. A server that will not start is skipped with a warning instead of breaking the session.
+
+```bash
+axiom mcp list                     # show configured servers without starting them
+axiom mcp tools                    # connect them and list the tools they contribute
+axiom mcp serve --read-only        # expose Axiom's tools over MCP
+```
+
+See [docs/MCP.md](docs/MCP.md) for configuration, per-tool overrides, and the full security model.
+
 ## Coder Mode
 
 `axiom code` opens the coding assistant. It scans the workspace, builds project context, asks the LLM for a plan, validates base hashes and minimal hunks, shows diffs, checkpoints affected paths, and writes files after approval. Existing-file edits conflict instead of silently overwriting ambiguous external changes. Large patches are capped and require an additional confirmation after the configured scope threshold.
@@ -308,7 +322,10 @@ sets filesystem, network, process, and Git side effects to `allow`, `ask`, or
 `deny`; safe defaults allow reads and ask before side effects. Policy decisions
 and approvals are recorded for policy-routed actions. Coder's detected test
 commands retain a separate strict allowlist and approval gate. Tool execution
-stays within built-in executors; Axiom rejects external binaries.
+stays within built-in executors; Axiom rejects external binaries. The one
+deliberate exception is MCP: a configured remote tool runs inside the server
+process you chose, and Axiom still gates every call through the same
+side-effect policy and approvals (see [docs/MCP.md](docs/MCP.md)).
 
 Coder mode shows plans and diffs before writes, validates patch scope, and creates a recovery checkpoint before applying an approved patch.
 

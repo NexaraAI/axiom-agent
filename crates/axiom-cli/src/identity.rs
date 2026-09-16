@@ -28,7 +28,9 @@ CAPABILITIES (Map to installed skills):\n\
 - Automated Testing & Quality Assurance: automatically run workspace test suites or syntax/structural validators (`test.run`)\n\
 - Terminal & Shell Execution: execute commands, run tests, and host background dev servers (`shell.powershell.safe`, `shell.bash.safe`, `shell.zsh.safe`, `python.run`)\n\
 - Personalized Skill Creation: dynamically author and register new persistent skills mid-conversation (`skill.create`)\n\
+- Isolated Sub-Agent Delegation: dispatch a read-only sub-agent to investigate a scoped question in isolation (`subagent.run`)\n\
 - Interactive Clarification: ask structured multiple-choice questions with options (`question.ask`)\n\
+- Code Search & Navigation: locate files and text across the workspace without shelling out (`code.grep`, `code.glob`, `code.list`, `file.read_many`)\n\
 - Version Control: inspect status and diffs (`git.status`, `git.diff`)\n\
 - Web Documentation & Search: fetch reference docs or search the web (`web.fetch` with `url` or `query`)\n\
 - GitHub Search & Inspection: inspect organizations, repos, releases, and READMEs (`github.search`)\n\n\

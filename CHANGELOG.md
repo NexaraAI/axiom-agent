@@ -4,6 +4,56 @@ All notable changes to Axiom are documented here. Versions follow semantic
 versioning. Stable releases document user-visible changes, configuration or
 proof migrations, security fixes, and upgrade actions.
 
+## 1.0.17
+
+This release teaches Axiom the Model Context Protocol in both directions — it can call tools published by external MCP servers and expose its own tools to other MCP clients — fires skill manifest hooks, and fixes a batch of terminal UI and command-surface defects, including help text that was blank for most commands and card layouts that broke on wide model names or CJK text.
+
+Install it:
+
+```bash
+npm install -g axiom-agent@1.0.17
+```
+
+### Fixed
+
+- **UI**: `visible_width` now measures terminal display width (CJK/wide characters count as two columns, ANSI escapes as zero) using the `unicode-width` crate. Every card, banner, and menu pads and truncates by that measurement, so box-drawing frames no longer break on wide input. Long titles wrap instead of overflowing; oversized single words are hard-broken.
+
+- **UI**: the chat dashboard banner and the file-write preview frame are sized to their content, so long model/provider names or file paths widen the frame instead of pushing its right edge out of alignment. Palette highlight rows pad by display width rather than byte length.
+
+- **UI**: the spinner uses glyphs with uniform terminal width, fully erases its line on stop, and leaves no residue on narrow consoles.
+
+- **Commands**: documented every command, subcommand, argument, and flag in `axiom --help` and all subcommand help output (previously blank); documented all `axiom code` and `axiom run` flags, all skill subcommands, and the proof/update/gateway subcommands.
+
+- **Commands**: added `axiom config path` (referenced by `axiom mcp list` and onboarding but previously nonexistent).
+
+- **Commands**: `axiom gateway run` with no flags now starts both bots as documented instead of refusing; `axiom gateway disable` with no flags points at `axiom gateway status`.
+
+- **Commands**: `axiom doctor` no longer reports "external skill execution: disabled in v1"; it now reports the real MCP client state (enabled, configured and enabled server counts) in both text and `--json` output.
+
+- **Help**: the in-chat `/help` now lists `/plan`, `/build`, `/history`, and `/resume`, which previously existed but were undocumented.
+
+### New Features
+
+Axiom now speaks the Model Context Protocol (MCP) in both directions: it can call tools published by external MCP servers, and it can expose its own tools to other MCP clients.
+
+- **MCP client**: servers declared under `[[mcp.servers]]` are launched over stdio, and each tool they publish is wrapped as an ordinary Axiom tool (`mcp.<server>.<tool>`). Every call is validated and then authorized through the same `[policy]` side-effect rules, approval hooks, and Proof Mode audit records as a built-in tool.
+  - Remote tools are never silently trusted. Side-effect classes are derived from the server's MCP annotations using the protocol's pessimistic defaults, so an un-annotated third-party tool is gated as a process that writes and reaches the network.
+  - Per-server and per-tool overrides are available for side-effect classes, `auto_approve`, and allow/deny tool lists. `auto_approve` only relaxes `ask` to `allow`; `deny` is never overridden.
+  - Credentials reach a server via `env_from_secret`, resolved from Axiom's credential store and never written to the config, proofs, or sessions.
+  - A server that fails to start or hand-shake is reported as a warning and skipped rather than breaking the session.
+- **MCP server**: `axiom mcp serve` exposes Axiom's tool registry to other MCP clients over stdio, with `--read-only`, `--approve`, `--allow`, and `--deny` controls. Approval is non-interactive, so `ask` decisions are refused unless `--approve` was passed.
+- **New commands**: `axiom mcp list`, `axiom mcp tools [--server <name>] [--include-disabled]`, and `axiom mcp serve`.
+- **New config**: the `[mcp]` section (`enabled`, timeouts, response cap) and `[[mcp.servers]]` / `[[mcp.servers.tools]]` entries, validated on load.
+- **New crate**: `axiom-mcp` (JSON-RPC framing, protocol types, client, permission gate, tool source, and server).
+- **Manifest hooks now fire**: the `hooks.pre`, `hooks.post`, and `hooks.on_error` declarations on a skill manifest are executed by the agent loop around the skill they are attached to. Hooks are ordinary permission-gated tools — they run through the same `[policy]` side-effect rules, approval hook, and audit sink as any other call — and each hook receives the triggering tool's arguments, so a post-write hook sees the path that changed.
+  - Every guard is reported rather than silent, on the tool event and in the observation the model sees: a hook never fires hooks of its own and a skill cannot hook itself (`skipped_reentrancy`), hooks share the turn's wall clock plus a per-turn allowance of 24 and a 30-second per-hook cap (`skipped_budget`), a hook skill that cannot execute is `unavailable`, and a failing hook never fails the turn.
+  - Hook results are appended to the tool result the model receives, so a failing `post` hook such as a lint error can steer the next iteration.
+
+### Documentation
+
+- Added [`docs/MCP.md`](docs/MCP.md); the README and safety model now describe the MCP trust boundary.
+- Documented the manifest hook contract and its guardrails in [`docs/SKILLS.md`](docs/SKILLS.md).
+
 ## 1.0.16
 
 This release adds a comprehensive suite of POSIX and Unix utility shims to Windows PowerShell executions, enabling models to use `sleep` (supporting fractional and suffixed durations like `2s` or `100ms`), pipeline and file-based `grep`, `head`, `tail`, `touch`, `export`, `unset`, `which`, `pkill`, `killall`, and port-inspecting `lsof`.

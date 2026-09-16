@@ -11,8 +11,9 @@ pub use child_process::{run_command_bounded, BoundedCommandOutput};
 pub use config::{
     default_variant, validate_mode, validate_permission, validate_variant, AgentConfig,
     AgentWorkMode, AxiomConfig, CoderConfig, ConfigMigrationResult, GatewayConfig, LlmConfig,
-    NetworkConfig, PermissionMode, ProofConfig, ProviderConfig, SideEffectPolicyConfig,
-    SkillsConfig, UiConfig, CURRENT_CONFIG_VERSION,
+    McpConfig, McpServerConfig, McpToolConfig, NetworkConfig, PermissionMode, ProofConfig,
+    ProviderConfig, SideEffectPolicyConfig, SkillsConfig, UiConfig, CURRENT_CONFIG_VERSION,
+    MCP_SIDE_EFFECT_NAMES,
 };
 pub use cost::{
     current_utc_month, now_unix_seconds, usd_to_microusd, utc_month_from_unix_seconds,
