@@ -88,6 +88,14 @@ dropped:
 Hook results are appended to the tool result the model receives, so a failing
 `post` hook (a lint error, for example) can steer the next iteration.
 
+A worked example ships in the registry: `file.write` 0.2.0 declares
+`[hooks] post = "lint.check"`, and the `lint.check` skill is a read-only
+built-in whose input schema deliberately accepts extra keys so it can receive
+the write tool's arguments (path, content, and any other fields) verbatim and
+lint the persisted file from disk. Findings are reported in the successful hook
+result rather than failing the turn, so the model can correct them on its next
+iteration without the write itself being rolled back.
+
 ## Installed Skills
 
 Axiom stores installed skills under the config directory:

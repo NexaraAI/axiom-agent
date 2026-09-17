@@ -2838,6 +2838,72 @@ min_axiom_version = "0.1.0"
     }
 
     #[tokio::test]
+    async fn a_post_write_lint_check_hook_lints_the_written_file() {
+        let root = std::env::temp_dir().join(format!(
+            "axiom-loop-hook-lint-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("clock")
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&root).expect("root");
+        let provider = ToolCallProvider::new(vec![(
+            "axiom_file_write".to_string(),
+            json!({"path": "messy.rs", "content": "fn main() {\n\tlet x = 1;   \n}\n"}),
+        )]);
+        // The registry's real post-write hook: file.write 0.2.0 ships
+        // `[hooks] post = "lint.check"`, and lint.check absorbs the write's
+        // arguments verbatim and lints the persisted file from disk.
+        let installed = [
+            installed_tool_with_hooks("file.write", None, Some("lint.check"), None),
+            installed_tool("lint.check"),
+        ];
+        let mut approval = AllowAllApprover;
+        let context = SkillExecutionContext {
+            workspace_root: root.clone(),
+            auto_approve_medium_risk: true,
+            ..context()
+        };
+        let mut agent = AgentLoop::new(
+            &provider,
+            "test-model",
+            AgentCaps::default(),
+            Vec::new(),
+            Vec::new(),
+            &installed,
+            context,
+            &mut approval,
+        );
+
+        let completion = done_turn(
+            agent
+                .run_turn(user_message("write a file"))
+                .await
+                .expect("turn succeeds"),
+        );
+
+        let event = completion.tool_events.first().expect("one tool event");
+        assert!(matches!(event.status, ToolExecutionStatus::Succeeded(_)));
+        assert_eq!(event.hooks.len(), 1, "{event:?}");
+        let hook = &event.hooks[0];
+        assert_eq!(hook.hook_id, "lint.check");
+        assert_eq!(hook.phase, HookPhase::Post);
+        assert_eq!(hook.status, HookStatus::Succeeded, "{hook:?}");
+        let output = hook.output.as_ref().expect("hook output");
+        assert_eq!(output["path"], "messy.rs");
+        let findings = output["findings"].as_array().expect("findings");
+        assert!(
+            findings.len() >= 2,
+            "expected tab + trailing-whitespace findings, got {findings:?}"
+        );
+        let observation = first_tool_observation(&completion);
+        assert!(observation.contains("lint.check [post]"), "{observation}");
+        assert!(observation.contains("no-tabs"), "{observation}");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
     async fn on_error_hooks_fire_when_the_tool_fails_and_post_does_not() {
         let provider = ToolCallProvider::new(vec![(
             "axiom_project_scan".to_string(),

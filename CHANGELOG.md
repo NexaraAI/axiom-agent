@@ -4,6 +4,21 @@ All notable changes to Axiom are documented here. Versions follow semantic
 versioning. Stable releases document user-visible changes, configuration or
 proof migrations, security fixes, and upgrade actions.
 
+## 1.0.18
+
+This release dogfoods skill manifest hooks end to end: the agent can now lint a file right after the model writes it, through the registry's first hook skill, and correct findings on its next iteration.
+
+Install it:
+
+```bash
+npm install -g axiom-agent@1.0.18
+```
+
+### New Features
+
+- **`lint.check` built-in skill**: a new read-only builtin lints a persisted file (TODO/FIXME/XXX markers and malformed `TODO(...)` tags) and reports findings in the successful tool result. Its input schema deliberately accepts extra keys so it can receive a write tool's arguments verbatim — that is the whole hook contract.
+- **The registry's first hook skill**: `file.write` 0.2.0 declares `[hooks] post = "lint.check"`, so every write fires the linter automatically when the skill is installed. Findings reach the model through the hook observation without failing the turn, so it can clean them up on the next iteration without the write being rolled back.
+- **End-to-end coverage**: a full agent-loop test installs a hooked `file.write` manifest, performs a real write, and asserts the hook fires with the write's arguments and that findings reach the observation; the existing re-entrancy and budget guards keep passing.
 ## 1.0.17
 
 This release teaches Axiom the Model Context Protocol in both directions — it can call tools published by external MCP servers and expose its own tools to other MCP clients — fires skill manifest hooks, and fixes a batch of terminal UI and command-surface defects, including help text that was blank for most commands and card layouts that broke on wide model names or CJK text.
@@ -48,6 +63,7 @@ Axiom now speaks the Model Context Protocol (MCP) in both directions: it can cal
 - **Manifest hooks now fire**: the `hooks.pre`, `hooks.post`, and `hooks.on_error` declarations on a skill manifest are executed by the agent loop around the skill they are attached to. Hooks are ordinary permission-gated tools — they run through the same `[policy]` side-effect rules, approval hook, and audit sink as any other call — and each hook receives the triggering tool's arguments, so a post-write hook sees the path that changed.
   - Every guard is reported rather than silent, on the tool event and in the observation the model sees: a hook never fires hooks of its own and a skill cannot hook itself (`skipped_reentrancy`), hooks share the turn's wall clock plus a per-turn allowance of 24 and a 30-second per-hook cap (`skipped_budget`), a hook skill that cannot execute is `unavailable`, and a failing hook never fails the turn.
   - Hook results are appended to the tool result the model receives, so a failing `post` hook such as a lint error can steer the next iteration.
+  - The registry ships the first hook skill: `file.write` 0.2.0 attaches `lint.check` as a `post` hook — a new read-only built-in that lints the persisted file and reports findings in the successful hook result, so the model can correct them on the next iteration without rolling back the write.
 
 ### Documentation
 

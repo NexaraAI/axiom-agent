@@ -98,7 +98,6 @@ pub trait SkillExecutor: Send + Sync {
             deterministic_fixture: json!({}),
         }
     }
-
     async fn execute(
         &self,
         request: &ToolRequest,
@@ -167,21 +166,18 @@ impl ExecutorRegistry {
         registry.register(Box::new(CodeGlobExecutor));
         registry.register(Box::new(CodeListExecutor));
         registry.register(Box::new(FileReadManyExecutor));
+        registry.register(Box::new(LintCheckExecutor));
         registry
     }
-
     pub fn register(&mut self, executor: Box<dyn SkillExecutor>) {
         self.executors.insert(executor.id(), executor);
     }
-
     pub fn get(&self, skill_id: &str) -> Option<&dyn SkillExecutor> {
         self.executors.get(skill_id).map(Box::as_ref)
     }
-
     pub fn supported_skill_ids(&self) -> Vec<&'static str> {
         self.executors.keys().copied().collect()
     }
-
     pub fn descriptors(&self) -> Vec<ExecutorDescriptor> {
         self.executors
             .values()
@@ -194,13 +190,13 @@ struct CodeGrepExecutor;
 struct CodeGlobExecutor;
 struct CodeListExecutor;
 struct FileReadManyExecutor;
+struct LintCheckExecutor;
 
 #[async_trait(?Send)]
 impl SkillExecutor for CodeGrepExecutor {
     fn id(&self) -> &'static str {
         "code.grep"
     }
-
     fn descriptor(&self) -> ExecutorDescriptor {
         ExecutorDescriptor {
             id: self.id().to_string(),
@@ -225,7 +221,6 @@ impl SkillExecutor for CodeGrepExecutor {
             deterministic_fixture: json!({"pattern": "fn main"}),
         }
     }
-
     async fn execute(
         &self,
         request: &ToolRequest,
@@ -237,7 +232,6 @@ impl SkillExecutor for CodeGrepExecutor {
         self.execute_with_policy(request, context, approval, &policy, &mut audit)
             .await
     }
-
     async fn execute_with_policy(
         &self,
         request: &ToolRequest,
@@ -267,7 +261,6 @@ impl SkillExecutor for CodeGlobExecutor {
     fn id(&self) -> &'static str {
         "code.glob"
     }
-
     fn descriptor(&self) -> ExecutorDescriptor {
         ExecutorDescriptor {
             id: self.id().to_string(),
@@ -290,7 +283,6 @@ impl SkillExecutor for CodeGlobExecutor {
             deterministic_fixture: json!({"pattern": "**/*.toml"}),
         }
     }
-
     async fn execute(
         &self,
         request: &ToolRequest,
@@ -302,7 +294,6 @@ impl SkillExecutor for CodeGlobExecutor {
         self.execute_with_policy(request, context, approval, &policy, &mut audit)
             .await
     }
-
     async fn execute_with_policy(
         &self,
         request: &ToolRequest,
@@ -332,7 +323,6 @@ impl SkillExecutor for CodeListExecutor {
     fn id(&self) -> &'static str {
         "code.list"
     }
-
     fn descriptor(&self) -> ExecutorDescriptor {
         ExecutorDescriptor {
             id: self.id().to_string(),
@@ -353,7 +343,6 @@ impl SkillExecutor for CodeListExecutor {
             deterministic_fixture: json!({"path": ".", "max_depth": 2}),
         }
     }
-
     async fn execute(
         &self,
         request: &ToolRequest,
@@ -365,7 +354,6 @@ impl SkillExecutor for CodeListExecutor {
         self.execute_with_policy(request, context, approval, &policy, &mut audit)
             .await
     }
-
     async fn execute_with_policy(
         &self,
         request: &ToolRequest,
@@ -395,7 +383,6 @@ impl SkillExecutor for FileReadManyExecutor {
     fn id(&self) -> &'static str {
         "file.read_many"
     }
-
     fn descriptor(&self) -> ExecutorDescriptor {
         ExecutorDescriptor {
             id: self.id().to_string(),
@@ -416,7 +403,6 @@ impl SkillExecutor for FileReadManyExecutor {
             deterministic_fixture: json!({"paths": ["README.md"]}),
         }
     }
-
     async fn execute(
         &self,
         request: &ToolRequest,
@@ -428,7 +414,6 @@ impl SkillExecutor for FileReadManyExecutor {
         self.execute_with_policy(request, context, approval, &policy, &mut audit)
             .await
     }
-
     async fn execute_with_policy(
         &self,
         request: &ToolRequest,
@@ -474,23 +459,19 @@ impl ShellExecutor {
             id: "shell.powershell.safe",
         }
     }
-
     pub const fn bash() -> Self {
         Self {
             id: "shell.bash.safe",
         }
     }
-
     pub const fn zsh() -> Self {
         Self {
             id: "shell.zsh.safe",
         }
     }
-
     pub const fn python_run() -> Self {
         Self { id: "python.run" }
     }
-
     pub const fn generic_run() -> Self {
         Self { id: "shell.run" }
     }
@@ -501,7 +482,6 @@ impl SkillExecutor for FileReadExecutor {
     fn id(&self) -> &'static str {
         "file.read"
     }
-
     fn descriptor(&self) -> ExecutorDescriptor {
         ExecutorDescriptor {
             id: self.id().to_string(),
@@ -524,7 +504,6 @@ impl SkillExecutor for FileReadExecutor {
             deterministic_fixture: json!({"path": "README.md"}),
         }
     }
-
     async fn execute(
         &self,
         request: &ToolRequest,
@@ -536,7 +515,6 @@ impl SkillExecutor for FileReadExecutor {
         self.execute_with_policy(request, context, approval, &policy, &mut audit)
             .await
     }
-
     async fn execute_with_policy(
         &self,
         request: &ToolRequest,
@@ -566,7 +544,6 @@ impl SkillExecutor for FileReplaceExecutor {
     fn id(&self) -> &'static str {
         "file.replace"
     }
-
     fn descriptor(&self) -> ExecutorDescriptor {
         ExecutorDescriptor {
             id: self.id().to_string(),
@@ -594,7 +571,6 @@ impl SkillExecutor for FileReplaceExecutor {
             }),
         }
     }
-
     async fn execute(
         &self,
         request: &ToolRequest,
@@ -606,7 +582,6 @@ impl SkillExecutor for FileReplaceExecutor {
         self.execute_with_policy(request, context, approval, &policy, &mut audit)
             .await
     }
-
     async fn execute_with_policy(
         &self,
         request: &ToolRequest,
@@ -636,7 +611,6 @@ impl SkillExecutor for SubagentRunExecutor {
     fn id(&self) -> &'static str {
         "subagent.run"
     }
-
     fn descriptor(&self) -> ExecutorDescriptor {
         ExecutorDescriptor {
             id: self.id().to_string(),
@@ -662,7 +636,6 @@ impl SkillExecutor for SubagentRunExecutor {
             }),
         }
     }
-
     async fn execute(
         &self,
         request: &ToolRequest,
@@ -674,7 +647,6 @@ impl SkillExecutor for SubagentRunExecutor {
         self.execute_with_policy(request, context, approval, &policy, &mut audit)
             .await
     }
-
     async fn execute_with_policy(
         &self,
         request: &ToolRequest,
@@ -692,7 +664,6 @@ impl SkillExecutor for FileWriteExecutor {
     fn id(&self) -> &'static str {
         "file.write"
     }
-
     fn descriptor(&self) -> ExecutorDescriptor {
         ExecutorDescriptor {
             id: self.id().to_string(),
@@ -715,7 +686,6 @@ impl SkillExecutor for FileWriteExecutor {
             deterministic_fixture: json!({"path": "axiom-fixture.txt", "content": "fixture"}),
         }
     }
-
     async fn execute(
         &self,
         request: &ToolRequest,
@@ -727,7 +697,6 @@ impl SkillExecutor for FileWriteExecutor {
         self.execute_with_policy(request, context, approval, &policy, &mut audit)
             .await
     }
-
     async fn execute_with_policy(
         &self,
         request: &ToolRequest,
@@ -757,7 +726,6 @@ impl SkillExecutor for SkillCreateExecutor {
     fn id(&self) -> &'static str {
         "skill.create"
     }
-
     fn descriptor(&self) -> ExecutorDescriptor {
         ExecutorDescriptor {
             id: self.id().to_string(),
@@ -805,7 +773,6 @@ impl SkillExecutor for SkillCreateExecutor {
             }),
         }
     }
-
     async fn execute(
         &self,
         request: &ToolRequest,
@@ -817,7 +784,6 @@ impl SkillExecutor for SkillCreateExecutor {
         self.execute_with_policy(request, context, approval, &policy, &mut audit)
             .await
     }
-
     async fn execute_with_policy(
         &self,
         request: &ToolRequest,
@@ -847,7 +813,6 @@ impl SkillExecutor for ProjectScanExecutor {
     fn id(&self) -> &'static str {
         "project.scan"
     }
-
     fn descriptor(&self) -> ExecutorDescriptor {
         ExecutorDescriptor {
             id: self.id().to_string(),
@@ -868,7 +833,6 @@ impl SkillExecutor for ProjectScanExecutor {
             deterministic_fixture: json!({"path": ".", "max_depth": 2}),
         }
     }
-
     async fn execute(
         &self,
         request: &ToolRequest,
@@ -880,7 +844,6 @@ impl SkillExecutor for ProjectScanExecutor {
         self.execute_with_policy(request, context, approval, &policy, &mut audit)
             .await
     }
-
     async fn execute_with_policy(
         &self,
         request: &ToolRequest,
@@ -910,7 +873,6 @@ impl SkillExecutor for WebFetchExecutor {
     fn id(&self) -> &'static str {
         "web.fetch"
     }
-
     fn descriptor(&self) -> ExecutorDescriptor {
         ExecutorDescriptor {
             id: self.id().to_string(),
@@ -936,7 +898,6 @@ impl SkillExecutor for WebFetchExecutor {
             deterministic_fixture: json!({"url": "https://example.com"}),
         }
     }
-
     async fn execute(
         &self,
         request: &ToolRequest,
@@ -948,7 +909,6 @@ impl SkillExecutor for WebFetchExecutor {
         self.execute_with_policy(request, context, approval, &policy, &mut audit)
             .await
     }
-
     async fn execute_with_policy(
         &self,
         request: &ToolRequest,
@@ -978,7 +938,6 @@ impl SkillExecutor for GitHubSearchExecutor {
     fn id(&self) -> &'static str {
         "github.search"
     }
-
     fn descriptor(&self) -> ExecutorDescriptor {
         ExecutorDescriptor {
             id: self.id().to_string(),
@@ -1013,7 +972,6 @@ impl SkillExecutor for GitHubSearchExecutor {
             deterministic_fixture: json!({"org": "octocat"}),
         }
     }
-
     async fn execute(
         &self,
         request: &ToolRequest,
@@ -1025,7 +983,6 @@ impl SkillExecutor for GitHubSearchExecutor {
         self.execute_with_policy(request, context, approval, &policy, &mut audit)
             .await
     }
-
     async fn execute_with_policy(
         &self,
         request: &ToolRequest,
@@ -1055,11 +1012,9 @@ impl SkillExecutor for GitStatusExecutor {
     fn id(&self) -> &'static str {
         "git.status"
     }
-
     fn descriptor(&self) -> ExecutorDescriptor {
         git_executor_descriptor(self.id(), "status")
     }
-
     async fn execute(
         &self,
         request: &ToolRequest,
@@ -1071,7 +1026,6 @@ impl SkillExecutor for GitStatusExecutor {
         self.execute_with_policy(request, context, approval, &policy, &mut audit)
             .await
     }
-
     async fn execute_with_policy(
         &self,
         request: &ToolRequest,
@@ -1095,11 +1049,9 @@ impl SkillExecutor for GitDiffExecutor {
     fn id(&self) -> &'static str {
         "git.diff"
     }
-
     fn descriptor(&self) -> ExecutorDescriptor {
         git_executor_descriptor(self.id(), "diff")
     }
-
     async fn execute(
         &self,
         request: &ToolRequest,
@@ -1111,7 +1063,6 @@ impl SkillExecutor for GitDiffExecutor {
         self.execute_with_policy(request, context, approval, &policy, &mut audit)
             .await
     }
-
     async fn execute_with_policy(
         &self,
         request: &ToolRequest,
@@ -1130,7 +1081,6 @@ impl SkillExecutor for TestRunExecutor {
     fn id(&self) -> &'static str {
         "test.run"
     }
-
     fn descriptor(&self) -> ExecutorDescriptor {
         ExecutorDescriptor {
             id: self.id().to_string(),
@@ -1151,7 +1101,6 @@ impl SkillExecutor for TestRunExecutor {
             deterministic_fixture: json!({"path": "."}),
         }
     }
-
     async fn execute(
         &self,
         request: &ToolRequest,
@@ -1163,7 +1112,6 @@ impl SkillExecutor for TestRunExecutor {
         self.execute_with_policy(request, context, approval, &policy, &mut audit)
             .await
     }
-
     async fn execute_with_policy(
         &self,
         request: &ToolRequest,
@@ -1193,7 +1141,6 @@ impl SkillExecutor for ShellExecutor {
     fn id(&self) -> &'static str {
         self.id
     }
-
     fn descriptor(&self) -> ExecutorDescriptor {
         ExecutorDescriptor {
             id: self.id().to_string(),
@@ -1243,7 +1190,6 @@ impl SkillExecutor for ShellExecutor {
             deterministic_fixture: json!({"command": "echo axiom-test"}),
         }
     }
-
     async fn execute(
         &self,
         request: &ToolRequest,
@@ -1255,7 +1201,6 @@ impl SkillExecutor for ShellExecutor {
         self.execute_with_policy(request, context, approval, &policy, &mut audit)
             .await
     }
-
     async fn execute_with_policy(
         &self,
         request: &ToolRequest,
@@ -1285,7 +1230,6 @@ impl SkillExecutor for QuestionAskExecutor {
     fn id(&self) -> &'static str {
         "question.ask"
     }
-
     fn descriptor(&self) -> ExecutorDescriptor {
         ExecutorDescriptor {
             id: self.id().to_string(),
@@ -1334,7 +1278,6 @@ impl SkillExecutor for QuestionAskExecutor {
             }),
         }
     }
-
     async fn execute(
         &self,
         request: &ToolRequest,
@@ -1759,6 +1702,12 @@ pub fn builtin_installed_skill(skill_id: &str) -> Option<InstalledSkill> {
             SkillType::Tool,
             RiskLevel::Low,
         ),
+        "lint.check" => (
+            "Lint Written File",
+            "Read-only lint pass over a workspace file; designed to run as a post-write manifest hook",
+            SkillType::Tool,
+            RiskLevel::Low,
+        ),
         _ => return None,
     };
 
@@ -1866,7 +1815,6 @@ pub async fn execute_tool_with_policy(
             trust: skill.record.trust_level,
         });
     }
-
     let compatibility = check_manifest_compatibility(
         &skill.manifest,
         &current_axiom_version(),
@@ -1878,7 +1826,6 @@ pub async fn execute_tool_with_policy(
             reason: compatibility.reason,
         });
     }
-
     if skill.manifest.skill_type != SkillType::Tool {
         return Err(SkillExecutionError::SkillNotExecutable(
             request.skill_id.clone(),
@@ -1995,7 +1942,6 @@ fn file_read(
             limit: context.max_file_read_bytes,
         });
     }
-
     let content = fs::read_to_string(&resolved)?;
     let all_lines: Vec<&str> = content.lines().collect();
     let total_lines = all_lines.len();
@@ -2042,7 +1988,6 @@ fn file_read(
             );
         }
     }
-
     Ok(response)
 }
 
@@ -2116,7 +2061,6 @@ fn file_replace(
             message: format!("Cannot replace in non-existent file `{path}`"),
         });
     }
-
     let old_content = fs::read_to_string(&resolved)?;
     let matches: Vec<_> = old_content.match_indices(&target).collect();
     let match_count = matches.len();
@@ -2129,7 +2073,6 @@ fn file_replace(
             ),
         });
     }
-
     if match_count > 1 && !allow_multiple {
         return Err(SkillExecutionError::ExecutionFailed {
             skill_id: "file.replace".to_string(),
@@ -2138,7 +2081,6 @@ fn file_replace(
             ),
         });
     }
-
     let new_content = if allow_multiple {
         old_content.replace(&target, &replacement)
     } else {
@@ -2293,7 +2235,6 @@ async fn web_fetch(
             }
         }
     }
-
     const MAX_WEB_REDIRECTS: usize = 5;
 
     let mut final_response = None;
@@ -2372,7 +2313,6 @@ async fn web_fetch(
         final_response = Some(response);
         break;
     }
-
     let mut response = final_response.ok_or_else(|| {
         SkillExecutionError::Network("failed to receive HTTP response".to_string())
     })?;
@@ -2392,7 +2332,6 @@ async fn web_fetch(
             });
         }
     }
-
     let mut bytes = Vec::with_capacity(
         response
             .content_length()
@@ -2540,7 +2479,6 @@ fn extract_text_from_html(html: &str) -> String {
 
         result.push(c);
     }
-
     let mut cleaned = String::new();
     let mut consecutive_newlines = 0;
     for line in result.lines() {
@@ -2609,13 +2547,11 @@ async fn execute_duckduckgo_search(
             }
         }
     }
-
     if parsed_results.is_empty() {
         if let Some(wiki_results) = fetch_wikipedia_search_fallback(query, context).await {
             parsed_results = wiki_results;
         }
     }
-
     let mut formatted = format!("## Web Search Results for: \"{query}\"\n\n");
     if parsed_results.is_empty() {
         formatted.push_str("No direct search results found for this query.");
@@ -2632,7 +2568,6 @@ async fn execute_duckduckgo_search(
             ));
         }
     }
-
     let bytes_len = formatted.len();
     Ok(json!({
         "url": format!("https://html.duckduckgo.com/html/?q={query}"),
@@ -2949,7 +2884,6 @@ async fn github_search(
     for (k, v) in query_params {
         req_builder = req_builder.query(&[(k, v)]);
     }
-
     let response = req_builder
         .send()
         .await
@@ -2981,7 +2915,6 @@ async fn github_search(
             }
         }
     }
-
     let text = response
         .text()
         .await
@@ -3095,7 +3028,6 @@ fn is_private_network_host(host: &str) -> bool {
     {
         return true;
     }
-
     let Ok(address) = normalized.parse::<IpAddr>() else {
         return false;
     };
@@ -3156,7 +3088,6 @@ fn git_command(
             "git stderr",
         )));
     }
-
     let field = if command_name == "status" {
         "status"
     } else {
@@ -3224,7 +3155,6 @@ fn scan_dir(
     if depth > max_depth {
         return Ok(());
     }
-
     for entry in fs::read_dir(current)? {
         let entry = entry?;
         let path = entry.path();
@@ -3248,7 +3178,6 @@ fn scan_dir(
             files.push(relative.to_string_lossy().replace('\\', "/"));
         }
     }
-
     files.sort();
     Ok(())
 }
@@ -3520,12 +3449,10 @@ impl ChildProcessGuard {
             disowned: false,
         }
     }
-
     fn disown(mut self) -> std::process::Child {
         self.disowned = true;
         self.child.take().unwrap()
     }
-
     fn as_mut(&mut self) -> &mut std::process::Child {
         self.child.as_mut().unwrap()
     }
@@ -3565,7 +3492,6 @@ fn shell_run(
             command_cwd.display()
         )));
     }
-
     let is_bg = request
         .arguments
         .get("background")
@@ -3604,7 +3530,6 @@ fn shell_run(
     if let Some(stderr) = guard.as_mut().stderr.take() {
         spawn_stream_reader(stderr, stderr_buf.clone(), 128 * 1024);
     }
-
     if should_background {
         std::thread::sleep(Duration::from_millis(1200));
         match guard
@@ -3725,7 +3650,6 @@ fn execute_test_command(
     if let Some(stderr) = guard.as_mut().stderr.take() {
         spawn_stream_reader(stderr, stderr_buf.clone(), 256 * 1024);
     }
-
     let start = Instant::now();
     let timeout = Duration::from_secs(60);
     let mut exit_status = None;
@@ -3741,7 +3665,6 @@ fn execute_test_command(
         }
         std::thread::sleep(Duration::from_millis(50));
     }
-
     match exit_status {
         Some(status) => {
             let _ = guard.as_mut().wait();
@@ -3809,7 +3732,6 @@ fn validate_html_project(dir: &Path) -> Result<Value, SkillExecutionError> {
             }
         }
     }
-
     if html_files.is_empty() {
         return Ok(json!({
             "status": "no_tests_found",
@@ -3820,7 +3742,6 @@ fn validate_html_project(dir: &Path) -> Result<Value, SkillExecutionError> {
             "summary": "No tests found."
         }));
     }
-
     let mut errors = Vec::new();
     let mut verified_count = 0;
 
@@ -3940,7 +3861,6 @@ fn validate_html_project(dir: &Path) -> Result<Value, SkillExecutionError> {
         }
         verified_count += 1;
     }
-
     let passed = errors.is_empty();
     let summary = if passed {
         format!("Validated {verified_count} HTML/web file(s) and referenced scripts/styles with 0 errors")
@@ -3993,7 +3913,6 @@ fn test_run(
             }));
         }
     }
-
     // 1. Cargo
     if root.join("Cargo.toml").exists() {
         let cmd = "cargo test";
@@ -4013,7 +3932,6 @@ fn test_run(
             "summary": summary,
         }));
     }
-
     // 2. NPM
     let pkg_json = root.join("package.json");
     if pkg_json.exists() {
@@ -4040,7 +3958,6 @@ fn test_run(
             }
         }
     }
-
     // 3. Python
     let has_pytest_config = root.join("pytest.ini").exists()
         || root.join("pyproject.toml").exists()
@@ -4087,12 +4004,10 @@ fn test_run(
             "summary": summary,
         }));
     }
-
     // 4. HTML / Web
     if dir_contains_extension(&root, "html", 2) {
         return validate_html_project(&root);
     }
-
     // 5. None
     Ok(json!({
         "status": "no_tests_found",
@@ -4123,7 +4038,6 @@ pub fn validate_schema_value(value: &Value, schema: &Value) -> std::result::Resu
             return Err(format!("expected {expected}"));
         }
     }
-
     let Some(object) = value.as_object() else {
         return Ok(());
     };
@@ -4681,7 +4595,6 @@ fn code_grep(
             }
         }
     }
-
     let count = matches.len();
     Ok(json!({
         "pattern": pattern,
@@ -4718,7 +4631,6 @@ fn code_glob(
             files.push(relative);
         }
     }
-
     let count = files.len();
     Ok(json!({
         "pattern": pattern,
@@ -4753,7 +4665,6 @@ fn code_list(
             "kind": if is_dir { "dir" } else { "file" },
         }));
     }
-
     Ok(json!({
         "root": subpath,
         "entries": entries,
@@ -4790,7 +4701,6 @@ fn file_read_many(
             }
         }
     }
-
     let workspace = Workspace::new(&context.workspace_root)?;
     let per_file_limit = context.max_file_read_bytes.min(MAX_SEARCH_FILE_BYTES);
     let mut files = Vec::new();
@@ -4847,7 +4757,6 @@ fn file_read_many(
             "bytes": metadata.len(),
         }));
     }
-
     let count = files.len();
     Ok(json!({
         "files": files,
@@ -4862,6 +4771,180 @@ fn ignored_dir(name: &str) -> bool {
         name,
         ".git" | "node_modules" | "target" | "dist" | "build" | ".venv" | "__pycache__"
     )
+}
+
+/// Read-only lint pass intended to run as a manifest hook (typically
+/// `hooks.post` on `file.write`). Hooks receive the triggering tool's
+/// arguments verbatim, so the schema deliberately accepts extra keys: a
+/// `file.write` payload (`path`, `content`, `overwrite_confirmation`) must
+/// pass validation unchanged. The linted file is read back from disk.
+const LINT_MAX_LINES: usize = 5_000;
+const LINT_MAX_FILE_BYTES: u64 = 1_000_000;
+
+#[async_trait(?Send)]
+impl SkillExecutor for LintCheckExecutor {
+    fn id(&self) -> &'static str {
+        "lint.check"
+    }
+    fn descriptor(&self) -> ExecutorDescriptor {
+        ExecutorDescriptor {
+            id: self.id().to_string(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Workspace-relative file to lint. Falls back to a `path`-like argument written by the triggering tool."}
+                }
+            }),
+            output_schema: json!({
+                "type": "object",
+                "required": ["path", "findings", "truncated"]
+            }),
+            permissions: vec![Permission::FileSystemRead],
+            side_effects: vec![SideEffectClass::FilesystemRead],
+            deterministic_fixture: json!({"path": "README.md"}),
+        }
+    }
+    async fn execute(
+        &self,
+        request: &ToolRequest,
+        context: &SkillExecutionContext,
+        approval: &mut dyn SkillApproval,
+    ) -> Result<Value, SkillExecutionError> {
+        let policy = SideEffectPolicy::backward_compatible(context.auto_approve_medium_risk);
+        let mut audit = crate::NoopSideEffectAuditSink;
+        self.execute_with_policy(request, context, approval, &policy, &mut audit)
+            .await
+    }
+    async fn execute_with_policy(
+        &self,
+        request: &ToolRequest,
+        context: &SkillExecutionContext,
+        approval: &mut dyn SkillApproval,
+        policy: &SideEffectPolicy,
+        audit: &mut dyn SideEffectAuditSink,
+    ) -> Result<Value, SkillExecutionError> {
+        let path = optional_string_arg(request, "path").unwrap_or_else(|| ".".to_string());
+        authorize_side_effect(
+            policy,
+            audit,
+            approval,
+            SideEffectRequest::new(
+                self.id(),
+                "fs.read",
+                [SideEffectClass::FilesystemRead],
+                Some(path.clone()),
+            ),
+        )?;
+        lint_check(&path, context)
+    }
+}
+
+const LINT_MAX_FINDINGS: usize = 20;
+
+fn lint_check(path: &str, context: &SkillExecutionContext) -> Result<Value, SkillExecutionError> {
+    let workspace = Workspace::new(&context.workspace_root)?;
+    let resolved = match workspace.resolve_inside(path) {
+        Ok(resolved) => resolved,
+        Err(_) => {
+            return Err(SkillExecutionError::ExecutionFailed {
+                skill_id: "lint.check".to_string(),
+                message: format!("`{path}` is outside the active workspace"),
+            });
+        }
+    };
+    if !resolved.is_file() {
+        return Ok(json!({
+            "path": path,
+            "findings": [],
+            "truncated": false,
+            "status": "skipped",
+            "detail": "target is not a regular file; nothing to lint",
+        }));
+    }
+    let metadata = fs::metadata(&resolved)?;
+    if metadata.len() > LINT_MAX_FILE_BYTES {
+        return Ok(json!({
+            "path": path,
+            "findings": [],
+            "truncated": false,
+            "status": "skipped",
+            "detail": "file exceeds the 1 MiB lint limit",
+        }));
+    }
+    let content = match fs::read_to_string(&resolved) {
+        Ok(content) => content,
+        Err(_) => {
+            return Ok(json!({
+                "path": path,
+                "findings": [],
+                "truncated": false,
+                "status": "skipped",
+                "detail": "file is not valid UTF-8; lint skipped",
+            }));
+        }
+    };
+
+    let mut findings: Vec<Value> = Vec::new();
+    let mut truncated = false;
+    for (index, line) in content.lines().take(LINT_MAX_LINES).enumerate() {
+        if findings.len() >= LINT_MAX_FINDINGS {
+            truncated = true;
+            break;
+        }
+        let line_no = index + 1;
+        if line.chars().count() > 120 {
+            findings.push(json!({
+                "line": line_no,
+                "severity": "warning",
+                "rule": "line-length",
+                "message": "line exceeds 120 characters",
+            }));
+        }
+        if line.len() > 3 {
+            let trimmed_end = line.trim_end();
+            if trimmed_end.len() < line.len() {
+                findings.push(json!({
+                    "line": line_no,
+                    "severity": "info",
+                    "rule": "trailing-whitespace",
+                    "message": "line ends with trailing whitespace",
+                }));
+            }
+        }
+        if line.contains('\t') {
+            findings.push(json!({
+                "line": line_no,
+                "severity": "info",
+                "rule": "no-tabs",
+                "message": "line contains a literal tab; prefer spaces",
+            }));
+        }
+        if let Some(comment) = line.find("TODO") {
+            let after = &line[comment + 4..];
+            if after
+                .chars()
+                .next()
+                .is_some_and(|c| c.is_alphanumeric() || c == '_')
+            {
+                findings.push(json!({
+                    "line": line_no,
+                    "severity": "info",
+                    "rule": "todo-format",
+                    "message": "TODO marker glued to surrounding text (e.g. `TODOfix`); use `TODO: description`",
+                }));
+            }
+        }
+    }
+    if content.lines().count() > LINT_MAX_LINES {
+        truncated = true;
+    }
+    let status = if truncated { "truncated" } else { "ok" };
+    Ok(json!({
+        "path": path,
+        "findings": findings,
+        "truncated": truncated,
+        "status": status,
+    }))
 }
 
 #[cfg(test)]
@@ -4881,14 +4964,12 @@ mod tests {
         calls: usize,
         result: bool,
     }
-
     impl SkillApproval for CountingApprover {
         fn approve(&mut self, _request: &ApprovalRequest) -> bool {
             self.calls += 1;
             self.result
         }
     }
-
     #[test]
     fn direct_authorization_is_fail_closed_and_prompts_only_for_ask() {
         let request = || {
@@ -4959,7 +5040,6 @@ mod tests {
         assert_eq!(declined_approver.calls, 1);
         assert_eq!(declined_audit.decisions()[0].outcome, PolicyOutcome::Denied);
     }
-
     #[test]
     fn parses_textual_tool_request_block() {
         let request = extract_tool_request(
@@ -4977,7 +5057,6 @@ mod tests {
         assert_eq!(request.skill_id, "file.read");
         assert_eq!(request.arguments["path"], "README.md");
     }
-
     #[test]
     fn malformed_tool_request_corpus_never_panics() {
         let mut state = 0xa076_1d64_78bd_642f_u64;
@@ -4998,7 +5077,6 @@ mod tests {
             let _ = extract_tool_request(&input);
         }
     }
-
     #[test]
     fn builtin_executor_registry_exposes_the_supported_tool_ids() {
         let registry = ExecutorRegistry::with_builtin_executors();
@@ -5016,6 +5094,7 @@ mod tests {
                 "git.diff",
                 "git.status",
                 "github.search",
+                "lint.check",
                 "project.scan",
                 "python.run",
                 "question.ask",
@@ -5030,11 +5109,10 @@ mod tests {
             ]
         );
     }
-
     #[test]
     fn every_builtin_executor_has_complete_schema_policy_and_fixture_metadata() {
         let descriptors = ExecutorRegistry::with_builtin_executors().descriptors();
-        assert_eq!(descriptors.len(), 21);
+        assert_eq!(descriptors.len(), 22);
         for descriptor in descriptors {
             assert!(descriptor.is_complete(), "incomplete: {}", descriptor.id);
             assert!(descriptor.input_schema.is_object());
@@ -5045,7 +5123,6 @@ mod tests {
                 .unwrap_or_else(|error| panic!("invalid fixture for {}: {error}", descriptor.id));
         }
     }
-
     #[test]
     fn dev_server_and_listening_detection_helpers_behave_as_expected() {
         assert!(is_dev_server_command("python -m http.server 8000"));
@@ -5069,7 +5146,6 @@ mod tests {
             "test result: ok. 0 passed; 0 failed"
         ));
     }
-
     #[test]
     fn git_descriptors_match_their_runtime_result_shapes() {
         let registry = ExecutorRegistry::with_builtin_executors();
@@ -5082,7 +5158,6 @@ mod tests {
             .expect("git.diff result should match its schema");
         assert!(validate_schema_value(&json!({"diff": "wrong"}), &status.output_schema).is_err());
     }
-
     #[test]
     fn git_diff_disables_external_drivers_and_scrubs_credentials() {
         let key = "AXIOM_TEST_ENGINE_GIT_SECRET_A81A0E66".to_string();
@@ -5105,7 +5180,6 @@ mod tests {
             .get_envs()
             .any(|(name, value)| name == key.as_str() && value.is_none()));
     }
-
     #[test]
     fn git_diff_excludes_secret_files_before_their_contents_are_captured() {
         if Command::new("git").arg("--version").output().is_err() {
@@ -5153,7 +5227,6 @@ mod tests {
         assert!(!diff.contains("KEY="));
         let _ = fs::remove_dir_all(root);
     }
-
     fn run_git(root: &Path, arguments: &[&str]) {
         let output = Command::new("git")
             .arg("-C")
@@ -5167,7 +5240,6 @@ mod tests {
             String::from_utf8_lossy(&output.stderr)
         );
     }
-
     #[tokio::test]
     async fn code_grep_finds_matches_and_skips_secret_paths() {
         let root = unique_temp_dir();
@@ -5212,7 +5284,6 @@ mod tests {
         assert_eq!(secret.output["count"], 0);
         let _ = fs::remove_dir_all(root);
     }
-
     #[tokio::test]
     async fn code_glob_and_list_are_bounded_and_ignore_generated_dirs() {
         let root = unique_temp_dir();
@@ -5254,7 +5325,6 @@ mod tests {
         assert!(!entries.iter().any(|entry| entry["path"] == "target"));
         let _ = fs::remove_dir_all(root);
     }
-
     #[test]
     fn glob_patterns_match_expected_paths() {
         assert!(glob_match("**/*.rs", "src/main.rs"));
@@ -5264,6 +5334,113 @@ mod tests {
         assert!(glob_match("src/*.rs", "src/lib.rs"));
         assert!(path_matches_glob("*.rs", "src/main.rs"));
         assert!(!path_matches_glob("*.toml", "src/main.rs"));
+    }
+    #[tokio::test]
+    async fn lint_check_lints_written_file_and_absorbs_extra_args() {
+        let root = unique_temp_dir();
+        fs::create_dir_all(&root).expect("root");
+        fs::write(
+            root.join("messy.rs"),
+            "fn main() {\n\tlet x = 1;   \n// TODOfix this later\n}\n",
+        )
+        .expect("write file");
+        let mut approval = AllowAllApprover;
+
+        // Args exactly as `file.write` fires them: hook arguments pass through
+        // verbatim, so the permissive schema must tolerate `content` too.
+        let result = execute_installed_tool(
+            &ToolRequest {
+                skill_id: "lint.check".to_string(),
+                arguments: json!({
+                    "path": "messy.rs",
+                    "content": "fn main() {\n\tlet x = 1;   \n// TODOfix this later\n}\n",
+                    "overwrite_confirmation": true
+                }),
+            },
+            &[installed_tool("lint.check")],
+            &context(&root),
+            &mut approval,
+        )
+        .await
+        .expect("execute lint.check");
+
+        assert_eq!(result.output["path"], "messy.rs");
+        assert_eq!(result.output["status"], "ok");
+        let findings = result.output["findings"].as_array().expect("findings");
+        let rules: Vec<&str> = findings.iter().filter_map(|f| f["rule"].as_str()).collect();
+        assert!(rules.contains(&"no-tabs"), "expected no-tabs in {rules:?}");
+        assert!(
+            rules.contains(&"trailing-whitespace"),
+            "expected trailing-whitespace in {rules:?}"
+        );
+        assert!(
+            rules.contains(&"todo-format"),
+            "expected todo-format in {rules:?}"
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+    #[tokio::test]
+    async fn lint_check_reports_clean_file_without_findings() {
+        let root = unique_temp_dir();
+        fs::create_dir_all(&root).expect("root");
+        fs::write(root.join("clean.rs"), "fn main() {}\n").expect("write file");
+        let mut approval = AllowAllApprover;
+
+        let result = execute_installed_tool(
+            &ToolRequest {
+                skill_id: "lint.check".to_string(),
+                arguments: json!({ "path": "clean.rs" }),
+            },
+            &[installed_tool("lint.check")],
+            &context(&root),
+            &mut approval,
+        )
+        .await
+        .expect("execute lint.check");
+
+        assert_eq!(result.output["status"], "ok");
+        assert_eq!(
+            result.output["findings"]
+                .as_array()
+                .expect("findings")
+                .len(),
+            0
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+    #[tokio::test]
+    async fn lint_check_skips_missing_and_non_utf8_targets() {
+        let root = unique_temp_dir();
+        fs::create_dir_all(&root).expect("root");
+        fs::write(root.join("blob.bin"), [0xFF, 0xFE, 0x00]).expect("write binary");
+        let mut approval = AllowAllApprover;
+
+        let missing = execute_installed_tool(
+            &ToolRequest {
+                skill_id: "lint.check".to_string(),
+                arguments: json!({ "path": "missing.txt" }),
+            },
+            &[installed_tool("lint.check")],
+            &context(&root),
+            &mut approval,
+        )
+        .await
+        .expect("execute lint.check on missing file");
+        assert_eq!(missing.output["status"], "skipped");
+
+        let binary = execute_installed_tool(
+            &ToolRequest {
+                skill_id: "lint.check".to_string(),
+                arguments: json!({ "path": "blob.bin" }),
+            },
+            &[installed_tool("lint.check")],
+            &context(&root),
+            &mut approval,
+        )
+        .await
+        .expect("execute lint.check on binary file");
+        assert_eq!(binary.output["status"], "skipped");
+        let _ = fs::remove_dir_all(root);
     }
 
     #[tokio::test]
@@ -5296,7 +5473,6 @@ mod tests {
         );
         let _ = fs::remove_dir_all(root);
     }
-
     #[tokio::test]
     async fn file_read_reads_inside_workspace() {
         let root = unique_temp_dir();
@@ -5320,7 +5496,6 @@ mod tests {
         assert_eq!(result.output["content"], "hello");
         let _ = fs::remove_dir_all(root);
     }
-
     #[tokio::test]
     async fn file_read_blocks_secret_paths() {
         let root = unique_temp_dir();
@@ -5344,7 +5519,6 @@ mod tests {
         assert!(matches!(error, SkillExecutionError::SecretPath(_)));
         let _ = fs::remove_dir_all(root);
     }
-
     #[tokio::test]
     async fn file_write_blocks_common_credential_paths() {
         let root = unique_temp_dir();
@@ -5368,7 +5542,6 @@ mod tests {
         assert!(!root.join("credentials.json").exists());
         let _ = fs::remove_dir_all(root);
     }
-
     #[cfg(unix)]
     #[tokio::test]
     async fn file_tools_block_symlink_alias_to_secret() {
@@ -5407,7 +5580,6 @@ mod tests {
         );
         let _ = fs::remove_dir_all(root);
     }
-
     #[cfg(windows)]
     #[tokio::test]
     async fn file_tools_block_junction_alias_to_scoped_credentials() {
@@ -5456,7 +5628,6 @@ mod tests {
         );
         let _ = fs::remove_dir_all(root);
     }
-
     #[tokio::test]
     async fn file_write_requires_approval() {
         let root = unique_temp_dir();
@@ -5480,7 +5651,6 @@ mod tests {
         assert!(!root.join("new.txt").exists());
         let _ = fs::remove_dir_all(root);
     }
-
     #[tokio::test]
     async fn project_scan_ignores_generated_directories() {
         let root = unique_temp_dir();
@@ -5511,7 +5681,6 @@ mod tests {
             .any(|value| value == "target"));
         let _ = fs::remove_dir_all(root);
     }
-
     #[tokio::test]
     async fn web_fetch_rejects_non_http_urls() {
         let root = unique_temp_dir();
@@ -5534,7 +5703,6 @@ mod tests {
         assert!(matches!(error, SkillExecutionError::InvalidUrl(_)));
         let _ = fs::remove_dir_all(root);
     }
-
     #[tokio::test]
     async fn web_fetch_blocks_private_network_targets_before_any_request() {
         let root = unique_temp_dir();
@@ -5564,7 +5732,6 @@ mod tests {
         }
         let _ = fs::remove_dir_all(root);
     }
-
     #[test]
     fn web_fetch_requires_https_by_default() {
         let root = unique_temp_dir();
@@ -5578,7 +5745,6 @@ mod tests {
 
         assert!(matches!(error, SkillExecutionError::InvalidUrl(_)));
     }
-
     #[test]
     fn web_fetch_supports_query_argument() {
         let root = unique_temp_dir();
@@ -5592,7 +5758,6 @@ mod tests {
 
         assert_eq!(target, "https://html.duckduckgo.com/html/");
     }
-
     #[test]
     fn web_fetch_host_policy_is_deny_first_and_supports_subdomain_patterns() {
         let root = unique_temp_dir();
@@ -5626,7 +5791,6 @@ mod tests {
             Err(SkillExecutionError::NetworkHostDenied(_))
         ));
     }
-
     #[test]
     fn private_address_policy_covers_reserved_and_mapped_ranges() {
         for address in [
@@ -5646,7 +5810,6 @@ mod tests {
         ));
         assert!(is_private_network_host("service.localhost"));
     }
-
     #[test]
     fn bounded_web_response_stops_before_oversized_chunk_is_buffered() {
         let mut response = b"first".to_vec();
@@ -5660,7 +5823,6 @@ mod tests {
         ));
         assert_eq!(response, b"first-ok");
     }
-
     #[tokio::test]
     async fn disabled_skill_cannot_execute() {
         let root = unique_temp_dir();
@@ -5681,7 +5843,6 @@ mod tests {
         assert!(matches!(error, SkillExecutionError::SkillBlocked { .. }));
         let _ = fs::remove_dir_all(root);
     }
-
     #[tokio::test]
     async fn incompatible_skill_cannot_execute() {
         let root = unique_temp_dir();
@@ -5704,7 +5865,6 @@ mod tests {
         ));
         let _ = fs::remove_dir_all(root);
     }
-
     #[tokio::test]
     async fn missing_or_cyclic_dependencies_block_execution() {
         let root = unique_temp_dir();
@@ -5741,7 +5901,6 @@ mod tests {
         assert!(matches!(cycle, SkillExecutionError::DependencyCycle(_)));
         let _ = fs::remove_dir_all(root);
     }
-
     fn installed_tool(skill_id: &str) -> InstalledSkill {
         let manifest = SkillManifest::parse_toml(&format!(
             r#"
@@ -5786,7 +5945,6 @@ min_axiom_version = "0.1.0"
             manifest,
         }
     }
-
     fn context(root: &Path) -> SkillExecutionContext {
         SkillExecutionContext {
             workspace_root: root.to_path_buf(),
@@ -5802,7 +5960,6 @@ min_axiom_version = "0.1.0"
             skills_dir: None,
         }
     }
-
     #[tokio::test]
     async fn skill_create_executor_creates_skill_and_updates_manifest() {
         let dir = unique_temp_dir();
@@ -5860,7 +6017,6 @@ min_axiom_version = "0.1.0"
 
         let _ = fs::remove_dir_all(dir);
     }
-
     #[tokio::test]
     async fn builtin_installed_skill_provides_executable_synthetic_skills() {
         for builtin_id in &[
@@ -5881,7 +6037,6 @@ min_axiom_version = "0.1.0"
             assert_eq!(skill.manifest.skill_type, SkillType::Tool);
         }
     }
-
     #[tokio::test]
     async fn question_ask_executor_selects_option_or_default() {
         let registry = ExecutorRegistry::with_builtin_executors();
@@ -5925,7 +6080,6 @@ min_axiom_version = "0.1.0"
             Some(false)
         );
     }
-
     fn unique_temp_dir() -> PathBuf {
         use std::sync::atomic::{AtomicU64, Ordering};
         static COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -5939,7 +6093,6 @@ min_axiom_version = "0.1.0"
             std::thread::current().id()
         ))
     }
-
     #[test]
     fn extract_text_from_html_strips_scripts_styles_and_tags() {
         let sample = r#"
@@ -5965,7 +6118,6 @@ min_axiom_version = "0.1.0"
         assert!(text.contains("Welcome & Hello"));
         assert!(text.contains("This is a paragraph with a link \"quoted\"."));
     }
-
     #[tokio::test]
     async fn test_run_executor_validates_html_and_assets() {
         let dir = unique_temp_dir();
@@ -6030,7 +6182,6 @@ min_axiom_version = "0.1.0"
 
         let _ = fs::remove_dir_all(dir);
     }
-
     #[tokio::test]
     async fn test_run_executor_catches_missing_referenced_asset() {
         let dir = unique_temp_dir();
@@ -6079,7 +6230,6 @@ min_axiom_version = "0.1.0"
 
         let _ = fs::remove_dir_all(dir);
     }
-
     #[tokio::test]
     async fn file_replace_executor_replaces_exact_content_block() {
         let dir = unique_temp_dir();
@@ -6126,7 +6276,6 @@ min_axiom_version = "0.1.0"
 
         let _ = fs::remove_dir_all(dir);
     }
-
     #[tokio::test]
     async fn file_read_supports_pagination_offset_and_limit() {
         let dir = unique_temp_dir();
@@ -6176,7 +6325,6 @@ min_axiom_version = "0.1.0"
 
         let _ = fs::remove_dir_all(dir);
     }
-
     #[tokio::test]
     async fn subagent_run_standalone_execution_fails_honestly() {
         let registry = ExecutorRegistry::with_builtin_executors();
@@ -6213,7 +6361,6 @@ min_axiom_version = "0.1.0"
 
         assert!(matches!(error, SkillExecutionError::UnsupportedSkill(_)));
     }
-
     #[test]
     fn normalize_powershell_command_replaces_and_preserves_quotes() {
         assert_eq!(
@@ -6229,7 +6376,6 @@ min_axiom_version = "0.1.0"
             "echo \"hello && world\" ; exit 1"
         );
     }
-
     #[test]
     fn powershell_bootstrap_defines_essential_shims() {
         assert!(POWERSHELL_COMPAT_BOOTSTRAP.contains("function sleep"));
