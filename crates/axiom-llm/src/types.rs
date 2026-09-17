@@ -35,6 +35,11 @@ pub struct ChatResponse {
     pub raw: Option<Value>,
     #[serde(default)]
     pub tool_calls: Vec<ChatToolCall>,
+    /// True when the provider ended the stream before a terminal finish
+    /// event and the collector salvaged the partial content. A truncated
+    /// response must not be treated as the model's final answer.
+    #[serde(default)]
+    pub stream_truncated: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

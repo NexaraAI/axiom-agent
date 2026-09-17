@@ -180,6 +180,7 @@ pub fn parse_chat_response(
         provider: provider.to_string(),
         raw: Some(raw),
         tool_calls,
+        stream_truncated: false,
     })
 }
 

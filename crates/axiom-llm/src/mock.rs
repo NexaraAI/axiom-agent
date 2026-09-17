@@ -34,6 +34,7 @@ impl LlmProvider for MockProvider {
             provider: self.name.clone(),
             raw: None,
             tool_calls: Vec::new(),
+            stream_truncated: false,
         })
     }
 

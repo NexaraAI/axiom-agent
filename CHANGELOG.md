@@ -4,6 +4,18 @@ All notable changes to Axiom are documented here. Versions follow semantic
 versioning. Stable releases document user-visible changes, configuration or
 proof migrations, security fixes, and upgrade actions.
 
+## 1.0.19
+
+### Fixed
+
+- **Commands**: `/provider <name>` and bare `/provider` work in chat (previously “Unknown command” — only `/provider use <name>`, `/provider list`, and `/provider current` were wired up, while the palette and CLI help advertised the shorter forms). A successful switch also reports the provider-default model it selected, and an unknown name lists the configured providers instead of leaving the error unexplained.
+- **Errors**: when a provider rejects the request because its free tier only accepts its own client (for example OpenCode’s `FreeTierError` HTTP 403), the turn’s error message now explains the situation and points at `/provider <name>` as the way out, instead of surfacing the raw provider error alone.
+- **Resilience**: when a provider routes the request to a model with no tool-capable endpoint (OpenRouter's HTTP 404 “No endpoints found that support tool use”), the agent no longer abandons the turn. It retries once without tools, tells you the turn is continuing degraded and which model to switch to, and keeps every other guard intact. A failure of the degraded request still gives up as before.
+- **Streaming**: a provider that goes silent after sending its last token (instead of the finish/`[DONE]` tail) no longer holds the turn open until the 300-second request timeout — an idle watchdog treats the stalled stream like a server close, so the turn ends promptly with the content that already arrived. The watchdog arms only after the first event, so gateways that buffer the whole response are unaffected.
+- **System date anchor**: the identity system message now carries the real current UTC date and time (previously absent, so models guessed the year during time-sensitive research and were unsure whether search results were from the future). Stdlib-only; no new dependency.
+- **Tool-name robustness**: a model emitting a hallucinated or namespace-prefixed tool name (for example GLM's `functions.axiom_github_search`, or an empty name) no longer aborts the whole turn with `provider requested unknown Axiom function`. Namespace wrappers are stripped before matching, and a genuinely unknown name triggers a corrective retry that tells the model to use a real tool name or answer without tools. Todo-tool hallucinations (models emitting `todo`/`todo_write` as a function, a habit carried over from other agent harnesses) get a targeted hint teaching the fenced `axiom-todo` block instead.
+- **Truncated-response salvage**: when a provider drops the stream before the finish event (mid-word answers that just stop after a batch of tool results), the salvaged partial response is now flagged (`stream_truncated`) and the agent asks the model to continue where it stopped instead of treating the fragment as the final answer. Repeated truncation still ends the turn via the normal caps.
+
 ## 1.0.18
 
 This release dogfoods skill manifest hooks end to end: the agent can now lint a file right after the model writes it, through the registry's first hook skill, and correct findings on its next iteration.

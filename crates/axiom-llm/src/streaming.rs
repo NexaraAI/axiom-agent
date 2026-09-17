@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, VecDeque};
+use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
@@ -66,7 +67,15 @@ struct HttpChatStream {
     terminal_event_seen: bool,
     wire_bytes_received: usize,
     events_received: usize,
+    idle_timeout: Duration,
 }
+
+/// How long a stream may stay silent between chunks before it is treated as
+/// stalled. Providers that route through aggregators occasionally hold the
+/// connection open after the last content token without ever sending the
+/// finish event or closing; without this bound the client would wait for the
+/// full request timeout (minutes of dead air) before recovering.
+pub(crate) const STREAM_IDLE_TIMEOUT: Duration = Duration::from_secs(120);
 
 impl std::fmt::Debug for ChatStream {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -125,6 +134,7 @@ impl ChatStream {
                 terminal_event_seen: false,
                 wire_bytes_received: 0,
                 events_received: 0,
+                idle_timeout: STREAM_IDLE_TIMEOUT,
             }),
         }
     }
@@ -161,6 +171,7 @@ impl ChatStream {
         let mut tool_call_deltas_received = 0_usize;
         let mut chunks_received = 0_usize;
         let mut total_argument_bytes = 0_usize;
+        let mut stream_truncated = false;
         while let Some(chunk) = match self.next_chunk().await {
             Ok(chunk) => chunk,
             Err(LlmError::StreamDisconnected { .. })
@@ -169,6 +180,11 @@ impl ChatStream {
                     || !tool_calls.is_empty()
                     || !total_reasoning.is_empty() =>
             {
+                // Salvage the partial content, but mark the response so the
+                // caller knows the provider never reached a terminal finish
+                // event — a mid-sentence cut must not pass as the model's
+                // final answer.
+                stream_truncated = true;
                 None
             }
             Err(err) => return Err(err),
@@ -362,6 +378,7 @@ impl ChatStream {
             usage,
             model: model.unwrap_or_else(|| fallback_model.to_string()),
             provider: provider.to_string(),
+            stream_truncated,
             raw: None,
             tool_calls,
         })
@@ -643,6 +660,24 @@ fn longest_suffix_prefix(value: &str, marker: &str) -> usize {
         .unwrap_or_default()
 }
 
+fn map_chunk_error(provider: &str, error: reqwest::Error, idle_timeout: Duration) -> LlmError {
+    LlmError::Http {
+        provider: provider.to_string(),
+        message: if error.is_timeout() {
+            format!(
+                "connection timed out after {}s idle: {error}",
+                idle_timeout.as_secs()
+            )
+        } else if error.is_decode() {
+            format!(
+                "stream decoding interrupted (connection closed or truncated by server): {error}"
+            )
+        } else {
+            error.to_string()
+        },
+    }
+}
+
 fn floor_char_boundary(value: &str, requested: usize) -> usize {
     let mut boundary = requested.min(value.len());
     while boundary > 0 && !value.is_char_boundary(boundary) {
@@ -679,22 +714,33 @@ impl HttpChatStream {
                 continue;
             }
 
-            match self
-                .response
-                .chunk()
-                .await
-                .map_err(|error| LlmError::Http {
-                    provider: self.provider.clone(),
-                    message: if error.is_timeout() {
-                        format!("connection timed out after 300s: {error}")
-                    } else if error.is_decode() {
-                        format!(
-                            "stream decoding interrupted (connection closed or truncated by server): {error}"
-                        )
-                    } else {
-                        error.to_string()
-                    },
-                })? {
+            // Bound the wait between chunks once the stream has produced at
+            // least one SSE event: a provider that goes silent mid-response
+            // without closing must not hold the turn open for the full request
+            // timeout. Before the first event the read stays unbounded (the
+            // request timeout still applies) because some gateways buffer the
+            // entire streamed response and legitimately deliver nothing until
+            // generation completes. A stalled read is surfaced as a disconnect
+            // so the collector's existing EOF handling applies: with content
+            // already received the turn ends gracefully with what arrived;
+            // without, it is a clean failure.
+            let chunk_result = if self.events_received > 0 {
+                match tokio::time::timeout(self.idle_timeout, self.response.chunk()).await {
+                    Ok(Ok(chunk)) => Ok(chunk),
+                    Ok(Err(error)) => {
+                        Err(map_chunk_error(&self.provider, error, self.idle_timeout))
+                    }
+                    Err(_) => Err(LlmError::StreamDisconnected {
+                        provider: self.provider.clone(),
+                    }),
+                }
+            } else {
+                self.response
+                    .chunk()
+                    .await
+                    .map_err(|error| map_chunk_error(&self.provider, error, self.idle_timeout))
+            };
+            match chunk_result? {
                 Some(bytes) => {
                     ensure_additional_bytes(
                         &self.provider,
@@ -1188,6 +1234,102 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[tokio::test]
+    async fn stalled_mid_stream_read_ends_gracefully_with_received_content() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind test server");
+        let address = listener.local_addr().expect("server address");
+        let server = std::thread::spawn(move || {
+            let (mut socket, _) = listener.accept().expect("accept request");
+            let mut request = [0_u8; 2_048];
+            let _ = socket.read(&mut request).expect("read request");
+            // One content event under a Content-Length larger than what is
+            // sent, then hold the connection - the exact free-tier stall:
+            // the client keeps waiting for bytes that never come.
+            let body = "data: {\"choices\":[{\"delta\":{\"content\":\"Yo - I'm Axiom.\"}}]}\n\n";
+            let declared = body.len() + 4_096;
+            write!(
+                socket,
+                "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {declared}\r\nConnection: close\r\n\r\n"
+            )
+            .expect("write response headers");
+            let _ = socket.write_all(body.as_bytes());
+            let _ = socket.flush();
+            std::thread::sleep(std::time::Duration::from_secs(3));
+        });
+        let response = crate::provider::build_provider_http_client()
+            .expect("client")
+            .get(format!("http://{address}/"))
+            .send()
+            .await
+            .expect("response");
+        let mut stream = ChatStream::from_http(response, "test");
+        match &mut stream.source {
+            ChatStreamSource::Http(inner) => inner.idle_timeout = Duration::from_millis(500),
+            _ => unreachable!("from_http builds an Http source"),
+        }
+
+        let started = std::time::Instant::now();
+        let response = stream
+            .collect_response_with_observer("test", "test-model", |_| {})
+            .await
+            .expect("stalled stream must end gracefully after content arrived");
+        let elapsed = started.elapsed();
+        server.join().expect("server thread");
+
+        assert_eq!(response.content, "Yo - I'm Axiom.");
+        assert!(
+            response.stream_truncated,
+            "salvaged partial stream must be flagged as truncated"
+        );
+        assert!(
+            elapsed < std::time::Duration::from_secs(2),
+            "collector must not wait out the server's stall ({elapsed:?})"
+        );
+    }
+
+    #[tokio::test]
+    async fn read_before_first_event_is_not_idle_bounded() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind test server");
+        let address = listener.local_addr().expect("server address");
+        let server = std::thread::spawn(move || {
+            let (mut socket, _) = listener.accept().expect("accept request");
+            let mut request = [0_u8; 2_048];
+            let _ = socket.read(&mut request).expect("read request");
+            // Buffering-gateway behavior: silence for longer than the idle
+            // timeout, then the whole response at once.
+            std::thread::sleep(std::time::Duration::from_millis(1_500));
+            let body =
+                "data: {\"choices\":[{\"delta\":{\"content\":\"late\"}}]}\n\ndata: [DONE]\n\n";
+            write!(
+                socket,
+                "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                body.len()
+            )
+            .expect("write response headers");
+            let _ = socket.write_all(body.as_bytes());
+            let _ = socket.flush();
+        });
+        let response = crate::provider::build_provider_http_client()
+            .expect("client")
+            .get(format!("http://{address}/"))
+            .send()
+            .await
+            .expect("response");
+        let mut stream = ChatStream::from_http(response, "test");
+        match &mut stream.source {
+            ChatStreamSource::Http(inner) => inner.idle_timeout = Duration::from_millis(500),
+            _ => unreachable!("from_http builds an Http source"),
+        }
+
+        let response = stream
+            .collect_response_with_observer("test", "test-model", |_| {})
+            .await
+            .expect("silence before the first event must not trip the idle watchdog");
+        server.join().expect("server thread");
+
+        assert_eq!(response.content, "late");
     }
 
     #[tokio::test]

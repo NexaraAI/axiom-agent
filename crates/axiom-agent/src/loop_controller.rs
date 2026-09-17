@@ -10,7 +10,7 @@ use axiom_engine::{
 };
 use axiom_llm::{
     detect_repetition_period, ChatMessage, ChatRequest, ChatStreamUpdate, ChatToolDefinition,
-    LlmProvider,
+    LlmError, LlmProvider,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -192,6 +192,12 @@ pub enum AgentTransitionKind {
         iteration: u32,
         reason: GiveUpReason,
         partial: String,
+    },
+    ProviderDegradedNoTools {
+        iteration: u32,
+        provider: String,
+        model: String,
+        error: String,
     },
 }
 
@@ -879,6 +885,7 @@ impl<'a> AgentLoop<'a> {
         };
         let mut consecutive_tool_errors = 0;
         let mut hook_budget = HookBudget::new(&self.caps, started_at);
+        let mut tools_degraded = false;
 
         for iteration in 1..=self.caps.max_iterations {
             if self.cancellation.is_cancelled() {
@@ -927,6 +934,7 @@ impl<'a> AgentLoop<'a> {
                 },
             )?;
 
+            let effective_allow_tools = self.allow_tools && !tools_degraded;
             let request = ChatRequest {
                 model: self.model.clone(),
                 messages: messages.clone(),
@@ -935,12 +943,12 @@ impl<'a> AgentLoop<'a> {
                 stream: self.streaming,
                 metadata: None,
                 provider_options: self.provider_options.clone(),
-                tools: if self.allow_tools {
+                tools: if effective_allow_tools {
                     self.tool_definitions.clone()
                 } else {
                     Vec::new()
                 },
-                tool_choice: self.allow_tools.then(|| "auto".to_string()),
+                tool_choice: effective_allow_tools.then(|| "auto".to_string()),
             };
             self.record_transition(
                 &mut progress,
@@ -1026,6 +1034,29 @@ impl<'a> AgentLoop<'a> {
             let response = match provider_result {
                 Ok(response) => response,
                 Err(error) => {
+                    if !tools_degraded
+                        && self.allow_tools
+                        && !self.tool_definitions.is_empty()
+                        && is_no_tool_endpoint_error(&error)
+                    {
+                        // The provider routed the request to a model with no
+                        // tool-capable endpoint (OpenRouter returns HTTP 404
+                        // "No endpoints found that support tool use"). Retry
+                        // this iteration once without tools instead of
+                        // abandoning the turn: the model can still answer, it
+                        // just cannot call tools for the rest of the turn.
+                        tools_degraded = true;
+                        self.record_transition(
+                            &mut progress,
+                            AgentTransitionKind::ProviderDegradedNoTools {
+                                iteration,
+                                provider: self.provider.provider_name().to_string(),
+                                model: self.model.clone(),
+                                error: error.to_string(),
+                            },
+                        )?;
+                        continue;
+                    }
                     self.record_transition(
                         &mut progress,
                         AgentTransitionKind::ProviderFailed {
@@ -1107,28 +1138,41 @@ impl<'a> AgentLoop<'a> {
                 continue;
             }
 
-            let mut tool_requests = if self.allow_tools && !response.tool_calls.is_empty() {
-                response
-                    .tool_calls
-                    .iter()
-                    .map(|tool_call| {
-                        let skill_id =
-                            self.skill_id_for_native_tool(&tool_call.name)
-                                .ok_or_else(|| {
-                                    anyhow!(
-                                        "provider requested unknown Axiom function: {}",
-                                        tool_call.name
-                                    )
-                                })?;
-                        Ok::<ToolRequest, anyhow::Error>(ToolRequest {
-                            skill_id,
-                            arguments: tool_call.arguments.clone(),
-                        })
-                    })
-                    .collect::<Result<Vec<_>>>()?
-            } else {
-                Vec::new()
-            };
+            let mut tool_requests = Vec::new();
+            let mut unresolved_tool_call: Option<String> = None;
+            if self.allow_tools {
+                for tool_call in &response.tool_calls {
+                    let Some(skill_id) = self.skill_id_for_native_tool(&tool_call.name) else {
+                        // Some models hallucinate names or emit their internal
+                        // recipient format; aborting the turn strands the user
+                        // with no recourse. Feed the mismatch back instead so
+                        // the next iteration can correct itself.
+                        unresolved_tool_call = Some(tool_call.name.clone());
+                        break;
+                    };
+                    tool_requests.push(ToolRequest {
+                        skill_id,
+                        arguments: tool_call.arguments.clone(),
+                    });
+                }
+            }
+            if let Some(name) = unresolved_tool_call {
+                messages.push(ChatMessage {
+                    role: "user".to_string(),
+                    content: if name.trim().is_empty() {
+                        "The last response requested a tool with an empty function name. Retry the tool call using the exact name from the provided tools list (native names look like axiom_file_read), or continue answering without tools.".to_string()
+                    } else if is_todo_like_tool_name(&name) {
+                        format!(
+                            "The requested tool `{name}` does not exist as a function in this session. To maintain a plan or task list, emit it as a fenced control block instead of a tool call: \n```axiom-todo\n{{\"items\":[{{\"title\":\"step\",\"status\":\"pending\"}}]}}\n```\n(valid statuses: pending, in_progress, completed, blocked). Then continue the task with the available tools."
+                        )
+                    } else {
+                        format!(
+                            "The requested tool `{name}` is not available in this session. Retry using the exact name of one of the provided tools (native names look like axiom_file_read), or continue answering without tools."
+                        )
+                    },
+                });
+                continue;
+            }
             if tool_requests.is_empty() {
                 match extract_tool_request(&assistant_content) {
                     Ok(request) if self.allow_tools => tool_requests.push(request),
@@ -1148,6 +1192,19 @@ impl<'a> AgentLoop<'a> {
                         } else {
                             "The todo list is terminal. Provide a concise final answer summarizing the result and any blocked items.".to_string()
                         },
+                    });
+                    continue;
+                }
+                if response.stream_truncated {
+                    // The provider cut the stream before the finish event, so
+                    // this "answer" is a mid-sentence fragment (frequently
+                    // after a batch of large tool observations). Salvage the
+                    // turn by asking the model to continue where it stopped;
+                    // if the retry also truncates, the caps end the turn as
+                    // before instead of looping forever.
+                    messages.push(ChatMessage {
+                        role: "user".to_string(),
+                        content: "Your previous response was cut off mid-stream before completion. Continue exactly where you stopped and finish the task or answer; do not repeat content already sent.".to_string(),
                     });
                     continue;
                 }
@@ -1597,7 +1654,14 @@ impl<'a> AgentLoop<'a> {
     }
 
     fn skill_id_for_native_tool(&self, name: &str) -> Option<String> {
-        let cleaned = name.trim();
+        let trimmed = name.trim();
+        // Some models emit their internal recipient format instead of the
+        // bare wire name (for example GLM's `functions.axiom_github_search`).
+        // Strip the namespace wrapper before matching.
+        let cleaned = trimmed
+            .strip_prefix("functions.")
+            .or_else(|| trimmed.strip_prefix("tools."))
+            .unwrap_or(trimmed);
         let unprefix = cleaned
             .strip_prefix("axiom_")
             .or_else(|| cleaned.strip_prefix("axiom."))
@@ -1662,8 +1726,44 @@ impl<'a> AgentLoop<'a> {
     }
 }
 
+/// True when a provider rejected the request because the routed model has no
+/// endpoint that supports tool use (for example OpenRouter's HTTP 404 "No
+/// endpoints found that support tool use"). Such a turn can still be answered
+/// without tools, so the loop degrades to a tool-free request instead of
+/// giving up.
+fn is_no_tool_endpoint_error(error: &LlmError) -> bool {
+    let rendered = error.to_string().to_ascii_lowercase();
+    rendered.contains("no endpoints found that support tool use")
+        || (rendered.contains("tool") && rendered.contains("endpoint"))
+}
+
 fn native_tool_name(skill_id: &str) -> String {
     format!("axiom_{}", skill_id.replace('.', "_"))
+}
+
+/// True when a hallucinated tool name is one of the todo/task-list tool
+/// names models carry over from other agent harnesses (GLM in particular
+/// emits `todo`). These get a corrective hint pointing at the fenced
+/// `axiom-todo` block, which is how plans are tracked in this session.
+fn is_todo_like_tool_name(name: &str) -> bool {
+    const TODO_LIKE: &[&str] = &[
+        "todo",
+        "todos",
+        "todowrite",
+        "todo_write",
+        "todoupdate",
+        "todo_update",
+        "update_todos",
+        "tasklist",
+        "task_list",
+        "tasklist_write",
+    ];
+    let cleaned = name.trim().to_ascii_lowercase();
+    let cleaned = cleaned
+        .strip_prefix("functions.")
+        .or_else(|| cleaned.strip_prefix("tools."))
+        .unwrap_or(&cleaned);
+    TODO_LIKE.contains(&cleaned)
 }
 
 fn cap_kind(reason: &GiveUpReason) -> Option<AgentCapKind> {
@@ -2373,6 +2473,209 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn namespace_prefixed_native_tool_name_resolves() {
+        // GLM-family models sometimes emit their internal recipient format
+        // (`functions.axiom_file_read`) instead of the bare wire name.
+        let provider = ToolCallProvider::new(vec![(
+            "functions.axiom_file_read".to_string(),
+            serde_json::json!({}),
+        )]);
+        let mut approval = DenyAllApprover;
+        let skills = vec![installed_tool("file.read")];
+        let mut agent = AgentLoop::new(
+            &provider,
+            "test-model",
+            AgentCaps::default(),
+            Vec::new(),
+            Vec::new(),
+            &skills,
+            context(),
+            &mut approval,
+        );
+
+        let result = agent
+            .run_turn(ChatMessage {
+                role: "user".to_string(),
+                content: "read it".to_string(),
+            })
+            .await
+            .expect("turn succeeds");
+        let TurnResult::Done(completion) = result else {
+            panic!("namespace-prefixed tool call should execute, not abort");
+        };
+
+        assert_eq!(completion.content, "hook turn finished");
+        assert_eq!(provider.calls.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn unknown_tool_name_gets_corrective_retry_instead_of_abort() {
+        let provider = ToolCallProvider::new(vec![(
+            "axiom_does_not_exist".to_string(),
+            serde_json::json!({}),
+        )]);
+        let mut approval = DenyAllApprover;
+        let skills = vec![installed_tool("file.read")];
+        let mut agent = AgentLoop::new(
+            &provider,
+            "test-model",
+            AgentCaps::default(),
+            Vec::new(),
+            Vec::new(),
+            &skills,
+            context(),
+            &mut approval,
+        );
+
+        let result = agent
+            .run_turn(ChatMessage {
+                role: "user".to_string(),
+                content: "do the thing".to_string(),
+            })
+            .await
+            .expect("turn must not be aborted by an unknown tool name");
+        let TurnResult::Done(completion) = result else {
+            panic!("unknown tool name should trigger a corrective retry, not give up");
+        };
+
+        // First request carries the bogus name; the corrective message lets
+        // the provider finish with a plain answer on the retry.
+        assert_eq!(completion.content, "hook turn finished");
+        assert_eq!(provider.calls.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn todo_tool_hallucination_gets_fenced_block_hint() {
+        let provider = ToolCallProvider::new(vec![("todo".to_string(), serde_json::json!({}))]);
+        let mut approval = DenyAllApprover;
+        let skills = vec![installed_tool("file.read")];
+        let mut agent = AgentLoop::new(
+            &provider,
+            "test-model",
+            AgentCaps::default(),
+            Vec::new(),
+            Vec::new(),
+            &skills,
+            context(),
+            &mut approval,
+        );
+
+        let result = agent
+            .run_turn(ChatMessage {
+                role: "user".to_string(),
+                content: "plan and go".to_string(),
+            })
+            .await
+            .expect("turn must not die on a todo tool call");
+        let TurnResult::Done(completion) = result else {
+            panic!("todo hallucination should correct, not give up");
+        };
+
+        assert_eq!(completion.content, "hook turn finished");
+        assert_eq!(provider.calls.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn truncated_final_answer_continues_the_turn_instead_of_ending() {
+        // Provider hands back a salvaged-but-truncated response (no finish
+        // event), then a proper answer after the continuation nudge.
+        struct TruncatingProvider;
+        #[async_trait]
+        impl LlmProvider for TruncatingProvider {
+            async fn chat(&self, request: ChatRequest) -> axiom_llm::Result<ChatResponse> {
+                let call = self.calls();
+                if call == 0 {
+                    Ok(ChatResponse {
+                        content: "The initial search shows two distinct GitHub identities with the same br".to_string(),
+                        usage: Some(TokenUsage {
+                            prompt_tokens: 10,
+                            completion_tokens: 5,
+                            total_tokens: 15,
+                        }),
+                        model: request.model,
+                        provider: "truncating".to_string(),
+                        raw: None,
+                        tool_calls: Vec::new(),
+                        stream_truncated: true,
+                    })
+                } else {
+                    Ok(ChatResponse {
+                        content:
+                            "Full synthesis: user and org are distinct accounts sharing the brand."
+                                .to_string(),
+                        usage: Some(TokenUsage {
+                            prompt_tokens: 10,
+                            completion_tokens: 5,
+                            total_tokens: 15,
+                        }),
+                        model: request.model,
+                        provider: "truncating".to_string(),
+                        raw: None,
+                        tool_calls: Vec::new(),
+                        stream_truncated: false,
+                    })
+                }
+            }
+            async fn stream_chat(&self, _request: ChatRequest) -> axiom_llm::Result<ChatStream> {
+                Err(LlmError::NotImplemented("not used"))
+            }
+            async fn models(&self) -> axiom_llm::Result<Vec<ModelInfo>> {
+                Ok(Vec::new())
+            }
+            fn provider_name(&self) -> &str {
+                "truncating"
+            }
+        }
+        impl TruncatingProvider {
+            fn calls(&self) -> usize {
+                use std::sync::atomic::AtomicUsize;
+                static CALLS: AtomicUsize = AtomicUsize::new(0);
+                CALLS.fetch_add(1, Ordering::SeqCst)
+            }
+        }
+
+        let provider = TruncatingProvider;
+        let mut approval = DenyAllApprover;
+        let skills = vec![installed_tool("file.read")];
+        let mut agent = AgentLoop::new(
+            &provider,
+            "test-model",
+            AgentCaps::default(),
+            Vec::new(),
+            Vec::new(),
+            &skills,
+            context(),
+            &mut approval,
+        );
+
+        let result = agent
+            .run_turn(ChatMessage {
+                role: "user".to_string(),
+                content: "research it".to_string(),
+            })
+            .await
+            .expect("turn survives a truncated response");
+        let TurnResult::Done(completion) = result else {
+            panic!("truncated answer should continue the turn, not end it");
+        };
+
+        assert_eq!(
+            completion.content,
+            "Full synthesis: user and org are distinct accounts sharing the brand."
+        );
+    }
+
+    #[test]
+    fn todo_like_names_are_classified() {
+        assert!(is_todo_like_tool_name("todo"));
+        assert!(is_todo_like_tool_name("functions.todo"));
+        assert!(is_todo_like_tool_name("  TodoWrite "));
+        assert!(is_todo_like_tool_name("tasklist"));
+        assert!(!is_todo_like_tool_name("axiom_file_read"));
+        assert!(!is_todo_like_tool_name(""));
+    }
+
+    #[tokio::test]
     async fn checkpoints_tool_completion_before_cancellation_and_next_tool() {
         let provider = MultiToolProvider::default();
         let mut approval = DenyAllApprover;
@@ -2503,6 +2806,7 @@ mod tests {
                 provider: "todo".to_string(),
                 raw: None,
                 tool_calls: Vec::new(),
+                stream_truncated: false,
             })
         }
 
@@ -2553,6 +2857,7 @@ mod tests {
                 provider: "multi".to_string(),
                 raw: None,
                 tool_calls,
+                stream_truncated: false,
             })
         }
 
@@ -2629,6 +2934,187 @@ mod tests {
         assert!(completion.history_delta[1]
             .content
             .contains("[Turn interrupted by error:"));
+    }
+
+    #[tokio::test]
+    async fn no_tool_endpoint_error_degrades_to_tool_free_turn_and_completes() {
+        const NO_ENDPOINT_SUMMARY: &str =
+            "No endpoints found that support tool use. Try disabling \"axiom_code_glob\".";
+        struct NoToolEndpointOnce;
+        #[async_trait]
+        impl LlmProvider for NoToolEndpointOnce {
+            async fn chat(&self, request: ChatRequest) -> axiom_llm::Result<ChatResponse> {
+                if request.tools.is_empty() {
+                    Ok(ChatResponse {
+                        content: "answered without tools".to_string(),
+                        usage: Some(TokenUsage {
+                            prompt_tokens: 1,
+                            completion_tokens: 1,
+                            total_tokens: 2,
+                        }),
+                        model: request.model,
+                        provider: "openrouter".to_string(),
+                        raw: None,
+                        tool_calls: Vec::new(),
+                        stream_truncated: false,
+                    })
+                } else {
+                    Err(LlmError::HttpStatus {
+                        provider: "openrouter".to_string(),
+                        status: 404,
+                        body_summary: NO_ENDPOINT_SUMMARY.to_string(),
+                    })
+                }
+            }
+            async fn stream_chat(&self, mut request: ChatRequest) -> axiom_llm::Result<ChatStream> {
+                request.stream = false;
+                Ok(ChatStream::from_response(self.chat(request).await?))
+            }
+            async fn models(&self) -> axiom_llm::Result<Vec<ModelInfo>> {
+                Ok(Vec::new())
+            }
+            fn provider_name(&self) -> &str {
+                "openrouter"
+            }
+        }
+
+        let provider = NoToolEndpointOnce;
+        let mut approval = DenyAllApprover;
+        let skills = vec![installed_tool("file.read")];
+        let mut agent = AgentLoop::new(
+            &provider,
+            "z-ai/glm-5.2:free",
+            AgentCaps::default(),
+            Vec::new(),
+            Vec::new(),
+            &skills,
+            context(),
+            &mut approval,
+        );
+
+        let result = agent
+            .run_turn(ChatMessage {
+                role: "user".to_string(),
+                content: "answer me".to_string(),
+            })
+            .await
+            .expect("turn should degrade instead of failing");
+
+        let TurnResult::Done(completion) = result else {
+            panic!("expected the turn to complete after degrading to no tools");
+        };
+        assert!(completion.content.contains("answered without tools"));
+        assert!(matches!(
+            completion.transitions.first().map(|t| &t.kind),
+            Some(AgentTransitionKind::PlanPrepared { .. })
+        ));
+        assert!(completion.transitions.iter().any(|transition| matches!(
+            &transition.kind,
+            AgentTransitionKind::ProviderDegradedNoTools { iteration: 1, .. }
+        )));
+        let prepared_without_tools = completion
+            .transitions
+            .iter()
+            .filter(|transition| {
+                matches!(
+                    &transition.kind,
+                    AgentTransitionKind::ProviderRequestPrepared { tool_count: 0, .. }
+                )
+            })
+            .count();
+        assert_eq!(
+            prepared_without_tools, 1,
+            "the retried request must be sent without tools"
+        );
+    }
+
+    #[tokio::test]
+    async fn degraded_retry_failure_gives_up_without_looping() {
+        struct AlwaysNoToolEndpoint;
+        #[async_trait]
+        impl LlmProvider for AlwaysNoToolEndpoint {
+            async fn chat(&self, _request: ChatRequest) -> axiom_llm::Result<ChatResponse> {
+                Err(LlmError::HttpStatus {
+                    provider: "openrouter".to_string(),
+                    status: 404,
+                    body_summary: "No endpoints found that support tool use.".to_string(),
+                })
+            }
+            async fn stream_chat(&self, _request: ChatRequest) -> axiom_llm::Result<ChatStream> {
+                Err(LlmError::HttpStatus {
+                    provider: "openrouter".to_string(),
+                    status: 404,
+                    body_summary: "No endpoints found that support tool use.".to_string(),
+                })
+            }
+            async fn models(&self) -> axiom_llm::Result<Vec<ModelInfo>> {
+                Ok(Vec::new())
+            }
+            fn provider_name(&self) -> &str {
+                "openrouter"
+            }
+        }
+
+        let provider = AlwaysNoToolEndpoint;
+        let mut approval = DenyAllApprover;
+        let skills = vec![installed_tool("file.read")];
+        let mut agent = AgentLoop::new(
+            &provider,
+            "z-ai/glm-5.2:free",
+            AgentCaps::default(),
+            Vec::new(),
+            Vec::new(),
+            &skills,
+            context(),
+            &mut approval,
+        );
+
+        let result = agent
+            .run_turn(ChatMessage {
+                role: "user".to_string(),
+                content: "answer me".to_string(),
+            })
+            .await
+            .expect("turn should give up gracefully");
+
+        let TurnResult::GiveUp {
+            reason, completion, ..
+        } = result
+        else {
+            panic!("expected GiveUp when the retry also fails");
+        };
+        assert!(matches!(reason, GiveUpReason::ProviderFailed(_)));
+        let prepared = completion
+            .transitions
+            .iter()
+            .filter(|transition| {
+                matches!(
+                    &transition.kind,
+                    AgentTransitionKind::ProviderRequestPrepared { .. }
+                )
+            })
+            .count();
+        assert_eq!(
+            prepared, 2,
+            "exactly one degraded retry, then give up - no further attempts"
+        );
+    }
+
+    #[test]
+    fn no_tool_endpoint_errors_are_classified_precisely() {
+        let hit = LlmError::HttpStatus {
+            provider: "openrouter".to_string(),
+            status: 404,
+            body_summary: "No endpoints found that support tool use.".to_string(),
+        };
+        assert!(is_no_tool_endpoint_error(&hit));
+
+        let miss = LlmError::HttpStatus {
+            provider: "opencode".to_string(),
+            status: 403,
+            body_summary: "FreeTierError".to_string(),
+        };
+        assert!(!is_no_tool_endpoint_error(&miss));
     }
 
     fn installed_tool(skill_id: &str) -> InstalledSkill {
@@ -2738,6 +3224,7 @@ min_axiom_version = "0.1.0"
                 provider: "tool-call".to_string(),
                 raw: None,
                 tool_calls,
+                stream_truncated: false,
             })
         }
 

@@ -1,8 +1,66 @@
+/// Current UTC date and time as a human-readable anchor for the model.
+///
+/// The system message previously carried no date at all, which pushed models
+/// into guessing the year during time-sensitive research (release dates,
+/// changelogs, "is this repo abandoned?"). Stdlib-only: the workspace has no
+/// chrono/time dependency and this does not justify adding one.
+pub(crate) fn current_utc_datetime_line() -> String {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_secs() as i64)
+        .unwrap_or(0);
+    format_utc_datetime(now)
+}
+
+/// Format a unix timestamp (seconds) as `YYYY-MM-DD HH:MM (Weekday) UTC`.
+fn format_utc_datetime(unix_secs: i64) -> String {
+    let days = unix_secs.div_euclid(86_400);
+    let secs_of_day = unix_secs.rem_euclid(86_400);
+    // Civil-date conversion (Howard Hinnant's algorithm): days since the Unix
+    // epoch to proleptic Gregorian year/month/day, no external crates.
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
+    let march_year = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = if month <= 2 {
+        march_year + 1
+    } else {
+        march_year
+    };
+    // 1970-01-01 was a Thursday, so day 0 maps to index 0 here.
+    const WEEKDAYS: [&str; 7] = [
+        "Thursday",
+        "Friday",
+        "Saturday",
+        "Sunday",
+        "Monday",
+        "Tuesday",
+        "Wednesday",
+    ];
+    let weekday = WEEKDAYS[days.rem_euclid(7) as usize];
+    format!(
+        "{year:04}-{month:02}-{day:02} {:02}:{:02} ({weekday}) UTC",
+        secs_of_day / 3_600,
+        (secs_of_day % 3_600) / 60
+    )
+}
+
 pub(crate) fn system_message(agent_name: &str, installed_skill_ids: &[String]) -> String {
     let mut message = format!(
         "You are {agent_name}, an elite autonomous terminal coding agent and workspace execution harness.\n\
-Your identity is Axiom Agent; installed skills are capabilities, not the sum of your identity.\n\n\
-OPERATING PRINCIPLES (High Agency & Production Quality):\n\
+Your identity is Axiom Agent; installed skills are capabilities, not the sum of your identity.\n\n"
+    );
+    message.push_str(&format!(
+        "Current date and time: {}. Treat this as the authoritative present moment when reasoning about deadlines, release dates, or research recency; never infer the current year from training data.\n\n",
+        current_utc_datetime_line()
+    ));
+    message.push_str(
+        "OPERATING PRINCIPLES (High Agency & Production Quality):\n\
 - Bias for Action: When the user requests creating, building, coding, fixing, or refactoring files, games, apps, websites, or scripts, ACT AS AN AGENT HARNESS: do not merely dump code blocks in chat. Use `file.write` or `file.replace` to write the actual files directly into the workspace! When you identify bugs or propose to rewrite a file, execute `file.write` in the same turn without stopping at an explanation.\n\
 - Autonomous Execution: When asked to run commands, start local dev servers, execute tests, or inspect terminal output, ALWAYS RUN THEM DIRECTLY using shell tools (e.g. `shell.powershell.safe`, `shell.bash.safe`, `shell.zsh.safe`, `python.run`). Never tell the user to manually open a terminal and run commands when you have the tools to run them. When starting a dev server, launch it, verify it is running, and report the active localhost URL.\n\
 - Personalized Skill Creation: You have automatic permission to author personalized skills and reusable workflows mid-conversation whenever custom automation, tooling, or repeatable tasks are requested or useful. Use `skill.create` to author skills with custom schema, instructions, and execution templates. Created skills are immediately persisted and available for subsequent turns.\n\
@@ -50,7 +108,7 @@ Installed and currently available skill IDs:\n"
 
 #[cfg(test)]
 mod tests {
-    use super::system_message;
+    use super::{format_utc_datetime, system_message};
 
     #[test]
     fn identity_message_names_axiom_and_all_available_skills() {
@@ -67,6 +125,25 @@ mod tests {
         assert!(message.contains("Personalized Skill Creation"));
         assert!(message.contains("Auto-Testing & Verification"));
         assert!(message.contains("Research First"));
+        assert!(
+            message.contains("Current date and time: "),
+            "system message must anchor the model to the real date"
+        );
+    }
+
+    #[test]
+    fn utc_formatter_matches_known_timestamps() {
+        assert_eq!(format_utc_datetime(0), "1970-01-01 00:00 (Thursday) UTC");
+        // 1_000_000_000 was 2001-09-09 01:46:40 UTC, a Sunday.
+        assert_eq!(
+            format_utc_datetime(1_000_000_000),
+            "2001-09-09 01:46 (Sunday) UTC"
+        );
+        // Leap-day: 2024-02-29 12:00:00 UTC was a Thursday.
+        assert_eq!(
+            format_utc_datetime(1_709_208_000),
+            "2024-02-29 12:00 (Thursday) UTC"
+        );
     }
 
     #[test]

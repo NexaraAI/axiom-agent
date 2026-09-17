@@ -3325,6 +3325,18 @@ impl TransitionObserver for DurableTransitionWriter {
                 AgentTransitionKind::ReflectQueued { .. } => {
                     println!("  🔍 Axiom: verifying workspace changes...")
                 }
+                AgentTransitionKind::ProviderDegradedNoTools {
+                    provider, model, ..
+                } => {
+                    let display_model =
+                        model.strip_prefix(&format!("{provider}/")).unwrap_or(model);
+                    println!(
+                        "  ⚠ {provider} has no endpoint for {display_model} that supports tool use — finishing this turn without tools."
+                    );
+                    println!(
+                        "    Switch to a tool-capable model with /model <id> or /models to browse."
+                    );
+                }
                 _ => {}
             }
         }
@@ -3782,7 +3794,18 @@ fn give_up_reason_label(reason: &GiveUpReason) -> String {
             "maximum consecutive tool errors reached".to_string()
         }
         GiveUpReason::Cancelled => "cancelled by user".to_string(),
-        GiveUpReason::ProviderFailed(err) => format!("provider error: {err}"),
+        GiveUpReason::ProviderFailed(err) => {
+            let label = format!("provider error: {err}");
+            if err.contains("FreeTierError")
+                || err.contains("free tier can only be used from within")
+            {
+                format!(
+                    "{label}\n\nThis provider's free tier rejects requests sent from outside its own client. Switch providers with `/provider <name>` (for example `/provider openrouter`), or pick another model with `/model <id>`."
+                )
+            } else {
+                label
+            }
+        }
     }
 }
 
@@ -5151,6 +5174,59 @@ async fn handle_chat_command(session: &mut ChatSession, input: &str) -> Result<C
             );
             Ok(CommandResult::Continue)
         }
+        "/provider" => {
+            println!(
+                "Current provider: {}",
+                session.active_provider().unwrap_or("not configured")
+            );
+            let providers = session.provider_names();
+            if providers.is_empty() {
+                println!("No providers configured.");
+                println!("Add one with /provider add.");
+            } else {
+                println!("Configured providers:");
+                for provider in providers {
+                    let marker = if Some(provider.as_str()) == session.active_provider() {
+                        "*"
+                    } else {
+                        "-"
+                    };
+                    println!("{marker} {provider}");
+                }
+                println!("Switch with /provider <name>.");
+            }
+            Ok(CommandResult::Continue)
+        }
+        _ if input.starts_with("/provider ")
+            && !input.starts_with("/provider add")
+            && !input.starts_with("/provider new")
+            && !input.starts_with("/provider current")
+            && !input.starts_with("/provider list")
+            && !input.starts_with("/provider use ") =>
+        {
+            let provider = input.trim_start_matches("/provider ").trim();
+            match session.set_provider(provider) {
+                Ok(provider) => {
+                    session.persist_session()?;
+                    println!("Provider switched to {provider}.");
+                    if let Some(model) = session.active_model() {
+                        println!(
+                            "Model set to {model} (provider default; change with /model <id>)."
+                        );
+                    }
+                }
+                Err(error) => {
+                    println!("Provider switch failed: {error}");
+                    let configured = session.provider_names();
+                    if configured.is_empty() {
+                        println!("No providers configured. Add one with /provider add.");
+                    } else {
+                        println!("Configured: {}", configured.join(", "));
+                    }
+                }
+            }
+            Ok(CommandResult::Continue)
+        }
         "/provider list" => {
             let providers = session.provider_names();
             if providers.is_empty() {
@@ -5604,7 +5680,8 @@ fn print_help() {
     println!("  /restore CHECKPOINT_ID              Restore an agent recovery snapshot");
     println!("  /skills                             List active and installed skills");
     println!("  /skills selected <message>          Simulate skill routing for a message");
-    println!("  /provider current | list | use <p>  Manage LLM providers");
+    println!("  /provider [<name>]                 Show or switch the active LLM provider");
+    println!("  /provider current | list | use <p>  Inspect providers (aliases)");
     println!(
         "  /provider add [name]                Add or configure a new provider post-onboarding"
     );
@@ -6823,6 +6900,72 @@ mod tests {
         assert!(reloaded.providers.contains_key("ollama"));
 
         let _ = fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn provider_switch_command_accepts_bare_name_and_persists() {
+        let dir = unique_temp_dir();
+        let config_path = dir.join("config.toml");
+        let mut config = AxiomConfig::default();
+        config.agent.first_run_completed = true;
+        config.providers.insert(
+            "zeta".to_string(),
+            axiom_core::config::ProviderConfig::OpenaiCompatible {
+                base_url: "https://zeta.example/v1".to_string(),
+                api_key_env: None,
+                models_url: None,
+            },
+        );
+        config.providers.insert(
+            "zeta2".to_string(),
+            axiom_core::config::ProviderConfig::OpenaiCompatible {
+                base_url: "https://zeta2.example/v1".to_string(),
+                api_key_env: None,
+                models_url: None,
+            },
+        );
+        config.llm.active_provider = Some("zeta".to_string());
+        config.llm.active_model = Some("zeta-model".to_string());
+        config
+            .llm
+            .provider_models
+            .insert("zeta".to_string(), "zeta-model".to_string());
+        config
+            .llm
+            .provider_models
+            .insert("zeta2".to_string(), "zeta2-model".to_string());
+        config.save_to_path(&config_path).expect("save config");
+        let mut session = ChatSession::load(&config_path).expect("load session");
+
+        handle_chat_command(&mut session, "/provider zeta2")
+            .await
+            .expect("switch provider");
+        assert_eq!(session.active_provider(), Some("zeta2"));
+        assert_eq!(session.active_model(), Some("zeta2-model"));
+
+        let reloaded = AxiomConfig::load_from_path(&config_path).expect("load saved");
+        assert_eq!(reloaded.llm.active_provider.as_deref(), Some("zeta2"));
+        assert_eq!(reloaded.llm.active_model.as_deref(), Some("zeta2-model"));
+
+        handle_chat_command(&mut session, "/provider nope")
+            .await
+            .expect("unknown provider handled");
+        assert_eq!(session.active_provider(), Some("zeta2"));
+
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn give_up_reason_label_hints_provider_switch_on_free_tier_rejection() {
+        let label = give_up_reason_label(&GiveUpReason::ProviderFailed(
+            "opencode returned HTTP 403: Error from provider (Console): OpenCode's free tier can only be used from within OpenCode (FreeTierError).".to_string(),
+        ));
+        assert!(label.contains("provider error: opencode returned HTTP 403"));
+        assert!(label.contains("/provider <name>"));
+
+        let other =
+            give_up_reason_label(&GiveUpReason::ProviderFailed("mock exploded".to_string()));
+        assert_eq!(other, "provider error: mock exploded");
     }
 
     #[test]
