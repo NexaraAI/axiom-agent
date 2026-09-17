@@ -9,6 +9,8 @@ const { runSelfTest: runDistTagPolicySelfTest } = require("./check-dist-tag");
 const { runSelfTest: runPublishReadinessSelfTest } = require("./check-publish-readiness");
 const { checkVersionSync } = require("./check-version-sync");
 const {
+  MAX_DOWNLOAD_ATTEMPTS,
+  withRetries,
   replaceInstalledFile,
   runSelfTest: runDownloadSecuritySelfTest
 } = require("./download-binary");
@@ -142,6 +144,48 @@ function testDevelopmentOverrideValidation() {
   fs.rmSync(dir, { recursive: true, force: true });
 }
 
+async function testTransientServerErrorsAreRetried() {
+  // The exact failure seen after the v1.0.19 release: GitHub's CDN answered
+  // HTTP 500 once, the install aborted, and the user was left without a
+  // binary. The retry primitive must (a) retry transient failures and
+  // succeed, (b) give up after the bounded attempts, (c) never retry
+  // permanent (404-style) failures.
+  let attempts = 0;
+  const salvaged = await withRetries(async () => {
+    attempts += 1;
+    if (attempts < 3) {
+      throw new Error("Download failed with HTTP 500: https://github.com/example");
+    }
+    return "ok";
+  }, "Test download");
+  assert.strictEqual(salvaged, "ok");
+  assert.strictEqual(attempts, 3);
+
+  let boundedAttempts = 0;
+  await assert.rejects(
+    withRetries(async () => {
+      boundedAttempts += 1;
+      throw new Error(`Download failed with HTTP 503: attempt ${boundedAttempts}`);
+    }),
+    /HTTP 503/
+  );
+  assert.strictEqual(boundedAttempts, MAX_DOWNLOAD_ATTEMPTS);
+
+  let permanentAttempts = 0;
+  const permanentError = new Error(
+    "Download failed with HTTP 404: https://github.com/example"
+  );
+  permanentError.permanent = true;
+  await assert.rejects(
+    withRetries(async () => {
+      permanentAttempts += 1;
+      throw permanentError;
+    }),
+    /HTTP 404/
+  );
+  assert.strictEqual(permanentAttempts, 1, "permanent failures must not be retried");
+}
+
 function main() {
   testPlatformResolver();
   testChecksumVerification();
@@ -155,10 +199,20 @@ function main() {
   console.log("Node smoke tests passed.");
 }
 
-if (require.main === module) {
+async function mainAsync() {
   main();
+  await testTransientServerErrorsAreRetried();
+  console.log("Node smoke tests passed (including retry contract).");
+}
+
+if (require.main === module) {
+  mainAsync().catch((error) => {
+    console.error(error.message);
+    process.exit(1);
+  });
 }
 
 module.exports = {
-  main
+  main,
+  mainAsync
 };

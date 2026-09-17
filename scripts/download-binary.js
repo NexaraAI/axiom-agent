@@ -9,6 +9,44 @@ const { pipeline } = require("stream/promises");
 const { verifyChecksum } = require("./verify-checksum");
 
 const MAX_REDIRECTS = 5;
+// Transient CDN/server failures (GitHub release assets occasionally answer
+// 500 or drop the connection right after a release is cut) must not abort the
+// install: the binary download is the only fallback when npm blocks install
+// scripts. Bounded exponential backoff, bounded sleep.
+const MAX_DOWNLOAD_ATTEMPTS = 4;
+const MAX_RETRY_SLEEP_MS = 30_000;
+
+function sleep(ms) {
+  const clamped = Math.max(0, Math.min(Number(ms) || 0, MAX_RETRY_SLEEP_MS));
+  return new Promise((resolve) => setTimeout(resolve, clamped));
+}
+
+async function withRetries(operation, label) {
+  let lastError;
+  for (let attempt = 1; attempt <= MAX_DOWNLOAD_ATTEMPTS; attempt += 1) {
+    try {
+      return await operation();
+    } catch (error) {
+      lastError = error;
+      const message = String((error && error.message) || error);
+      // A missing asset (404/410) will not appear on retry; mark such
+      // responses permanent at the assertion site and never retry them.
+      if (error && error.permanent) {
+        throw error;
+      }
+      if (attempt === MAX_DOWNLOAD_ATTEMPTS) {
+        throw error;
+      }
+      const backoffMs = Math.min(1_000 * 2 ** (attempt - 1), MAX_RETRY_SLEEP_MS);
+      console.warn(
+        `[axiom] ${label} failed (attempt ${attempt}/${MAX_DOWNLOAD_ATTEMPTS}): ${message}\n` +
+          `[axiom] Retrying in ${Math.round(backoffMs / 100) / 10}s...`
+      );
+      await sleep(backoffMs);
+    }
+  }
+  throw lastError;
+}
 const MAX_BINARY_BYTES = 256 * 1024 * 1024;
 const MAX_CHECKSUM_BYTES = 1024 * 1024;
 const TRUSTED_DOWNLOAD_HOSTS = new Set([
@@ -173,11 +211,18 @@ function requestDownload(url, redirectCount = 0) {
 function assertSuccessfulResponse(response, url, notFoundMessage) {
   if (response.statusCode === 404 && notFoundMessage) {
     response.resume();
-    throw new Error(notFoundMessage);
+    const error = new Error(notFoundMessage);
+    error.permanent = true;
+    throw error;
   }
   if (response.statusCode < 200 || response.statusCode >= 300) {
     response.resume();
-    throw new Error(`Download failed with HTTP ${response.statusCode}: ${url}`);
+    const error = new Error(`Download failed with HTTP ${response.statusCode}: ${url}`);
+    // A vanished asset will not come back on retry.
+    if (response.statusCode === 404 || response.statusCode === 410) {
+      error.permanent = true;
+    }
+    throw error;
   }
 }
 
@@ -208,43 +253,51 @@ function byteLimitTransform(limit, label) {
 }
 
 async function downloadToFile(url, destination) {
-  const { response, url: finalUrl } = await requestDownload(url);
-  assertSuccessfulResponse(
-    response,
-    finalUrl,
-    "Prebuilt binary not found for this version/platform. If developing locally, set AXIOM_AGENT_BINARY_PATH to your built binary."
-  );
-  assertDeclaredSize(response, MAX_BINARY_BYTES, "Axiom binary");
-
-  fs.mkdirSync(path.dirname(destination), { recursive: true });
-  const file = fs.createWriteStream(destination, { flags: "wx", mode: 0o600 });
-  try {
-    await pipeline(response, byteLimitTransform(MAX_BINARY_BYTES, "Axiom binary"), file);
-  } catch (error) {
+  return withRetries(async () => {
+    // Exclusive-create flags from a previous failed attempt must not block a
+    // retry, and a partial file from an interrupted attempt must not be
+    // mistaken for a complete download.
     fs.rmSync(destination, { force: true });
-    throw error;
-  }
-  return destination;
+    const { response, url: finalUrl } = await requestDownload(url);
+    assertSuccessfulResponse(
+      response,
+      finalUrl,
+      "Prebuilt binary not found for this version/platform. If developing locally, set AXIOM_AGENT_BINARY_PATH to your built binary."
+    );
+    assertDeclaredSize(response, MAX_BINARY_BYTES, "Axiom binary");
+
+    fs.mkdirSync(path.dirname(destination), { recursive: true });
+    const file = fs.createWriteStream(destination, { flags: "wx", mode: 0o600 });
+    try {
+      await pipeline(response, byteLimitTransform(MAX_BINARY_BYTES, "Axiom binary"), file);
+    } catch (error) {
+      fs.rmSync(destination, { force: true });
+      throw error;
+    }
+    return destination;
+  }, "Binary download");
 }
 
 async function downloadText(url) {
-  const { response, url: finalUrl } = await requestDownload(url);
-  assertSuccessfulResponse(response, finalUrl);
-  assertDeclaredSize(response, MAX_CHECKSUM_BYTES, "Axiom checksum file");
+  return withRetries(async () => {
+    const { response, url: finalUrl } = await requestDownload(url);
+    assertSuccessfulResponse(response, finalUrl);
+    assertDeclaredSize(response, MAX_CHECKSUM_BYTES, "Axiom checksum file");
 
-  const chunks = [];
-  let received = 0;
-  for await (const chunk of response) {
-    received += chunk.length;
-    if (received > MAX_CHECKSUM_BYTES) {
-      response.destroy();
-      throw new Error(
-        `Axiom checksum file exceeds the ${MAX_CHECKSUM_BYTES}-byte download limit.`
-      );
+    const chunks = [];
+    let received = 0;
+    for await (const chunk of response) {
+      received += chunk.length;
+      if (received > MAX_CHECKSUM_BYTES) {
+        response.destroy();
+        throw new Error(
+          `Axiom checksum file exceeds the ${MAX_CHECKSUM_BYTES}-byte download limit.`
+        );
+      }
+      chunks.push(chunk);
     }
-    chunks.push(chunk);
-  }
-  return Buffer.concat(chunks).toString("utf8");
+    return Buffer.concat(chunks).toString("utf8");
+  }, "Checksum download");
 }
 
 function makeExecutable(filePath, platform = process.platform) {
@@ -311,6 +364,7 @@ async function downloadAndVerifyBinary(options) {
 }
 
 function runSelfTest() {
+  assert.strictEqual(MAX_DOWNLOAD_ATTEMPTS >= 2, true);
   assert.strictEqual(
     normalizeReleaseRepo("git+https://github.com/NexaraAI/axiom-agent.git"),
     "https://github.com/NexaraAI/axiom-agent"
@@ -342,6 +396,9 @@ function runSelfTest() {
 
 module.exports = {
   MAX_BINARY_BYTES,
+  MAX_DOWNLOAD_ATTEMPTS,
+  MAX_RETRY_SLEEP_MS,
+  withRetries,
   MAX_CHECKSUM_BYTES,
   MAX_REDIRECTS,
   downloadAndVerifyBinary,
