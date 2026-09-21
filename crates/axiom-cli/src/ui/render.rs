@@ -251,6 +251,11 @@ impl Renderer {
                 "Check and install the latest Axiom version",
                 false,
             ),
+            (
+                "/status",
+                "Show version, install mode, and binary health",
+                false,
+            ),
             ("/provider", "Configure or inspect the active LLM", false),
             ("/queue", "Manage pending task queue", false),
             ("/skills", "List and manage installed skills", false),

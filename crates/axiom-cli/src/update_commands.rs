@@ -532,8 +532,109 @@ fn load_config() -> Result<(PathBuf, AxiomConfig)> {
     Ok((config_path, config))
 }
 
+pub(crate) fn npm_package_version_in(package_dir: &Path) -> Option<String> {
+    let raw = fs::read_to_string(package_dir.join("package.json")).ok()?;
+    let value = serde_json::from_str::<serde_json::Value>(&raw).ok()?;
+    value.get("version")?.as_str().map(str::to_string)
+}
+
+/// Extract the semantic version from `--version` output such as
+/// `axiom 1.2.3`, mirroring the updater's binary version check parsing.
+fn version_from_shim_output(output: &str) -> Result<String, String> {
+    let trimmed = output.trim();
+    let reported = trimmed
+        .split_whitespace()
+        .last()
+        .ok_or_else(|| "shim --version produced no output".to_string())?;
+    let parsed = axiom_upd::parse_version(reported).map_err(|_| {
+        format!("shim --version output did not end with a semantic version: {trimmed:?}")
+    })?;
+    Ok(parsed.to_string())
+}
+
+/// Run the npm shim (`node bin/axiom.js --version`) and return the version it
+/// reports. Exercising the shim (rather than the binary directly) validates
+/// the exact entrypoint users launch and lets the shim's first-run download
+/// repair a blocked postinstall during the check itself.
+fn npm_shim_version_output(package_dir: &Path) -> Result<String, String> {
+    let shim = package_dir.join("bin").join("axiom.js");
+    if !shim.exists() {
+        return Err(
+            "npm package shim is missing (bin/axiom.js); package install is broken".to_string(),
+        );
+    }
+    let node = if cfg!(windows) { "node.exe" } else { "node" };
+    let output = std::process::Command::new(node)
+        .arg(&shim)
+        .arg("--version")
+        .output()
+        .map_err(|error| format!("failed to launch the shim version check: {error}"))?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let code = output
+            .status
+            .code()
+            .map(|value| value.to_string())
+            .unwrap_or_else(|| "signal".to_string());
+        return Err(format!(
+            "shim --version exited with status {code}: {}",
+            stderr.trim()
+        ));
+    }
+    version_from_shim_output(&String::from_utf8_lossy(&output.stdout))
+}
+
+/// Verify a freshly installed npm package can actually run: the shim must
+/// report exactly the version the package declares. A mismatch means the
+/// vendored binary is stale (a blocked or failed postinstall left the old
+/// binary in place) or broken, and the update must not be reported as a
+/// success.
+fn verify_npm_install(package_dir: &Path, expected_version: &str) -> Result<String, String> {
+    let declared = npm_package_version_in(package_dir)
+        .ok_or_else(|| "installed package manifest (package.json) is unreadable".to_string())?;
+    if declared != expected_version {
+        return Err(format!(
+            "package manifest reports v{declared} but v{expected_version} was expected"
+        ));
+    }
+    let reported = npm_shim_version_output(package_dir)?;
+    if reported != declared {
+        return Err(format!(
+            "vendored binary reports v{reported} but the npm package is v{declared} — the binary is stale (postinstall was blocked or failed)"
+        ));
+    }
+    Ok(reported)
+}
+
+fn npm_rollback_args(previous_version: &str) -> Vec<String> {
+    vec![
+        "install".to_string(),
+        "-g".to_string(),
+        format!("axiom-agent@{previous_version}"),
+    ]
+}
+
+fn npm_rollback(previous_version: &str) -> Result<(), String> {
+    let npm_cmd = if cfg!(windows) { "npm.cmd" } else { "npm" };
+    let status = std::process::Command::new(npm_cmd)
+        .args(npm_rollback_args(previous_version))
+        .status()
+        .map_err(|error| format!("rollback npm invocation failed: {error}"))?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(format!(
+            "npm rollback to axiom-agent@{previous_version} failed; restore manually with: npm install -g axiom-agent@{previous_version}"
+        ))
+    }
+}
+
 pub(crate) fn run_npm_global_update(binary_path: Option<&Path>) -> Result<(), String> {
     let npm_cmd = if cfg!(windows) { "npm.cmd" } else { "npm" };
+    let package_dir = binary_path.and_then(find_axiom_package_dir);
+    // Capture the currently installed version BEFORE the update so a failed
+    // post-install verification can restore it.
+    let previous_version = package_dir.as_deref().and_then(npm_package_version_in);
 
     // On Windows, moving a running executable outside the npm package folder prevents
     // npm from failing with EBUSY during directory replacement.
@@ -565,33 +666,88 @@ pub(crate) fn run_npm_global_update(binary_path: Option<&Path>) -> Result<(), St
         }
     };
 
-    if success {
-        #[cfg(windows)]
-        if let Some((_, ref backup_path)) = staged_backup {
-            let _ = std::fs::remove_file(backup_path);
-        }
-
-        // Verify native binary is present; run postinstall.js if missing
-        if let Some(bin) = binary_path {
-            if !bin.exists() {
-                if let Some(pkg_dir) = find_axiom_package_dir(bin) {
-                    let postinstall = pkg_dir.join("scripts").join("postinstall.js");
-                    if postinstall.exists() {
-                        let _ = std::process::Command::new("node")
-                            .arg(&postinstall)
-                            .status();
-                    }
-                }
-            }
-        }
-
-        Ok(())
-    } else {
+    if !success {
         #[cfg(windows)]
         if let Some((ref original_path, ref backup_path)) = staged_backup {
             let _ = std::fs::rename(backup_path, original_path);
         }
-        Err("npm update failed to install the latest package".to_string())
+        return Err("npm update failed to install the latest package".to_string());
+    }
+
+    // Repair a blocked postinstall before verifying: without the vendored
+    // binary the shim would download on first launch anyway, but doing it
+    // here keeps the update self-contained.
+    if let Some(bin) = binary_path {
+        if !bin.exists() {
+            if let Some(pkg_dir) = find_axiom_package_dir(bin) {
+                let postinstall = pkg_dir.join("scripts").join("postinstall.js");
+                if postinstall.exists() {
+                    let _ = std::process::Command::new("node")
+                        .arg(&postinstall)
+                        .status();
+                }
+            }
+        }
+    }
+
+    // Verify the new install actually runs. A package whose npm metadata
+    // advanced while its vendored binary is stale (blocked postinstall) or
+    // broken must roll back instead of being reported as a success.
+    let verification = match &package_dir {
+        Some(dir) => {
+            let expected = npm_package_version_in(dir).ok_or_else(|| {
+                "updated package manifest (package.json) is unreadable".to_string()
+            })?;
+            verify_npm_install(dir, &expected)
+        }
+        // Standalone layouts outside an npm package tree cannot be verified
+        // through the shim; keep the legacy behavior for them.
+        None => Ok(String::new()),
+    };
+
+    match verification {
+        Ok(_) => {
+            #[cfg(windows)]
+            if let Some((_, ref backup_path)) = staged_backup {
+                let _ = std::fs::remove_file(backup_path);
+            }
+            Ok(())
+        }
+        Err(verification_error) => {
+            let mut failure = format!("update verification failed: {verification_error}");
+            match previous_version {
+                Some(previous) => {
+                    failure.push_str(&format!("; rolling back to axiom-agent@{previous}"));
+                    if let Err(rollback_error) = npm_rollback(&previous) {
+                        failure.push_str(&format!(" — {rollback_error}"));
+                        return Err(failure);
+                    }
+                    // Restore the known-good running binary after the rollback
+                    // (the backup lives outside the package dir npm replaced).
+                    #[cfg(windows)]
+                    if let Some((ref original_path, ref backup_path)) = staged_backup {
+                        let _ = std::fs::remove_file(original_path);
+                        let _ = std::fs::rename(backup_path, original_path);
+                    }
+                    if let Some(dir) = &package_dir {
+                        if let Err(rollback_verify_error) = verify_npm_install(dir, &previous) {
+                            failure.push_str(&format!(
+                                " — rolled-back package also failed verification ({rollback_verify_error}); restore manually with: npm install -g axiom-agent@{previous}"
+                            ));
+                            return Err(failure);
+                        }
+                    }
+                    failure.push_str(" — previous version restored");
+                    Err(failure)
+                }
+                None => {
+                    failure.push_str(
+                        " — could not determine the previous version to roll back to; reinstall manually with: npm install -g axiom-agent@latest",
+                    );
+                    Err(failure)
+                }
+            }
+        }
     }
 }
 
@@ -628,7 +784,7 @@ fn move_running_binary_for_npm_update(binary_path: &Path) -> Option<(PathBuf, Pa
     None
 }
 
-fn find_axiom_package_dir(binary_path: &Path) -> Option<PathBuf> {
+pub(crate) fn find_axiom_package_dir(binary_path: &Path) -> Option<PathBuf> {
     let mut current = binary_path.parent();
     while let Some(dir) = current {
         if dir
@@ -645,6 +801,75 @@ fn find_axiom_package_dir(binary_path: &Path) -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn version_from_shim_output_parses_and_rejects_garbage() {
+        assert_eq!(
+            version_from_shim_output("axiom 1.2.3\n").expect("plain output parses"),
+            "1.2.3"
+        );
+        assert_eq!(
+            version_from_shim_output("  axiom-agent 1.0.19  ").expect("padded output parses"),
+            "1.0.19"
+        );
+        assert!(version_from_shim_output("").is_err());
+        assert!(version_from_shim_output("axiom unknown").is_err());
+    }
+
+    #[test]
+    fn npm_rollback_pins_previous_version() {
+        assert_eq!(
+            npm_rollback_args("1.0.18"),
+            vec![
+                "install".to_string(),
+                "-g".to_string(),
+                "axiom-agent@1.0.18".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn verify_npm_install_detects_stale_vendored_binary() {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system time")
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!("axiom-verify-{}-{nanos}", std::process::id()));
+        let bin_dir = dir.join("bin");
+        fs::create_dir_all(&bin_dir).expect("create bin dir");
+        fs::write(
+            dir.join("package.json"),
+            r#"{"name":"axiom-agent","version":"2.0.0"}"#,
+        )
+        .expect("write manifest");
+
+        // A shim reporting the OLD version for the NEW package simulates the
+        // blocked-postinstall failure: npm metadata advanced, vendored binary
+        // did not. Verification must catch it.
+        fs::write(bin_dir.join("axiom.js"), r#"console.log("axiom 1.0.18");"#)
+            .expect("write stale shim");
+        let error = verify_npm_install(&dir, "2.0.0").expect_err("stale vendored binary must fail");
+        assert!(error.contains("stale"), "unexpected error: {error}");
+
+        // A healthy shim reporting the declared version passes.
+        fs::write(bin_dir.join("axiom.js"), r#"console.log("axiom 2.0.0");"#)
+            .expect("write healthy shim");
+        assert_eq!(
+            verify_npm_install(&dir, "2.0.0").expect("healthy install verifies"),
+            "2.0.0"
+        );
+
+        // A shim that exits non-zero (broken binary) fails with its stderr.
+        fs::write(
+            bin_dir.join("axiom.js"),
+            r#"console.error("boom"); process.exit(3);"#,
+        )
+        .expect("write broken shim");
+        let error = verify_npm_install(&dir, "2.0.0").expect_err("broken install must fail");
+        assert!(error.contains("status 3"), "unexpected error: {error}");
+
+        let _ = fs::remove_dir_all(dir);
+    }
 
     #[test]
     fn github_release_source_is_validated_before_any_path_interpretation() {

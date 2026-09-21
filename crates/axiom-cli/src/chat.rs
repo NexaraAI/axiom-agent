@@ -3993,6 +3993,79 @@ async fn check_for_startup_update(config: &AxiomConfig) -> Option<(String, Strin
     None
 }
 
+/// Install-health snapshot for the chat `/status` command.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct InstallStatus {
+    pub(crate) mode: InstallationMode,
+    pub(crate) binary_path: Option<String>,
+    pub(crate) update_state: String,
+    pub(crate) latest_version: Option<String>,
+    pub(crate) notes: Option<String>,
+}
+
+fn npm_package_version(binary_path: Option<&std::path::Path>) -> Option<String> {
+    let path = binary_path?;
+    let package_dir = crate::update_commands::find_axiom_package_dir(path)?;
+    crate::update_commands::npm_package_version_in(&package_dir)
+}
+
+async fn run_status_report(config: &AxiomConfig) -> InstallStatus {
+    let binary_path = std::env::current_exe().ok();
+    let mode = binary_path
+        .as_ref()
+        .map(detect_installation_mode)
+        .unwrap_or(InstallationMode::Unknown);
+
+    let mut notes = None;
+    if mode == InstallationMode::NpmGlobal {
+        if let Some(path) = &binary_path {
+            if !path.exists() {
+                notes = Some(
+                    "npm shim reported a binary but it is missing; reinstall with npm.".to_string(),
+                );
+            }
+        }
+        let package_version = npm_package_version(binary_path.as_deref());
+        if let Some(package_version) = package_version {
+            if package_version != env!("CARGO_PKG_VERSION") {
+                notes = Some(format!(
+                    "npm package v{package_version} is present but the running binary is v{} — the postinstall step was blocked or failed, so the old binary was kept. Reinstall with: npm install -g axiom-agent --allow-scripts=axiom-agent",
+                    env!("CARGO_PKG_VERSION")
+                ));
+            }
+        }
+    }
+
+    let client = axiom_upd::GitHubReleaseClient::new(&config.update.release_repo).with_timeout(3);
+    let (update_state, latest_version) = match client.fetch_releases().await {
+        Ok(releases) => {
+            let latest = releases.first().and_then(|release| {
+                axiom_upd::parse_version(release.tag_name.trim_start_matches('v')).ok()
+            });
+            let current = axiom_upd::parse_version(env!("CARGO_PKG_VERSION")).ok();
+            match (current, latest) {
+                (Some(current), Some(latest)) => {
+                    if axiom_upd::is_newer_version(&current, &latest) {
+                        ("update_available".to_string(), Some(latest.to_string()))
+                    } else {
+                        ("up_to_date".to_string(), Some(latest.to_string()))
+                    }
+                }
+                _ => ("unknown".to_string(), None),
+            }
+        }
+        Err(_) => ("unknown".to_string(), None),
+    };
+
+    InstallStatus {
+        mode,
+        binary_path: binary_path.map(|path| path.display().to_string()),
+        update_state,
+        latest_version,
+        notes,
+    }
+}
+
 fn spawn_turn_cancellation_listener(
     token: CancellationToken,
 ) -> (
@@ -4576,6 +4649,55 @@ async fn handle_chat_command(session: &mut ChatSession, input: &str) -> Result<C
             Ok(CommandResult::Continue)
         }
         "/exit" => Ok(CommandResult::Exit),
+        "/status" => {
+            let ui = Renderer::from_config(&session.config);
+            println!(
+                "{}",
+                ui.orchestrator_notice("Checking Axiom install status...")
+            );
+            let report = run_status_report(&session.config).await;
+            println!("{}", ui.header("Axiom status", env!("CARGO_PKG_VERSION")));
+            println!("{}", ui.header("Install mode", report.mode));
+            println!(
+                "{}",
+                ui.header(
+                    "Binary",
+                    report.binary_path.as_deref().unwrap_or("(unavailable)")
+                )
+            );
+            if let Some(notes) = &report.notes {
+                println!("{}", ui.warning(notes));
+            }
+            match report.update_state.as_str() {
+                "up_to_date" => {
+                    println!(
+                        "{}",
+                        ui.success(&format!(
+                            "Up to date: v{} is the latest release.",
+                            env!("CARGO_PKG_VERSION")
+                        ))
+                    );
+                }
+                "update_available" => {
+                    if let Some(latest) = &report.latest_version {
+                        println!(
+                            "{}",
+                            ui.warning(&format!(
+                                "Update available: v{} -> v{latest}. Run /update to install.",
+                                env!("CARGO_PKG_VERSION")
+                            ))
+                        );
+                    }
+                }
+                "stale" => {
+                    println!("{}", ui.warning(&format!("Stale install: npm package is v{}, but the running binary is v{}. Reinstall (npm install -g axiom-agent --allow-scripts=axiom-agent) or run /update.", report.latest_version.as_deref().unwrap_or("?"), env!("CARGO_PKG_VERSION"))));
+                }
+                _ => {
+                    println!("{}", ui.warning("Update check failed (network unreachable); version currency unknown. Run /update to retry."));
+                }
+            }
+            Ok(CommandResult::Continue)
+        }
         "/help" => {
             let ui = Renderer::from_config(&session.config);
             println!("{}", ui.command_palette());
@@ -5674,6 +5796,7 @@ fn print_help() {
     println!(
         "  /update                             Check for and automatically install latest updates"
     );
+    println!("  /status                             Show version, install mode, and binary health");
     println!("  /queue [add <task>|list|clear]      Manage sequential background task queue");
     println!("  /undo                               Restore latest workspace checkpoint");
     println!("  /checkpoints                        List recovery snapshots");
@@ -6987,6 +7110,36 @@ mod tests {
     }
 
     static UNIQUE_DIR_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+    #[test]
+    fn status_report_flags_stale_npm_binary() {
+        let dir = unique_temp_dir();
+        let fake_bin = dir.join("node_modules").join("axiom-agent").join("vendor");
+        let _ = std::fs::create_dir_all(&fake_bin);
+
+        let package_version = npm_package_version(Some(&fake_bin));
+        assert_eq!(package_version, None);
+
+        let manifest = fake_bin.parent().expect("package dir").join("package.json");
+        std::fs::write(&manifest, r#"{"name":"axiom-agent","version":"9.9.9"}"#)
+            .expect("write package manifest");
+
+        let package_version = npm_package_version(Some(&fake_bin)).expect("version parsed");
+        assert_eq!(package_version, "9.9.9");
+        assert_ne!(package_version, env!("CARGO_PKG_VERSION"));
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn install_status_report_defaults_to_unknown_without_network() {
+        let mut config = AxiomConfig::default();
+        config.update.release_repo =
+            "https://github.com/invalid.invalid/axiom-nonexistent".to_string();
+        let status = run_status_report(&config).await;
+
+        assert_eq!(status.update_state, "unknown");
+        assert_eq!(status.latest_version, None);
+    }
 
     fn unique_temp_dir() -> PathBuf {
         let count = UNIQUE_DIR_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);

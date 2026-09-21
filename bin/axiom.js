@@ -3,12 +3,79 @@
 
 const fs = require("fs");
 const path = require("path");
-const { spawn } = require("child_process");
+const { spawn, spawnSync } = require("child_process");
 const { resolvePlatform } = require("../scripts/resolve-platform");
 
 function defaultInstalledBinaryPath(baseDir = __dirname, platform = process.platform, arch = process.arch) {
   const platformInfo = resolvePlatform(platform, arch);
   return path.join(baseDir, "..", "vendor", "bin", platformInfo.assetName);
+}
+
+function readInstalledPackageVersion(baseDir = __dirname) {
+  try {
+    const manifest = JSON.parse(
+      fs.readFileSync(path.join(baseDir, "..", "package.json"), "utf8")
+    );
+    return typeof manifest.version === "string" ? manifest.version : null;
+  } catch {
+    return null;
+  }
+}
+
+function versionFromOutput(text) {
+  const trimmed = String(text || "").trim();
+  if (!trimmed) {
+    return null;
+  }
+  const last = trimmed.split(/\s+/).pop();
+  return /^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$/.test(last) ? last : null;
+}
+
+// Verify a freshly installed npm package can actually run: the shim must
+// report exactly the version the package declares. A mismatch means the
+// vendored binary is stale (a blocked or failed postinstall left the old
+// binary in place) or broken, and the update must not be reported as a
+// success.
+function verifyInstalledUpdate(baseDir = __dirname) {
+  const declared = readInstalledPackageVersion(baseDir);
+  if (!declared) {
+    return { ok: false, reason: "package manifest (package.json) is unreadable" };
+  }
+  const shimResult = spawnSync(
+    process.execPath,
+    [path.join(baseDir, "axiom.js"), "--version"],
+    { encoding: "utf8" }
+  );
+  if (shimResult.error) {
+    return { ok: false, reason: `shim launch failed: ${shimResult.error.message}` };
+  }
+  if (shimResult.status !== 0) {
+    const stderr = (shimResult.stderr || "").trim();
+    return {
+      ok: false,
+      reason: `shim --version exited with status ${shimResult.status}: ${stderr}`
+    };
+  }
+  const reported = versionFromOutput(shimResult.stdout);
+  if (!reported) {
+    return { ok: false, reason: "shim --version produced no semantic version" };
+  }
+  if (reported !== declared) {
+    return {
+      ok: false,
+      reason: `vendored binary reports v${reported} but the npm package is v${declared} — the binary is stale (postinstall was blocked or failed)`
+    };
+  }
+  return { ok: true, version: reported };
+}
+
+function rollbackNpmInstall(previousVersion) {
+  const npmCmd = process.platform === "win32" ? "npm.cmd" : "npm";
+  const result = spawnSync(npmCmd, ["install", "-g", `axiom-agent@${previousVersion}`], {
+    stdio: "inherit",
+    shell: process.platform === "win32"
+  });
+  return result.status === 0;
 }
 
 function resolveAxiomBinary(options = {}) {
@@ -56,7 +123,6 @@ function resolveAxiomBinary(options = {}) {
     const postinstallPath = path.join(baseDir, "..", "scripts", "postinstall.js");
     if (fsImpl.existsSync(postinstallPath)) {
       console.log("[axiom] Downloading native binary for your platform...");
-      const { spawnSync } = require("child_process");
       const downloadResult = spawnSync(process.execPath, [postinstallPath], {
         stdio: "inherit"
       });
@@ -99,22 +165,39 @@ function run(argv = process.argv.slice(2), options = {}) {
     if (code === 42) {
       console.log("\n[axiom] Updating Axiom globally via npm (binary unlocked)...");
       const npmCmd = process.platform === "win32" ? "npm.cmd" : "npm";
-      const { spawnSync } = require("child_process");
+      const binDir = options.baseDir || __dirname;
+      // Capture the currently installed version BEFORE the update so a failed
+      // post-install verification can restore it.
+      const previousVersion = readInstalledPackageVersion(binDir);
       const updateResult = spawnSync(npmCmd, ["install", "-g", "axiom-agent@latest"], {
         stdio: "inherit",
         shell: process.platform === "win32"
       });
-      if (updateResult.status === 0) {
-        console.log("\n[axiom] Update complete! Restarting Axiom...\n");
-        const nextCode = run(argv, options);
-        if (nextCode !== 0) {
-          process.exit(nextCode);
-        }
-        return;
-      } else {
+      if (updateResult.status !== 0) {
         console.error("\n[axiom] Automatic update failed. Try running `npm install -g axiom-agent@latest` manually.");
         process.exit(1);
       }
+      const verification = verifyInstalledUpdate(binDir);
+      if (!verification.ok) {
+        console.error("\n[axiom] Update verification failed: " + verification.reason);
+        if (previousVersion) {
+          console.error(`[axiom] Rolling back to axiom-agent@${previousVersion}...`);
+          if (rollbackNpmInstall(previousVersion)) {
+            console.error(`[axiom] Rollback complete. Axiom remains on v${previousVersion}; the new version failed verification.`);
+          } else {
+            console.error(`[axiom] Rollback failed. Restore manually with: npm install -g axiom-agent@${previousVersion}`);
+          }
+        } else {
+          console.error("[axiom] Could not determine the previous version; restore manually with: npm install -g axiom-agent@<previous-version>");
+        }
+        process.exit(1);
+      }
+      console.log(`\n[axiom] Update verified (v${verification.version}). Restarting Axiom...\n`);
+      const nextCode = run(argv, options);
+      if (nextCode !== 0) {
+        process.exit(nextCode);
+      }
+      return;
     }
     process.exit(code === null ? 1 : code);
   });
@@ -132,5 +215,9 @@ if (require.main === module) {
 module.exports = {
   defaultInstalledBinaryPath,
   resolveAxiomBinary,
+  readInstalledPackageVersion,
+  versionFromOutput,
+  verifyInstalledUpdate,
+  rollbackNpmInstall,
   run
 };

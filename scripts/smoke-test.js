@@ -4,7 +4,13 @@ const assert = require("assert");
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
-const { defaultInstalledBinaryPath, resolveAxiomBinary } = require("../bin/axiom");
+const {
+  defaultInstalledBinaryPath,
+  resolveAxiomBinary,
+  readInstalledPackageVersion,
+  versionFromOutput,
+  verifyInstalledUpdate
+} = require("../bin/axiom");
 const { runSelfTest: runDistTagPolicySelfTest } = require("./check-dist-tag");
 const { runSelfTest: runPublishReadinessSelfTest } = require("./check-publish-readiness");
 const { checkVersionSync } = require("./check-version-sync");
@@ -144,6 +150,45 @@ function testDevelopmentOverrideValidation() {
   fs.rmSync(dir, { recursive: true, force: true });
 }
 
+function testShimVerificationHelpers() {
+  assert.strictEqual(versionFromOutput("axiom 1.2.3"), "1.2.3");
+  assert.strictEqual(versionFromOutput("  axiom-agent 1.0.19  "), "1.0.19");
+  assert.strictEqual(versionFromOutput("axiom unknown"), null);
+  assert.strictEqual(versionFromOutput(""), null);
+
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "axiom-verify-"));
+  const binDir = path.join(dir, "bin");
+  fs.mkdirSync(binDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(dir, "package.json"),
+    JSON.stringify({ name: "axiom-agent", version: "2.0.0" })
+  );
+
+  // Healthy: shim reports the declared version.
+  fs.writeFileSync(path.join(binDir, "axiom.js"), 'console.log("axiom 2.0.0");');
+  assert.deepStrictEqual(verifyInstalledUpdate(binDir), { ok: true, version: "2.0.0" });
+  assert.strictEqual(readInstalledPackageVersion(binDir), "2.0.0");
+
+  // Stale: shim reports an older version than the manifest (the exact
+  // blocked-postinstall failure from the v1.0.19 release).
+  fs.writeFileSync(path.join(binDir, "axiom.js"), 'console.log("axiom 1.0.18");');
+  const stale = verifyInstalledUpdate(binDir);
+  assert.strictEqual(stale.ok, false);
+  assert.match(stale.reason, /stale/);
+
+  // Broken: shim exits non-zero with stderr surfaced.
+  fs.writeFileSync(
+    path.join(binDir, "axiom.js"),
+    'console.error("boom"); process.exit(3);'
+  );
+  const broken = verifyInstalledUpdate(binDir);
+  assert.strictEqual(broken.ok, false);
+  assert.match(broken.reason, /status 3/);
+  assert.match(broken.reason, /boom/);
+
+  fs.rmSync(dir, { recursive: true, force: true });
+}
+
 async function testTransientServerErrorsAreRetried() {
   // The exact failure seen after the v1.0.19 release: GitHub's CDN answered
   // HTTP 500 once, the install aborted, and the user was left without a
@@ -192,6 +237,7 @@ function main() {
   testInstallerReplacementRollback();
   testWrapperPathResolution();
   testDevelopmentOverrideValidation();
+  testShimVerificationHelpers();
   runDownloadSecuritySelfTest();
   runDistTagPolicySelfTest();
   runPublishReadinessSelfTest();

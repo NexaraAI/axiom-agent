@@ -4,6 +4,13 @@ All notable changes to Axiom are documented here. Versions follow semantic
 versioning. Stable releases document user-visible changes, configuration or
 proof migrations, security fixes, and upgrade actions.
 
+## 1.0.20
+
+- Added
+  - Installer retries: transient download failures (HTTP 500-style CDN hiccups) are retried up to 4 attempts with exponential backoff; permanent failures (404/410) fail fast, and stale partial files are cleared between attempts.
+  - `/status` chat command: shows the running version, install mode, and binary path, checks GitHub for a newer release, and warns specifically when an npm update left the vendored binary stale (blocked or failed postinstall).
+  - `/update` now verifies the freshly installed package by running `--version` through the npm shim and comparing it against the package manifest; on mismatch (stale vendored binary from a blocked postinstall) or a broken shim, the update is rolled back with `npm install -g axiom-agent@<previous>` instead of being reported as success. The shim's exit-42 self-update path gets the same verification and rollback, and reports `Update verified (v…)` on success.
+
 ## 1.0.19
 
 ### Fixed
