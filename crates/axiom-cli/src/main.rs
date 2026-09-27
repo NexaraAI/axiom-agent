@@ -46,7 +46,7 @@ enum Commands {
     Onboarding(OnboardingCommand),
 
     /// Start an interactive chat session with the agent
-    Chat,
+    Chat(ChatCommand),
 
     /// Continue a previous conversation by session id (see `axiom sessions`)
     Resume {
@@ -180,6 +180,16 @@ struct CodeCommand {
     /// The coding task (omit to enter interactive mode)
     #[arg(value_name = "TASK", trailing_var_arg = true)]
     task: Vec<String>,
+}
+
+#[derive(Debug, Default, Args)]
+struct ChatCommand {
+    /// Directory for agent file, shell, git, and test operations.
+    ///
+    /// Overrides `agent.default_workspace` for this session only; use `/workspace`
+    /// inside the session to change it persistently.
+    #[arg(long)]
+    workspace: Option<String>,
 }
 
 #[derive(Debug, Default, Args)]
@@ -552,7 +562,12 @@ async fn main() -> Result<()> {
         Some(Commands::Doctor(command)) => doctor(command.json),
         Some(Commands::Config { command }) => config(command),
         Some(Commands::Onboarding(command)) => run_onboarding_then_doctor(command).await,
-        Some(Commands::Chat) => chat().await,
+        Some(Commands::Chat(command)) => {
+            chat(chat::ChatOptions {
+                workspace: command.workspace,
+            })
+            .await
+        }
         Some(Commands::Resume { session_id }) => chat::resume_terminal_chat(&session_id).await,
         Some(Commands::Sessions) => chat::list_sessions(),
         Some(Commands::Cost) => cost_commands::run(),
@@ -974,7 +989,7 @@ async fn startup() -> Result<()> {
             }
             onboarding::run_onboarding_command(OnboardingCommand::default()).await?;
             if startup::route_for_config_path(&config_path)? == StartupRoute::Chat {
-                chat::run_terminal_chat().await
+                chat::run_terminal_chat(chat::ChatOptions::default()).await
             } else {
                 println!();
                 println!("You're almost there — provider setup is still incomplete.");
@@ -982,7 +997,7 @@ async fn startup() -> Result<()> {
                 Ok(())
             }
         }
-        StartupRoute::Chat => chat().await,
+        StartupRoute::Chat => chat(chat::ChatOptions::default()).await,
     }
 }
 
@@ -991,7 +1006,7 @@ async fn run_onboarding_then_doctor(command: OnboardingCommand) -> Result<()> {
     doctor(false)
 }
 
-async fn chat() -> Result<()> {
+async fn chat(options: chat::ChatOptions) -> Result<()> {
     let config_path = AxiomConfig::default_config_path()?;
     if startup::route_for_config_path(&config_path)? == StartupRoute::Onboarding {
         use std::io::IsTerminal;
@@ -1017,7 +1032,7 @@ async fn chat() -> Result<()> {
         }
     }
 
-    chat::run_terminal_chat().await
+    chat::run_terminal_chat(options).await
 }
 
 fn doctor(json_output: bool) -> Result<()> {

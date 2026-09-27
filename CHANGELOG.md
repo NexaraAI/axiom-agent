@@ -4,6 +4,24 @@ All notable changes to Axiom are documented here. Versions follow semantic
 versioning. Stable releases document user-visible changes, configuration or
 proof migrations, security fixes, and upgrade actions.
 
+## Unreleased
+
+## 1.0.21
+
+- Changed (token usage)
+  - The identity system message was rewritten from roughly 6.6 KB to 2,977 characters bare, and 4,521 with 40 skills installed. It previously stated most of its directives twice, once under "Operating Principles" and again under a redundant "Capabilities" inventory; every directive is retained verbatim in meaning and a test now caps the size. This string is resent with every model call, so the saving repeats for each call in a turn.
+  - Tool output written into conversation history is now capped at 8,000 characters. Every stored message is resent with every subsequent model call, so an uncapped `file.read` or `shell.run` payload was multiplied by the number of calls in the turn and again by every later turn. The truncation note names the arguments that retrieve more (`file.read` with `offset`/`limit`, or `code.grep` for a symbol), so nothing becomes unreachable — it stops being re-sent for free.
+- Fixed
+  - Tool output reporting no longer replaces every result with an opaque `tool output saved as out-00NN; use /show out-00NN` notice. The live renderer already prints a one-line summary per tool, so only oversized payloads are spilled to disk, with a bounded preview printed inline; small results create no file and print nothing extra. A failure to store a preview no longer aborts the rest of the turn, and output ids are allocated from the highest id on disk rather than probing from `out-0001` upward on every save (previously O(n²) filesystem stats per session). The size gate also considers the longest line, because serialised JSON escapes newlines and would otherwise wave a single 2 KB line through.
+  - Verification diagnostics keep both `stdout` and `stderr`. Previously whichever stream was non-empty was used and stderr won every tie, so a failing command's real output was discarded and the model was handed build-tooling progress notices instead. `npm notice` / `yarn notice` / `pnpm notice` lines are now stripped, both streams are labelled, and the payload is capped explicitly (4,000 characters) instead of being silently truncated at 2,000.
+  - Verification no longer stalls waiting for the user to type "continue". It runs as a bounded automatic loop (up to 3 fix passes per task) and reports each pass as automatic work rather than dressing it up as user input. Retry state is a typed field on the session instead of a string-prefix match on the queued prompt, which could have retried forever if either copy of that literal ever changed. The unreachable `Ok(false)` branch was removed, and a failed verification now states plainly when its budget is spent.
+- Added
+  - `/workspace [path]` shows or changes the directory the agent's file, shell, git, and test tools are confined to, and saves the choice as the new default. The agent's system message is rebuilt so the new directory's own project rules take effect.
+  - `axiom chat --workspace <path>` applies the same override for a single session without changing the saved default. A bad path is a hard error rather than a silent fallback, so the agent can never quietly keep writing into the directory the user was trying to leave.
+  - `/todo` (aliases `/todos`, `/plan list`) renders the plan the agent is tracking. The list was already recorded and persisted but had no terminal surface.
+  - Plan-and-agree gate: in Build mode a coding request now produces an implementation plan with an approval step before anything is written to disk. Approve, adjust with free text, or cancel. Controlled by `agent.plan_approval` (default `true`).
+  - Skill capture: a task that ends with a green verification run can be kept as a reusable skill, so the harness accumulates the procedures you actually repeat. Controlled by `agent.learn_skills` (default `true`).
+
 ## 1.0.20
 
 - Added

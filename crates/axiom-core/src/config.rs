@@ -97,6 +97,20 @@ pub struct AgentConfig {
     pub max_wall_seconds: u64,
     #[serde(default = "default_agent_max_consecutive_tool_errors")]
     pub max_consecutive_tool_errors: u32,
+    /// In Build mode, agree an implementation plan before anything writes to disk.
+    #[serde(default = "default_plan_approval")]
+    pub plan_approval: bool,
+    /// Offer to keep a completed task's workflow as a reusable skill.
+    #[serde(default = "default_learn_skills")]
+    pub learn_skills: bool,
+}
+
+fn default_plan_approval() -> bool {
+    true
+}
+
+fn default_learn_skills() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -739,6 +753,8 @@ impl Default for AxiomConfig {
                 output_cost_per_million_tokens: None,
                 max_wall_seconds: default_agent_max_wall_seconds(),
                 max_consecutive_tool_errors: default_agent_max_consecutive_tool_errors(),
+                plan_approval: default_plan_approval(),
+                learn_skills: default_learn_skills(),
             },
             llm: LlmConfig {
                 active_provider: Some("cloudflare".to_string()),

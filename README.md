@@ -14,7 +14,7 @@ Proof Mode records what happened during each session: what you asked, which skil
 
 ## Current Status
 
-This repository contains Axiom `1.0.20`, a stable release with MCP client and server support, manifest hooks, OpenCode Zen & GMI Cloud providers, thinking mode toggle, process termination guards, live code animation, auto-testing engine, and runtime provider management:
+This repository contains Axiom `1.0.21`, a stable release with a self-verifying agent loop (bounded automatic fix passes instead of waiting for you to type "continue"), an implementation-plan approval gate for Build mode, learning skill capture, selectable workspaces, and roughly half the per-turn system-message overhead:
 
 ```bash
 npm install -g axiom-agent
