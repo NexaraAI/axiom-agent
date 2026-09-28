@@ -769,7 +769,11 @@ async fn provider(command: ProviderCommands) -> Result<()> {
             let config = AxiomConfig::load_or_create(&config_path)?;
             println!(
                 "provider: {}",
-                config.llm.active_provider.as_deref().unwrap_or("not configured")
+                config
+                    .llm
+                    .active_provider
+                    .as_deref()
+                    .unwrap_or("not configured")
             );
         }
         ProviderCommands::List => {
@@ -881,8 +885,8 @@ async fn provider(command: ProviderCommands) -> Result<()> {
             } else {
                 let setup = onboarding::prompt_preset_setup("openrouter").await?;
                 onboarding::apply_provider_setup(&mut config, &setup);
-                config.agent.first_run_completed = config.llm.active_provider.is_some()
-                    && config.llm.active_model.is_some();
+                config.agent.first_run_completed =
+                    config.llm.active_provider.is_some() && config.llm.active_model.is_some();
                 config.save_to_path(&config_path)?;
                 println!("Provider added successfully!");
             }
@@ -1503,18 +1507,24 @@ mod tests {
             default_model: chosen_model.clone(),
         };
 
-        let mut config = AxiomConfig::load_or_create(&config_path).expect("load_or_create succeeds");
+        let mut config =
+            AxiomConfig::load_or_create(&config_path).expect("load_or_create succeeds");
         onboarding::apply_provider_setup(&mut config, &setup);
         config.llm.active_provider = Some(provider_name.clone());
         config.llm.active_model = Some(chosen_model.clone());
-        config.agent.first_run_completed = config.llm.active_provider.is_some()
-            && config.llm.active_model.is_some();
-        config.save_to_path(&config_path).expect("save_to_path succeeds");
+        config.agent.first_run_completed =
+            config.llm.active_provider.is_some() && config.llm.active_model.is_some();
+        config
+            .save_to_path(&config_path)
+            .expect("save_to_path succeeds");
 
         assert!(config_path.exists());
         let reloaded = AxiomConfig::load_from_path(&config_path).expect("load saved config");
         assert_eq!(reloaded.llm.active_provider.as_deref(), Some("LMStudio"));
-        assert_eq!(reloaded.llm.active_model.as_deref(), Some("prism-ml/bonsai-27b"));
+        assert_eq!(
+            reloaded.llm.active_model.as_deref(),
+            Some("prism-ml/bonsai-27b")
+        );
         assert!(reloaded.agent.first_run_completed);
 
         let non_existent_session_config = dir.join("another_nested").join("config.toml");
