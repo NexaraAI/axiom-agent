@@ -4,7 +4,20 @@ All notable changes to Axiom are documented here. Versions follow semantic
 versioning. Stable releases document user-visible changes, configuration or
 proof migrations, security fixes, and upgrade actions.
 
-## Unreleased
+## 1.0.22
+
+- Added
+  - A full-screen terminal UI, now the default surface for `axiom` and `axiom chat`. It draws a scrollable session pane, a live plan pane, a status bar (provider, model, work mode, variant, permission mode, workspace, version), and a message box, and it keeps the whole session on one screen instead of scrolling into scrollback.
+  - Modal prompts inside the TUI for the three questions the harness asks — plan approval, skill capture, and clarification. Each replaces the inline card: `↑`/`↓` and `Enter` choose, `Esc` dismisses, and typing an answer instead of choosing sends free text. Nothing is ever asked of a prompt that is not on screen.
+  - `axiom chat --inline` (and `AXIOM_TUI=0`) keep the classic scrollback session. A redirected or piped run falls back to it automatically, and so does a terminal that refuses to enter the alternate screen.
+  - `Ctrl+C` in the TUI cancels the turn that is running, and leaves when nothing is running. Raw mode turns the keystroke into an ordinary key event, so no process signal is ever delivered; the front end now reaches the running turn's cancellation token directly.
+- Changed
+  - The interactive session is now parameterized by its front end rather than duplicated per surface. The turn loop, the plan gate, skill capture, verification, and every slash command run identically in both, so the full-screen UI cannot drift out of step with the inline one.
+  - Reporting inside a session goes through one output funnel that can be claimed by whichever surface is drawing. The inline session takes no sink and behaves exactly as before; the TUI claims the lines and styles them by kind, which also means the session's wording no longer has to carry ANSI escape sequences a full-screen buffer cannot hold.
+- Fixed
+  - The TUI's render and input threads cannot strand a turn: if the renderer exits, the session treats it as end-of-input rather than blocking forever, and a terminal that cannot be prepared reports why and falls back instead of failing silently.
+  - The TUI header and status bar now degrade instead of clipping. The header drops its least important fields first (workspace, then permission mode, then variant) and truncates what remains with an ellipsis, so the agent name, the model, and the work mode survive on any width; the status bar gives up its hint text in stages and keeps the version pinned to the right edge. At 80 columns the header shows the model, mode, and variant; at 60 it shows the model and mode; at 24 it shows `AXIOM openrouter · sp…` plus the full version. Six tests cover 80, 60, 40, and 24 columns.
+  - `axiom provider add` and `ChatSession::load` now use `load_or_create` instead of `load_from_path`. On fresh installations where the config directory does not yet exist, adding a custom provider or running provider commands no longer fails with an I/O path-not-found error (`os error 3`). Adding and activating a provider also marks first-run setup as completed.
 
 ## 1.0.21
 

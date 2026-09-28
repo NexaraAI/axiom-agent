@@ -26,6 +26,15 @@ impl Renderer {
         Self::from_config_with_terminal(config, std::io::stdout().is_terminal())
     }
 
+    /// A renderer that never emits ANSI escapes.
+    ///
+    /// The full-screen TUI draws through ratatui, whose buffer holds no escape sequences, so
+    /// it needs the same wording without the colour codes. Styling is applied per `LineKind`
+    /// by the TUI itself instead.
+    pub(crate) fn without_color(config: &AxiomConfig) -> Self {
+        Self::from_config_with_terminal(config, false)
+    }
+
     fn from_config_with_terminal(config: &AxiomConfig, terminal: bool) -> Self {
         Self {
             color_enabled: config.ui.color

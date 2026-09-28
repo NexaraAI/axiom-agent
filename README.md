@@ -14,7 +14,7 @@ Proof Mode records what happened during each session: what you asked, which skil
 
 ## Current Status
 
-This repository contains Axiom `1.0.21`, a stable release with a self-verifying agent loop (bounded automatic fix passes instead of waiting for you to type "continue"), an implementation-plan approval gate for Build mode, learning skill capture, selectable workspaces, and roughly half the per-turn system-message overhead:
+This repository contains Axiom `1.0.22`, a stable release with a full-screen terminal UI, a self-verifying agent loop (bounded automatic fix passes instead of waiting for you to type "continue"), an implementation-plan approval gate for Build mode, learning skill capture, selectable workspaces, and roughly half the per-turn system-message overhead:
 
 ```bash
 npm install -g axiom-agent
@@ -40,6 +40,7 @@ What works:
 - Test-safe `AXIOM_HOME` config isolation
 - Coder mode on the canonical capped agent runtime, with plan-to-patch checks, per-hunk approval, conflict-aware hunks, recovery checkpoints, project-aware tests, and bounded correction attempts
 - Central side-effect policy for built-in tools and Coder file writes, with allow/ask/deny decisions recorded in Proof Mode
+- Full-screen ratatui session: scrollable transcript, live plan pane, status bar, and modal prompts for plan approval, skill capture, and clarification — with a scrollback-free alternate screen
 - Line editing, bracketed paste, input history, multiline capture, theme presets, plain redirected output, and durable `!show` tool-output references
 - Proof Mode with JSON traces, Markdown reports, policy/approval events, and secret redaction
 - npm wrapper with version-bound GitHub release downloads and checksum verification
@@ -48,7 +49,7 @@ What is not done yet:
 - External executable skill binaries are not supported.
 - Core binary updates require published GitHub Releases before normal installs can activate.
 - Stable v1 promotion still requires RC feedback, native credential-store checks, and release-owner sign-off.
-- A full-screen TUI is a post-v1 enhancement; v1 ships the inline chat UI.
+- The full-screen TUI assumes a real terminal; redirected or piped runs fall back to the inline session automatically.
 - No desktop, mobile, or web interfaces.
 
 ## Features
@@ -135,7 +136,13 @@ The built-in `mock` provider is for tests and demos. It returns deterministic re
 
 ## Chat Mode
 
-`axiom` or `axiom chat` opens terminal chat.
+`axiom` or `axiom chat` opens terminal chat in a full-screen TUI: a scrollable
+session pane, a live plan pane, a status bar, and modal prompts for plan approval,
+skill capture, and clarification. Keys: `Enter` send, `PgUp`/`PgDn` scroll,
+`Ctrl+L` clear, `Ctrl+C` cancel the running turn (or leave when idle).
+
+Use `axiom chat --inline` (or `AXIOM_TUI=0`) for the classic scrollback prompt, and
+`axiom chat --workspace <path>` to run the session against another directory.
 
 For one-shot non-interactive chat:
 
@@ -412,8 +419,8 @@ See `docs/TESTING.md` and `docs/DEMO.md` for isolated local runs without API key
 ## Roadmap
 
 - Current: Axiom `1.0.0` stable is out; keep the release gates green.
-- Next: independently reviewed external executable skills, a full-screen TUI,
-  remote registry publishing workflows, and app layers.
+- Next: independently reviewed external executable skills, remote registry
+  publishing workflows, and app layers.
 
 ## License
 

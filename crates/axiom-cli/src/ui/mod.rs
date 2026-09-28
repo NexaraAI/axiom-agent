@@ -1,6 +1,8 @@
 mod animation;
+pub(crate) mod out;
 mod render;
 mod select;
+pub(crate) mod tui;
 
 pub(crate) use animation::Spinner;
 pub(crate) use render::{visible_width, Renderer};

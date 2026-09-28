@@ -190,6 +190,10 @@ struct ChatCommand {
     /// inside the session to change it persistently.
     #[arg(long)]
     workspace: Option<String>,
+
+    /// Use the classic inline prompt instead of the full-screen TUI.
+    #[arg(long)]
+    inline: bool,
 }
 
 #[derive(Debug, Default, Args)]
@@ -565,6 +569,7 @@ async fn main() -> Result<()> {
         Some(Commands::Chat(command)) => {
             chat(chat::ChatOptions {
                 workspace: command.workspace,
+                inline: command.inline,
             })
             .await
         }
@@ -589,7 +594,7 @@ async fn gateway(command: GatewayCommands) -> Result<()> {
     let config_path = AxiomConfig::default_config_path()?;
     match command {
         GatewayCommands::Status => {
-            let config = AxiomConfig::load_from_path(&config_path)?;
+            let config = AxiomConfig::load_or_create(&config_path)?;
             println!("Messaging gateway (live bots via `gateway run --telegram` / `--discord`):");
             print_gateway_token(
                 "telegram",
@@ -759,14 +764,16 @@ fn uninstall(command: UninstallCommand) -> Result<()> {
 
 async fn provider(command: ProviderCommands) -> Result<()> {
     let config_path = AxiomConfig::default_config_path()?;
-    let mut session = chat::ChatSession::load(&config_path)?;
     match command {
-        ProviderCommands::Current => println!(
-            "provider: {}",
-            session.active_provider().unwrap_or("not configured")
-        ),
+        ProviderCommands::Current => {
+            let config = AxiomConfig::load_or_create(&config_path)?;
+            println!(
+                "provider: {}",
+                config.llm.active_provider.as_deref().unwrap_or("not configured")
+            );
+        }
         ProviderCommands::List => {
-            let config = AxiomConfig::load_from_path(&config_path)?;
+            let config = AxiomConfig::load_or_create(&config_path)?;
             for provider in config.providers.keys() {
                 let marker = if Some(provider.as_str()) == config.llm.active_provider.as_deref() {
                     "*"
@@ -783,6 +790,7 @@ async fn provider(command: ProviderCommands) -> Result<()> {
             }
         }
         ProviderCommands::Use { provider, model } => {
+            let mut session = chat::ChatSession::load(&config_path)?;
             let provider = session.set_provider(provider)?;
             if let Some(model) = model {
                 session.set_model(model)?;
@@ -799,6 +807,7 @@ async fn provider(command: ProviderCommands) -> Result<()> {
             base_url,
             activate,
         } => {
+            let mut config = AxiomConfig::load_or_create(&config_path)?;
             if let Some(provider_name) = name {
                 if let Some(preset) = onboarding::provider_preset(&provider_name) {
                     let key_env = preset.api_key_env;
@@ -817,11 +826,19 @@ async fn provider(command: ProviderCommands) -> Result<()> {
                         models_url: preset.models_url.map(str::to_string),
                         default_model: chosen_model.clone(),
                     };
-                    let mut config = AxiomConfig::load_from_path(&config_path)?;
+                    let previous_provider = config.llm.active_provider.clone();
+                    let previous_model = config.llm.active_model.clone();
                     onboarding::apply_provider_setup(&mut config, &setup);
-                    if activate {
+                    if !activate && previous_provider.is_some() {
+                        config.llm.active_provider = previous_provider;
+                        config.llm.active_model = previous_model;
+                    } else if activate {
                         config.llm.active_provider = Some(preset.id.to_string());
                         config.llm.active_model = Some(chosen_model);
+                    }
+                    if activate {
+                        config.agent.first_run_completed = config.llm.active_provider.is_some()
+                            && config.llm.active_model.is_some();
                     }
                     config.save_to_path(&config_path)?;
                     println!("Provider '{}' configured successfully!", preset.id);
@@ -844,19 +861,28 @@ async fn provider(command: ProviderCommands) -> Result<()> {
                         models_url: None,
                         default_model: chosen_model.clone(),
                     };
-                    let mut config = AxiomConfig::load_from_path(&config_path)?;
+                    let previous_provider = config.llm.active_provider.clone();
+                    let previous_model = config.llm.active_model.clone();
                     onboarding::apply_provider_setup(&mut config, &setup);
-                    if activate {
+                    if !activate && previous_provider.is_some() {
+                        config.llm.active_provider = previous_provider;
+                        config.llm.active_model = previous_model;
+                    } else if activate {
                         config.llm.active_provider = Some(provider_name.clone());
                         config.llm.active_model = Some(chosen_model);
+                    }
+                    if activate {
+                        config.agent.first_run_completed = config.llm.active_provider.is_some()
+                            && config.llm.active_model.is_some();
                     }
                     config.save_to_path(&config_path)?;
                     println!("Custom provider '{provider_name}' configured successfully!");
                 }
             } else {
                 let setup = onboarding::prompt_preset_setup("openrouter").await?;
-                let mut config = AxiomConfig::load_from_path(&config_path)?;
                 onboarding::apply_provider_setup(&mut config, &setup);
+                config.agent.first_run_completed = config.llm.active_provider.is_some()
+                    && config.llm.active_model.is_some();
                 config.save_to_path(&config_path)?;
                 println!("Provider added successfully!");
             }
@@ -1448,5 +1474,55 @@ mod tests {
         assert!(provider_diagnostic(&config)
             .status
             .starts_with("credential configuration is invalid:"));
+    }
+
+    #[tokio::test]
+    async fn provider_command_succeeds_when_config_file_does_not_exist() {
+        let dir = std::env::temp_dir().join(format!(
+            "axiom-provider-test-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("time")
+                .as_nanos()
+        ));
+        let config_path = dir.join("nested").join("config.toml");
+        assert!(!config_path.exists());
+
+        let provider_name = "LMStudio".to_string();
+        let chosen_model = "prism-ml/bonsai-27b".to_string();
+        let b_url = "https://subaka.ddns.net/v1/chat/completions".to_string();
+        let key_env = format!(
+            "{}_API_KEY",
+            provider_name.to_ascii_uppercase().replace('-', "_")
+        );
+        let setup = onboarding::ProviderSetup::OpenAiCompatible {
+            provider_name: provider_name.clone(),
+            base_url: b_url,
+            api_key_env: Some(key_env),
+            models_url: None,
+            default_model: chosen_model.clone(),
+        };
+
+        let mut config = AxiomConfig::load_or_create(&config_path).expect("load_or_create succeeds");
+        onboarding::apply_provider_setup(&mut config, &setup);
+        config.llm.active_provider = Some(provider_name.clone());
+        config.llm.active_model = Some(chosen_model.clone());
+        config.agent.first_run_completed = config.llm.active_provider.is_some()
+            && config.llm.active_model.is_some();
+        config.save_to_path(&config_path).expect("save_to_path succeeds");
+
+        assert!(config_path.exists());
+        let reloaded = AxiomConfig::load_from_path(&config_path).expect("load saved config");
+        assert_eq!(reloaded.llm.active_provider.as_deref(), Some("LMStudio"));
+        assert_eq!(reloaded.llm.active_model.as_deref(), Some("prism-ml/bonsai-27b"));
+        assert!(reloaded.agent.first_run_completed);
+
+        let non_existent_session_config = dir.join("another_nested").join("config.toml");
+        let session = chat::ChatSession::load(&non_existent_session_config)
+            .expect("chat session loads or creates");
+        assert!(non_existent_session_config.exists());
+        assert_eq!(session.config_path, non_existent_session_config);
+
+        let _ = std::fs::remove_dir_all(dir);
     }
 }

@@ -57,7 +57,10 @@ use serde_json::Value;
 
 use crate::{
     startup::StartupRoute,
-    ui::{visible_width, Renderer, Spinner},
+    ui::{
+        out::{emitln, emitln_k, LineKind},
+        visible_width, Renderer, Spinner,
+    },
     RunCommand,
 };
 
@@ -145,6 +148,148 @@ impl VerificationLoop {
     }
 }
 
+/// The questions a turn needs answered, named once so every front end asks the same ones.
+///
+/// The inline session asks straight on the terminal; the full-screen TUI asks with a
+/// modal drawn over its own frame. Neither can call the other's prompt code, so the
+/// questions live here as a trait and each surface supplies its own presentation.
+pub(crate) trait TurnPrompts {
+    /// What to do with a plan the agent just proposed.
+    fn approve_plan(&mut self) -> PlanDecision;
+
+    /// Whether to keep this task as a reusable skill.
+    fn confirm_skill_capture(&mut self, skill_id: &str) -> bool;
+
+    /// Ask a multiple-choice question the agent raised in its response.
+    ///
+    /// `None` means the user dismissed it, so nothing is queued.
+    fn choose(&mut self, question: &str, options: &[String]) -> Option<String>;
+}
+
+/// The inline session's prompts: straight to the terminal and stdin.
+pub(crate) struct InlinePrompts {
+    ui: Renderer,
+}
+
+impl InlinePrompts {
+    pub(crate) fn new(ui: Renderer) -> Self {
+        Self { ui }
+    }
+}
+
+impl TurnPrompts for InlinePrompts {
+    fn approve_plan(&mut self) -> PlanDecision {
+        approve_plan(&self.ui)
+    }
+
+    fn confirm_skill_capture(&mut self, skill_id: &str) -> bool {
+        should_capture_skill(&self.ui, skill_id)
+    }
+
+    fn choose(&mut self, question: &str, options: &[String]) -> Option<String> {
+        match crate::ui::interactive_select(question, options, 0, true, &self.ui) {
+            crate::ui::SelectionResult::Selected { text, .. } => Some(text),
+            crate::ui::SelectionResult::Custom(reply) => Some(reply),
+            crate::ui::SelectionResult::Cancelled => None,
+        }
+    }
+}
+
+/// Which interactive surface is running the session.
+///
+/// Both surfaces share one turn loop and ask the same questions; only the drawing differs. The
+/// loop therefore takes this and asks it where input comes from and how the live view is drawn,
+/// rather than duplicating the loop per surface.
+pub(crate) enum FrontEnd {
+    /// rustyline reading stdin and plain stdout for output.
+    Inline,
+    /// The full-screen TUI, which owns the terminal and supplies both.
+    Tui(crate::ui::tui::TuiBridge),
+}
+
+/// Where the next user message comes from.
+enum InputSource {
+    /// Typed at the inline prompt.
+    Inline(Box<TerminalInput>),
+    /// Submitted in the full-screen TUI.
+    Tui(tokio::sync::mpsc::UnboundedReceiver<String>),
+}
+
+impl InputSource {
+    /// Read the next message, or report that the session should end.
+    async fn read(&mut self, prompt: &str, colored_prompt: &str) -> Result<PromptRead> {
+        match self {
+            InputSource::Inline(reader) => reader.read(prompt, Some(colored_prompt)),
+            InputSource::Tui(lines) => Ok(match lines.recv().await {
+                Some(line) => PromptRead::Line(line),
+                // The TUI window closed, which is the same situation as end-of-input on stdin.
+                None => PromptRead::EndOfInput,
+            }),
+        }
+    }
+
+    /// Record a submitted message in the readline history, when there is one.
+    fn remember(&mut self, message: &str) -> Result<()> {
+        match self {
+            InputSource::Inline(reader) => reader.remember(message),
+            InputSource::Tui(_) => Ok(()),
+        }
+    }
+}
+
+/// The live view of a turn, whichever surface is drawing it.
+///
+/// A concrete enum rather than a boxed trait object: both members are known here, so no trait
+/// upcasting is needed to hand the agent a plain `&mut dyn StreamObserver`.
+enum LiveRenderer {
+    /// Streaming straight to the terminal.
+    Inline(Box<TerminalStreamRenderer>),
+    /// Streaming into the TUI transcript.
+    Tui(crate::ui::tui::TuiObserver),
+}
+
+impl LiveRenderer {
+    /// Close any block the live stream left open.
+    fn finish_line(&mut self) {
+        match self {
+            LiveRenderer::Inline(renderer) => renderer.finish_line(),
+            LiveRenderer::Tui(observer) => observer.finish_line(),
+        }
+    }
+
+    /// True when the stream already showed the assistant's text, so the final message must not
+    /// be shown a second time.
+    fn echoed_content(&self) -> bool {
+        match self {
+            LiveRenderer::Inline(renderer) => renderer.visible_content,
+            LiveRenderer::Tui(observer) => observer.echoed_content(),
+        }
+    }
+}
+
+impl StreamObserver for LiveRenderer {
+    fn on_step_started(&mut self) {
+        match self {
+            LiveRenderer::Inline(renderer) => renderer.on_step_started(),
+            LiveRenderer::Tui(observer) => observer.on_step_started(),
+        }
+    }
+
+    fn on_step_finished(&mut self) {
+        match self {
+            LiveRenderer::Inline(renderer) => renderer.on_step_finished(),
+            LiveRenderer::Tui(observer) => observer.on_step_finished(),
+        }
+    }
+
+    fn on_stream_update(&mut self, update: &ChatStreamUpdate) {
+        match self {
+            LiveRenderer::Inline(renderer) => renderer.on_stream_update(update),
+            LiveRenderer::Tui(observer) => observer.on_stream_update(update),
+        }
+    }
+}
+
 pub(crate) struct ChatSession {
     pub(crate) config_path: PathBuf,
     pub(crate) config: AxiomConfig,
@@ -161,10 +306,62 @@ pub(crate) struct ChatSession {
     /// Automatic verification retries for the current task. Kept apart from
     /// `prompt_queue` so an automatic pass can never be rendered as user input.
     pub(crate) verification: VerificationLoop,
+    /// Set by a front end that draws its own live view, so the built-in spinner and
+    /// animated file writes stay out of the way.
+    pub(crate) suppress_live_decorations: bool,
+    /// Lets a front end that owns the keyboard cancel the turn that is running.
+    ///
+    /// The inline session leaves this `None` and relies on the process signal. The full-screen
+    /// TUI needs it because raw mode turns Ctrl+C into an ordinary key event, so no signal is
+    /// ever delivered and the turn would otherwise be uncancellable.
+    pub(crate) turn_cancellation: Option<TurnCancellation>,
     /// Live MCP connections, established lazily on the first turn so a slow or
     /// broken server never delays startup.
     mcp: Option<McpToolSource>,
     mcp_connect_attempted: bool,
+}
+
+/// A shared handle to whichever turn is currently running.
+///
+/// Cloning shares the same slot, so the render thread holding one clone can cancel the turn the
+/// session armed in another.
+#[derive(Clone, Default)]
+pub(crate) struct TurnCancellation(std::sync::Arc<std::sync::Mutex<Option<CancellationToken>>>);
+
+impl TurnCancellation {
+    /// Publish the token for a turn that is about to start.
+    fn arm(&self, token: &CancellationToken) {
+        if let Ok(mut slot) = self.0.lock() {
+            *slot = Some(token.clone());
+        }
+    }
+
+    /// Forget the current turn, so a later cancel cannot reach a finished one.
+    fn disarm(&self) {
+        if let Ok(mut slot) = self.0.lock() {
+            *slot = None;
+        }
+    }
+
+    /// Cancel the running turn, if any.
+    pub(crate) fn cancel(&self) {
+        if let Ok(slot) = self.0.lock() {
+            if let Some(token) = slot.as_ref() {
+                token.cancel();
+            }
+        }
+    }
+}
+
+/// Clears the armed cancellation whenever the turn it belongs to stops, however it stops.
+struct CancellationArm(Option<TurnCancellation>);
+
+impl Drop for CancellationArm {
+    fn drop(&mut self) {
+        if let Some(handle) = self.0.as_ref() {
+            handle.disarm();
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -307,7 +504,7 @@ impl ModelSwitchOutcome {
 impl ChatSession {
     pub(crate) fn load(config_path: impl AsRef<Path>) -> Result<Self> {
         let config_path = config_path.as_ref().to_path_buf();
-        let config = AxiomConfig::load_from_path(&config_path)?;
+        let config = AxiomConfig::load_or_create(&config_path)?;
         let workspace_path = config.default_workspace_path();
         let session_id = SessionId::generate();
         let session_created_at_unix_ms =
@@ -407,6 +604,8 @@ impl ChatSession {
             credential_env_names,
             prompt_queue: VecDeque::new(),
             verification: VerificationLoop::new(),
+            suppress_live_decorations: false,
+            turn_cancellation: None,
             mcp: None,
             mcp_connect_attempted: false,
         };
@@ -451,7 +650,7 @@ impl ChatSession {
         }
         let candidate = expand_workspace_path(raw);
         if !candidate.exists() {
-            println!(
+            emitln_k!(LineKind::Error,
                 "{}",
                 ui.error(format!(
                     "workspace does not exist: {}\n  Pass an existing directory, or create it first.",
@@ -463,7 +662,11 @@ impl ChatSession {
         let root = match Workspace::check_existing(&candidate) {
             Ok(workspace) => workspace.root().to_path_buf(),
             Err(error) => {
-                println!("{}", ui.error(format!("not a usable workspace: {error}")));
+                emitln_k!(
+                    LineKind::Error,
+                    "{}",
+                    ui.error(format!("not a usable workspace: {error}"))
+                );
                 return Ok(CommandResult::Continue);
             }
         };
@@ -473,7 +676,8 @@ impl ChatSession {
         self.config.agent.default_workspace = root.display().to_string();
         self.save_config()?;
         self.persist_session()?;
-        println!(
+        emitln_k!(
+            LineKind::Success,
             "{}",
             ui.success(&format!(
                 "Workspace switched:\n  from {}\n  to   {}",
@@ -481,7 +685,8 @@ impl ChatSession {
                 root.display()
             ))
         );
-        println!(
+        emitln_k!(
+            LineKind::Notice,
             "{}",
             ui.status_line("  Saved as the default; new sessions start here too.")
         );
@@ -508,10 +713,15 @@ impl ChatSession {
     /// The harness should get better at the work you actually do, so a task that ended
     /// with a green verification run is worth storing as a procedure. Skipped entirely
     /// when the task produced nothing durable, or when `learn_skills` is off.
-    fn maybe_capture_skill(&mut self, task: &str, ui: &Renderer) -> Result<()> {
+    pub(crate) fn maybe_capture_skill(
+        &mut self,
+        task: &str,
+        prompts: &mut dyn TurnPrompts,
+    ) -> Result<()> {
         if !self.config.agent.learn_skills {
             return Ok(());
         }
+        let ui = Renderer::from_config(&self.config);
         let task = task.trim();
         if task.is_empty() {
             return Ok(());
@@ -522,7 +732,7 @@ impl ChatSession {
             // Already learned; do not ask twice for the same request.
             return Ok(());
         }
-        if !should_capture_skill(ui, &id) {
+        if !prompts.confirm_skill_capture(&id) {
             return Ok(());
         }
 
@@ -569,14 +779,16 @@ impl ChatSession {
             &when_to_use,
             &tags,
         ) {
-            Ok(path) => println!(
+            Ok(path) => emitln_k!(
+                LineKind::Success,
                 "{}",
                 ui.success(&format!(
                     "Learned `{id}` → {}\n  Axiom will pick this up in future sessions.",
                     path.display()
                 ))
             ),
-            Err(error) => println!(
+            Err(error) => emitln_k!(
+                LineKind::Warning,
                 "{}",
                 ui.warning(&format!("could not save skill `{id}`: {error}"))
             ),
@@ -586,8 +798,12 @@ impl ChatSession {
 
     /// Show which directory the agent is allowed to touch, and why it matters.
     pub(crate) fn display_workspace(&self, ui: &Renderer) {
-        println!("{}", ui.header("Workspace", self.workspace_path.display()));
-        println!(
+        emitln_k!(
+            LineKind::Notice,
+            "{}",
+            ui.header("Workspace", self.workspace_path.display())
+        );
+        emitln!(
             "{}",
             ui.plain(
                 "  File, shell, git, and test tools are confined to this directory.\n  \
@@ -596,32 +812,26 @@ impl ChatSession {
         );
     }
 
-    /// Print the plan the agent is tracking for this session.
+    /// The plan as plain text lines.
     ///
-    /// The list already existed and was persisted, but there was no way to look at it
-    /// from the terminal — `/todo` is that surface.
-    pub(crate) fn display_todo(&self, ui: &Renderer) {
+    /// Formatting lives here so both the terminal and the full-screen TUI show the same
+    /// plan; each surface applies its own styling on top.
+    pub(crate) fn todo_lines(&self) -> Vec<String> {
         if self.todo.items.is_empty() {
-            println!(
-                "{}",
-                ui.plain(
-                    "No plan yet. Axiom records one as it works; enter Plan Mode with /plan to plan before changing files."
-                )
-            );
-            return;
+            return vec![
+                "No plan yet. Axiom records one as it works; /plan plans before changing files."
+                    .to_string(),
+            ];
         }
-        println!(
-            "{}",
-            ui.header("Plan", format!("{} steps", self.todo.items.len()))
-        );
+        let mut lines = vec![format!("Plan ({} steps)", self.todo.items.len())];
         for (index, item) in self.todo.items.iter().enumerate() {
-            let (marker, title) = match item.status {
-                TodoStatus::Completed => ("✔", ui.green(&item.title)),
-                TodoStatus::InProgress => ("▶", ui.accent(&item.title)),
-                TodoStatus::Blocked => ("✖", ui.red(&item.title)),
-                TodoStatus::Pending => ("○", ui.plain(&item.title)),
+            let marker = match item.status {
+                TodoStatus::Completed => "✔",
+                TodoStatus::InProgress => "▶",
+                TodoStatus::Blocked => "✖",
+                TodoStatus::Pending => "○",
             };
-            println!("  {marker} {:>2}. {title}", index + 1);
+            lines.push(format!("  {marker} {:>2}. {}", index + 1, item.title));
         }
         // `remaining_count` covers pending + in-progress, so blocked is counted here.
         let blocked = self
@@ -630,21 +840,29 @@ impl ChatSession {
             .iter()
             .filter(|item| item.status == TodoStatus::Blocked)
             .count();
-        println!(
-            "{}",
-            ui.status_line(&format!(
-                "  {}/{} complete · {} remaining · {} blocked",
-                self.todo.completed_count(),
-                self.todo.items.len(),
-                self.todo.remaining_count(),
-                blocked
-            ))
-        );
+        lines.push(format!(
+            "  {}/{} complete · {} remaining · {} blocked",
+            self.todo.completed_count(),
+            self.todo.items.len(),
+            self.todo.remaining_count(),
+            blocked
+        ));
+        lines
+    }
+
+    /// Print the plan the agent is tracking for this session.
+    ///
+    /// The list already existed and was persisted, but there was no way to look at it
+    /// from the terminal — `/todo` is that surface.
+    pub(crate) fn display_todo(&self, ui: &Renderer) {
+        for line in self.todo_lines() {
+            emitln!("{}", ui.plain(&line));
+        }
     }
 
     pub(crate) fn display_queue(&self, ui: &Renderer) {
         if self.prompt_queue.is_empty() {
-            println!(
+            emitln!(
                 "{}",
                 ui.plain(
                     "  No tasks currently in queue. Use `/queue add <prompt>` to enqueue a task."
@@ -657,18 +875,18 @@ impl ChatSession {
             } else {
                 "s"
             };
-            println!("  \x1b[38;5;240m┌{border}┐\x1b[0m");
-            println!(
+            emitln!("  \x1b[38;5;240m┌{border}┐\x1b[0m");
+            emitln!(
                 "  \x1b[38;5;240m│\x1b[0m  \x1b[1;38;5;255mPending Task Queue ({} task{suffix} pending)\x1b[0m",
                 self.prompt_queue.len()
             );
-            println!("  \x1b[38;5;240m├{border}┤\x1b[0m");
+            emitln!("  \x1b[38;5;240m├{border}┤\x1b[0m");
             for (idx, task) in self.prompt_queue.iter().enumerate() {
                 let count = idx + 1;
-                println!("  \x1b[38;5;240m│\x1b[0m  \x1b[38;5;208m{count:>2}.\x1b[0m \x1b[38;5;254m{task}\x1b[0m");
+                emitln!("  \x1b[38;5;240m│\x1b[0m  \x1b[38;5;208m{count:>2}.\x1b[0m \x1b[38;5;254m{task}\x1b[0m");
             }
-            println!("  \x1b[38;5;240m└{border}┘\x1b[0m");
-            println!(
+            emitln!("  \x1b[38;5;240m└{border}┘\x1b[0m");
+            emitln!(
                 "{}",
                 ui.smoke(
                     "  Tasks execute sequentially. Use `/queue clear` to clear pending tasks."
@@ -1095,11 +1313,15 @@ impl ChatSession {
         let store = session_store_for_config(&self.config_path);
         let sessions = store.list()?;
         if sessions.is_empty() {
-            println!("{}", ui.warning("No saved sessions found."));
+            emitln_k!(
+                LineKind::Warning,
+                "{}",
+                ui.warning("No saved sessions found.")
+            );
             return Ok(());
         }
 
-        println!(
+        emitln!(
             "{}",
             ui.primary("┌── Saved Axiom Sessions ────────────────────────────────────┐")
         );
@@ -1117,12 +1339,17 @@ impl ChatSession {
             } else {
                 id_str
             };
-            println!(
+            emitln!(
                 "│ {:>2}. {:<12} {:<11} | {:>2} msgs | {:>5} tokens | workspace: {}",
-                num, id_short, marker, entry.message_count, entry.total_tokens, entry.workspace
+                num,
+                id_short,
+                marker,
+                entry.message_count,
+                entry.total_tokens,
+                entry.workspace
             );
         }
-        println!(
+        emitln!(
             "{}",
             ui.primary("└── Use /history <number|id> or /resume <id> to switch ──────┘")
         );
@@ -1157,7 +1384,8 @@ impl ChatSession {
         };
 
         if target_id == self.session_id.as_str() {
-            println!(
+            emitln_k!(
+                LineKind::Notice,
                 "{}",
                 ui.status_line(&format!("Already active on session {target_id}."))
             );
@@ -1170,7 +1398,8 @@ impl ChatSession {
         let tokens = new_session.usage_ledger.total_tokens;
         *self = new_session;
 
-        println!(
+        emitln_k!(
+            LineKind::Success,
             "{}",
             ui.success(&format!(
                 "Switched to session {target_id} ({msg_count} messages, {tokens} tokens)."
@@ -1179,7 +1408,7 @@ impl ChatSession {
         Ok(())
     }
 
-    async fn send_user_message_live(
+    pub(crate) async fn send_user_message_live(
         &mut self,
         content: String,
         skill_cards: &[SkillCard],
@@ -1514,8 +1743,16 @@ impl ChatSession {
 
         let installed_skills = load_installed_skills(self.skills_dir())?;
         let cancellation = CancellationToken::new();
+        // Publish the token for the duration of this turn so a front end that owns the keyboard
+        // can cancel it; the guard clears it again however this function returns.
+        if let Some(handle) = self.turn_cancellation.as_ref() {
+            handle.arm(&cancellation);
+        }
+        let _cancellation_arm = CancellationArm(self.turn_cancellation.clone());
         let (signal_listener, turn_guard) = spawn_turn_cancellation_listener(cancellation.clone());
-        let live_status = stream_observer.is_some();
+        // Another surface may be rendering the turn (the full-screen TUI), in which case
+        // the spinner and animated file writes would fight it for the same screen.
+        let live_status = stream_observer.is_some() && !self.suppress_live_decorations;
         let approvals = Rc::new(RefCell::new(Vec::new()));
         let mut recording_approval = RecordingApprover {
             inner: approval,
@@ -2027,7 +2264,10 @@ impl ChatSession {
     /// renderer already printed says everything worth saying — spilling those produced a
     /// wall of `out-NNNN` notices that restated the summary with less information.
     /// `/show` and `saved_output_ids` still resolve every id that *was* stored.
-    fn spill_tool_output(&self, result: &SkillExecutionResult) -> Result<Option<SavedToolOutput>> {
+    pub(crate) fn spill_tool_output(
+        &self,
+        result: &SkillExecutionResult,
+    ) -> Result<Option<SavedToolOutput>> {
         let content =
             serde_json::to_string_pretty(&redact_json_value(serde_json::to_value(result)?))?;
         let total_lines = content.lines().count();
@@ -2281,13 +2521,13 @@ impl ChatSession {
 
 /// A tool result too large to have been conveyed by its one-line summary, spilled to
 /// disk so `/show` can retrieve it.
-struct SavedToolOutput {
-    id: String,
-    heading: String,
+pub(crate) struct SavedToolOutput {
+    pub(crate) id: String,
+    pub(crate) heading: String,
     /// Head of the stored payload, safe to print inline.
-    preview: String,
+    pub(crate) preview: String,
     /// How much of the payload the preview actually shows.
-    shown: String,
+    pub(crate) shown: String,
 }
 
 /// Payloads at or below these limits add nothing beyond the tool's own summary line.
@@ -2303,7 +2543,7 @@ const TOOL_OUTPUT_PREVIEW_LINES: usize = 16;
 const TOOL_OUTPUT_PREVIEW_CHARS: usize = 1_600;
 
 /// What to do with a plan the agent just proposed.
-enum PlanDecision {
+pub(crate) enum PlanDecision {
     /// Implement it as written.
     Proceed,
     /// Implement it with extra direction from the user.
@@ -2417,7 +2657,7 @@ fn expand_workspace_path(raw: &str) -> PathBuf {
 }
 
 /// Prompt used for an automatic verification retry.
-fn verification_fix_prompt(command: &str, diagnostics: &str) -> String {
+pub(crate) fn verification_fix_prompt(command: &str, diagnostics: &str) -> String {
     format!(
         "The verification command `{command}` failed after your last change. Diagnostics:\n\
          ```\n{diagnostics}\n```\n\
@@ -2447,6 +2687,8 @@ fn bounded_output_preview(content: &str, max_lines: usize, max_chars: usize) -> 
 pub(crate) struct ChatOptions {
     /// Directory to run the agent in, overriding `agent.default_workspace`.
     pub(crate) workspace: Option<String>,
+    /// Force the classic inline session instead of the full-screen TUI.
+    pub(crate) inline: bool,
 }
 
 pub(crate) async fn run_terminal_chat(options: ChatOptions) -> Result<()> {
@@ -2455,23 +2697,32 @@ pub(crate) async fn run_terminal_chat(options: ChatOptions) -> Result<()> {
     if let Some(workspace) = options.workspace.as_deref() {
         session.apply_workspace_override(workspace)?;
     }
-    run_terminal_session(session).await
+    start_terminal_session(session, options.inline).await
 }
 
 pub(crate) async fn resume_terminal_chat(session_id: &str) -> Result<()> {
     let config_path = AxiomConfig::default_config_path()?;
     let session = ChatSession::resume(&config_path, session_id)?;
-    run_terminal_session(session).await
+    start_terminal_session(session, false).await
+}
+
+/// Start the session on the full-screen TUI, falling back to the inline prompt when the
+/// terminal cannot support one.
+async fn start_terminal_session(session: ChatSession, inline: bool) -> Result<()> {
+    if inline || !crate::ui::tui::tui_supported() {
+        return run_terminal_session(session, FrontEnd::Inline).await;
+    }
+    crate::ui::tui::run_tui_session(session).await
 }
 
 pub(crate) fn list_sessions() -> Result<()> {
     let config_path = AxiomConfig::default_config_path()?;
     let sessions = session_store_for_config(&config_path).list()?;
     if sessions.is_empty() {
-        println!("No saved sessions.");
+        emitln!("No saved sessions.");
     } else {
         for session in sessions {
-            println!(
+            emitln!(
                 "{} messages={} todos={} tokens={} workspace={}",
                 session.id.as_str(),
                 session.message_count,
@@ -2846,11 +3097,11 @@ impl TerminalStreamRenderer {
             spinner.stop();
         }
         if self.thinking_open {
-            println!();
+            emitln!();
             self.thinking_open = false;
         }
         if self.response_open {
-            println!();
+            emitln!();
             self.response_open = false;
         }
     }
@@ -2869,7 +3120,7 @@ impl StreamObserver for TerminalStreamRenderer {
     fn on_stream_update(&mut self, update: &ChatStreamUpdate) {
         if update.tool_call_active {
             if self.thinking_open {
-                println!();
+                emitln!();
                 self.thinking_open = false;
             }
             let tool_name = update.tool_name.as_deref().unwrap_or("tool");
@@ -2903,7 +3154,7 @@ impl StreamObserver for TerminalStreamRenderer {
                 spinner.stop();
             }
             if self.thinking_open {
-                println!();
+                emitln!();
                 self.thinking_open = false;
             }
             if !self.response_open {
@@ -3059,42 +3310,97 @@ fn restrict_private_file(_path: &Path) -> Result<()> {
     Ok(())
 }
 
-async fn run_terminal_session(mut session: ChatSession) -> Result<()> {
-    if io::stdout().is_terminal() && std::env::var_os("NO_COLOR").is_none() {
-        print!("\x1B[2J\x1B[H");
-        let _ = io::stdout().flush();
-    }
-    let ui = Renderer::from_config(&session.config);
+pub(crate) async fn run_terminal_session(
+    mut session: ChatSession,
+    front_end: FrontEnd,
+) -> Result<()> {
+    // Splitting the bridge here rather than inside the loop keeps the two directions separate:
+    // the renderer is told what to draw, and the session reads what the user submitted.
+    let (tui_events, tui_input) = match front_end {
+        FrontEnd::Inline => (None, None),
+        FrontEnd::Tui(bridge) => (Some(bridge.events), Some(bridge.input)),
+    };
+    let tui_mode = tui_events.is_some();
+    // The TUI styles captured lines itself and its buffer holds no escape sequences, so the
+    // renderer that composes those lines must not add any.
+    let ui = if tui_mode {
+        Renderer::without_color(&session.config)
+    } else {
+        Renderer::from_config(&session.config)
+    };
 
-    println!(
-        "{}",
-        ui.dashboard_banner(
-            session.active_provider().unwrap_or("not configured"),
-            session.active_model().unwrap_or("not configured"),
-            &session.banner_variant_display(),
-            session.active_permission_mode(),
-            &session.workspace_path().display().to_string(),
-            session.session_id(),
-            session.work_mode().as_str(),
-        )
-    );
-    if let Some((curr, latest)) = check_for_startup_update(&session.config).await {
-        for line in ui.update_notification_card(&curr, &latest) {
-            println!("{line}");
+    if !tui_mode {
+        if io::stdout().is_terminal() && std::env::var_os("NO_COLOR").is_none() {
+            print!("\x1B[2J\x1B[H");
+            let _ = io::stdout().flush();
         }
-        println!();
+        emitln!(
+            "{}",
+            ui.dashboard_banner(
+                session.active_provider().unwrap_or("not configured"),
+                session.active_model().unwrap_or("not configured"),
+                &session.banner_variant_display(),
+                session.active_permission_mode(),
+                &session.workspace_path().display().to_string(),
+                session.session_id(),
+                session.work_mode().as_str(),
+            )
+        );
+        if let Some((curr, latest)) = check_for_startup_update(&session.config).await {
+            for line in ui.update_notification_card(&curr, &latest) {
+                emitln_k!(LineKind::Notice, "{line}");
+            }
+            emitln_k!(LineKind::Notice);
+        }
+    }
+    if let Some(events) = tui_events.as_ref() {
+        events
+            .send(crate::ui::tui::ToRenderer::Header(Box::new(
+                crate::ui::tui::HeaderInfo {
+                    provider: session
+                        .active_provider()
+                        .unwrap_or("not configured")
+                        .to_string(),
+                    model: session
+                        .active_model()
+                        .unwrap_or("not configured")
+                        .to_string(),
+                    variant: session.banner_variant_display().to_string(),
+                    permission: session.active_permission_mode().to_string(),
+                    work_mode: session.work_mode().as_str().to_string(),
+                    workspace: session.workspace_path().display().to_string(),
+                    version: env!("CARGO_PKG_VERSION").to_string(),
+                },
+            )))
+            .ok();
     }
     if let Some(notice) = session.cost_budget_notice() {
-        println!("{}", ui.status_line(&notice));
+        emitln_k!(LineKind::Notice, "{}", ui.status_line(&notice));
     }
     session.persist_session()?;
     maybe_show_cached_core_update_notice(&session);
     maybe_show_cached_skill_update_notice(&session);
-    let mut input_reader = TerminalInput::new(&session.config_path)?;
+    let mut input = match tui_input {
+        Some(lines) => InputSource::Tui(lines),
+        None => InputSource::Inline(Box::new(TerminalInput::new(&session.config_path)?)),
+    };
+    let mut prompts: Box<dyn TurnPrompts> = match tui_events.as_ref() {
+        Some(events) => Box::new(crate::ui::tui::TuiPrompts::new(events.clone())),
+        None => Box::new(InlinePrompts::new(ui)),
+    };
 
     loop {
+        // Announce the resting state before asking for anything. Doing it here rather than at
+        // the end of the iteration means every `continue` path clears the busy indicator too.
+        if let Some(events) = tui_events.as_ref() {
+            events
+                .send(crate::ui::tui::ToRenderer::Plan(session.todo_lines()))
+                .ok();
+            events.send(crate::ui::tui::ToRenderer::TurnFinished).ok();
+        }
         let (mut message, origin) = if let Some(queued) = session.verification.take_pending() {
-            println!(
+            emitln_k!(
+                LineKind::Notice,
                 "{}",
                 ui.orchestrator_notice(&format!(
                     "Verification loop: automatic fix pass {} of {} — no input needed.",
@@ -3104,7 +3410,8 @@ async fn run_terminal_session(mut session: ChatSession) -> Result<()> {
             );
             (queued, TurnOrigin::Verification)
         } else if let Some(queued) = session.prompt_queue.pop_front() {
-            println!(
+            emitln_k!(
+                LineKind::Notice,
                 "{}",
                 ui.orchestrator_notice(&format!(
                     "Executing queued task ({} remaining): \"{}\"",
@@ -3114,7 +3421,7 @@ async fn run_terminal_session(mut session: ChatSession) -> Result<()> {
             );
             (queued, TurnOrigin::Queue)
         } else {
-            let read_line = match input_reader.read(&ui.prompt_plain(), Some(&ui.prompt()))? {
+            let read_line = match input.read(&ui.prompt_plain(), &ui.prompt()).await? {
                 PromptRead::CommandPalette => {
                     handle_chat_command(&mut session, "/commands").await?;
                     continue;
@@ -3123,16 +3430,16 @@ async fn run_terminal_session(mut session: ChatSession) -> Result<()> {
                     let cleaned = clean_pasted_input(&line);
                     let line_count = cleaned.lines().count();
                     if line_count > 3 {
-                        println!("{}", ui.plain(&format!("  📋 [Pasted {line_count} lines]")));
+                        emitln!("{}", ui.plain(&format!("  📋 [Pasted {line_count} lines]")));
                     }
                     cleaned.trim().to_string()
                 }
                 PromptRead::Interrupted => {
-                    println!("\nExiting Axiom...");
+                    emitln!("\nExiting Axiom...");
                     break;
                 }
                 PromptRead::EndOfInput => {
-                    println!();
+                    emitln!();
                     break;
                 }
             };
@@ -3158,7 +3465,7 @@ async fn run_terminal_session(mut session: ChatSession) -> Result<()> {
             CommandResult::NotCommand => {}
         }
         if origin.is_user_input() {
-            input_reader.remember(&message)?;
+            input.remember(&message)?;
             // A new request from the user earns a fresh verification budget.
             session.verification.reset();
         }
@@ -3171,7 +3478,8 @@ async fn run_terminal_session(mut session: ChatSession) -> Result<()> {
             .map(|card| card.id.as_str())
             .collect::<Vec<_>>()
             .join(", ");
-        println!(
+        emitln_k!(
+            LineKind::Notice,
             "{}",
             ui.orchestrator_notice(&format!(
                 "{} · activated: [{}]",
@@ -3195,7 +3503,8 @@ async fn run_terminal_session(mut session: ChatSession) -> Result<()> {
 
         let mut final_prompt = orchestrator_plan.enhanced_prompt;
         if plan_first {
-            println!(
+            emitln_k!(
+                LineKind::Notice,
                 "{}",
                 ui.orchestrator_notice(
                     "Plan first: agreeing the approach before any file changes."
@@ -3210,7 +3519,8 @@ async fn run_terminal_session(mut session: ChatSession) -> Result<()> {
         }
 
         if let Some(ref search_query) = orchestrator_plan.web_research_query {
-            println!(
+            emitln_k!(
+                LineKind::Notice,
                 "{}",
                 ui.orchestrator_notice(&format!(
                     "fetching current web knowledge for \"{search_query}\"..."
@@ -3226,7 +3536,10 @@ async fn run_terminal_session(mut session: ChatSession) -> Result<()> {
         let mut approval = TerminalApprover {
             mode: session.permission_mode(),
         };
-        let mut live_stream = TerminalStreamRenderer::new(ui);
+        let mut live_stream = match tui_events.as_ref() {
+            Some(events) => LiveRenderer::Tui(crate::ui::tui::TuiObserver::new(events.clone())),
+            None => LiveRenderer::Inline(Box::new(TerminalStreamRenderer::new(ui))),
+        };
         let turn_result = session
             .send_user_message_live(
                 final_prompt.clone(),
@@ -3236,7 +3549,7 @@ async fn run_terminal_session(mut session: ChatSession) -> Result<()> {
             )
             .await;
         live_stream.finish_line();
-        let streamed_visible = live_stream.visible_content;
+        let streamed_visible = live_stream.echoed_content();
         match turn_result {
             Ok(turn) => {
                 let ChatTurnResult {
@@ -3254,11 +3567,12 @@ async fn run_terminal_session(mut session: ChatSession) -> Result<()> {
                     match session.spill_tool_output(result) {
                         Ok(None) => {}
                         Ok(Some(spill)) => {
-                            println!("{}", ui.status_line(&spill.heading));
+                            emitln_k!(LineKind::Notice, "{}", ui.status_line(&spill.heading));
                             for line in spill.preview.lines() {
-                                println!("{}", ui.plain(&format!("  │ {line}")));
+                                emitln_k!(LineKind::Notice, "{}", ui.plain(&format!("  │ {line}")));
                             }
-                            println!(
+                            emitln_k!(
+                                LineKind::Notice,
                                 "{}",
                                 ui.status_line(&format!(
                                     "  ↳ {} · full output stored as {} · /show {}",
@@ -3266,7 +3580,8 @@ async fn run_terminal_session(mut session: ChatSession) -> Result<()> {
                                 ))
                             );
                         }
-                        Err(error) => println!(
+                        Err(error) => emitln_k!(
+                            LineKind::Warning,
                             "{}",
                             ui.warning(&format!(
                                 "could not store output for {}: {error}",
@@ -3276,10 +3591,10 @@ async fn run_terminal_session(mut session: ChatSession) -> Result<()> {
                     }
                 }
                 if !streamed_visible {
-                    println!("{}", ui.assistant(&content));
+                    emitln_k!(LineKind::Warning, "{}", ui.assistant(&content));
                 }
                 if was_cancelled {
-                    println!(
+                    emitln_k!(LineKind::Warning,
                         "{}",
                         ui.warning(
                             "Task interrupted by user (Ctrl+C / Esc). Partial response preserved in session context."
@@ -3288,7 +3603,7 @@ async fn run_terminal_session(mut session: ChatSession) -> Result<()> {
                     if !session.prompt_queue.is_empty() {
                         let count = session.prompt_queue.len();
                         let s = if count == 1 { "" } else { "s" };
-                        println!(
+                        emitln_k!(LineKind::Notice,
                             "{}",
                             ui.status_line(&format!(
                                 "Queue paused ({count} task{s} pending). Type /queue to view or run next prompt to resume."
@@ -3297,26 +3612,40 @@ async fn run_terminal_session(mut session: ChatSession) -> Result<()> {
                     }
                 }
                 if let Some(runtime) = runtime {
-                    println!("{}", ui.status_line(&runtime.status_text()));
+                    emitln_k!(
+                        LineKind::Notice,
+                        "{}",
+                        ui.status_line(&runtime.status_text())
+                    );
                 }
                 if plan_first {
-                    println!(
+                    emitln_k!(
+                        LineKind::Notice,
                         "{}",
                         ui.header("Proposed plan", "waiting for your approval")
                     );
                     session.display_todo(&ui);
-                    match approve_plan(&ui) {
+                    match prompts.approve_plan() {
                         PlanDecision::Proceed => {
-                            println!("\n{}", ui.success("Plan approved — implementing now."));
+                            emitln_k!(
+                                LineKind::Success,
+                                "\n{}",
+                                ui.success("Plan approved — implementing now.")
+                            );
                             session.prompt_queue.push_front(requested_task.clone());
                         }
                         PlanDecision::Adjust(feedback) => {
-                            println!("\n{}", ui.success("Adjusting — revised plan next."));
+                            emitln_k!(
+                                LineKind::Success,
+                                "\n{}",
+                                ui.success("Adjusting — revised plan next.")
+                            );
                             session.prompt_queue.push_front(format!(
                                 "{requested_task}\n\nAdditional direction from the user:\n{feedback}"
                             ));
                         }
-                        PlanDecision::Cancel => println!(
+                        PlanDecision::Cancel => emitln_k!(
+                            LineKind::Notice,
                             "\n{}",
                             ui.status_line("Plan not approved; nothing was changed.")
                         ),
@@ -3338,7 +3667,8 @@ async fn run_terminal_session(mut session: ChatSession) -> Result<()> {
                     let test_cmds = axiom_coder::detect_test_commands(session.workspace_path())
                         .unwrap_or_default();
                     if let Some(first_test) = test_cmds.first() {
-                        println!(
+                        emitln_k!(
+                            LineKind::Notice,
                             "{}",
                             ui.orchestrator_notice(&format!(
                                 "Verifying workspace (`{}`)...",
@@ -3349,7 +3679,8 @@ async fn run_terminal_session(mut session: ChatSession) -> Result<()> {
                             .await
                         {
                             Ok(()) => {
-                                println!(
+                                emitln_k!(
+                                    LineKind::Success,
                                     "{}",
                                     ui.success(&format!(
                                         "Verification passed (`{}`)",
@@ -3363,7 +3694,7 @@ async fn run_terminal_session(mut session: ChatSession) -> Result<()> {
                                 let fix_prompt =
                                     verification_fix_prompt(&first_test.command, &diagnostics);
                                 if session.verification.queue_fix(fix_prompt) {
-                                    println!(
+                                    emitln_k!(LineKind::Warning,
                                         "{}",
                                         ui.warning(&format!(
                                             "Verification failed. Fixing automatically — {} pass(es) left in this loop.",
@@ -3371,7 +3702,7 @@ async fn run_terminal_session(mut session: ChatSession) -> Result<()> {
                                         ))
                                     );
                                 } else {
-                                    println!(
+                                    emitln_k!(LineKind::Warning,
                                         "{}",
                                         ui.warning(
                                             "Verification is still failing and the automatic retry budget is spent. Stopping the loop; the diagnostics above are unresolved."
@@ -3391,37 +3722,27 @@ async fn run_terminal_session(mut session: ChatSession) -> Result<()> {
                     && !is_verification_pass
                     && !verification_failed
                 {
-                    session.maybe_capture_skill(trimmed, &ui)?;
+                    session.maybe_capture_skill(trimmed, &mut *prompts)?;
                 }
                 if !was_cancelled && tool_results.is_empty() {
                     if let Some(mcq) = extract_mcq_from_text(&content) {
-                        let res = crate::ui::interactive_select(
-                            &mcq.question,
-                            &mcq.options,
-                            0,
-                            true,
-                            &ui,
-                        );
-                        match res {
-                            crate::ui::SelectionResult::Selected { text, .. } => {
-                                println!("{}\n", ui.success(&format!("Selected: {text}")));
-                                session.prompt_queue.push_front(text);
-                            }
-                            crate::ui::SelectionResult::Custom(reply) => {
-                                println!("{}\n", ui.success(&format!("Custom reply: {reply}")));
-                                session.prompt_queue.push_front(reply);
-                            }
-                            crate::ui::SelectionResult::Cancelled => {}
+                        if let Some(reply) = prompts.choose(&mcq.question, &mcq.options) {
+                            emitln_k!(
+                                LineKind::Success,
+                                "{}\n",
+                                ui.success(&format!("Selected: {reply}"))
+                            );
+                            session.prompt_queue.push_front(reply);
                         }
                     }
                 }
             }
             Err(error) => {
-                println!("{}", ui.error(&error));
+                emitln_k!(LineKind::Error, "{}", ui.error(&error));
                 if let Some(hint) =
                     crate::credentials::credential_hint_for_error(&error.to_string())
                 {
-                    println!("{}", ui.plain(&hint));
+                    emitln!("{}", ui.plain(&hint));
                 }
                 session.history.push(ChatMessage {
                     role: "user".to_string(),
@@ -3460,19 +3781,19 @@ pub(crate) async fn run_one_shot(command: RunCommand) -> Result<()> {
         session.disable_proof_for_run();
     }
     if let Some(notice) = session.cost_budget_notice() {
-        println!("{}", ui.status_line(&notice));
+        emitln_k!(LineKind::Notice, "{}", ui.status_line(&notice));
     }
 
     let skill_cards = session.select_skill_cards(&command.message, 5)?;
     if skill_cards.is_empty() {
-        println!("Axiom Lens: selected no skills.");
+        emitln!("Axiom Lens: selected no skills.");
     } else {
         let selected = skill_cards
             .iter()
             .map(|card| card.id.as_str())
             .collect::<Vec<_>>()
             .join(", ");
-        println!("Axiom Lens: selected {selected}");
+        emitln!("Axiom Lens: selected {selected}");
     }
 
     let mut approval = NonInteractiveApprover;
@@ -3492,14 +3813,19 @@ pub(crate) async fn run_one_shot(command: RunCommand) -> Result<()> {
     } = turn;
     for result in &tool_results {
         let summary = format_tool_result_summary(&result.skill_id, &result.output);
-        println!(
+        emitln_k!(
+            LineKind::Notice,
             "{}",
             ui.tool_notice_with_summary(&result.skill_id, false, Some(&summary))
         );
     }
-    println!("{}", ui.plain(&content));
+    emitln_k!(LineKind::Notice, "{}", ui.plain(&content));
     if let Some(runtime) = runtime {
-        println!("{}", ui.status_line(&runtime.status_text()));
+        emitln_k!(
+            LineKind::Notice,
+            "{}",
+            ui.status_line(&runtime.status_text())
+        );
     }
 
     Ok(())
@@ -3532,7 +3858,7 @@ fn maybe_show_cached_core_update_notice(session: &ChatSession) {
         return;
     };
     if latest > current {
-        println!("Axiom update available: v{latest}. Run `axiom update install`.");
+        emitln!("Axiom update available: v{latest}. Run `axiom update install`.");
     }
 }
 
@@ -3562,7 +3888,7 @@ fn maybe_show_cached_skill_update_notice(session: &ChatSession) {
         &Platform::current(),
     );
     if !updates.is_empty() {
-        println!("Skill updates available. Run `axiom skill update --check`.");
+        emitln!("Skill updates available. Run `axiom skill update --check`.");
     }
 }
 
@@ -3794,7 +4120,7 @@ impl TransitionObserver for DurableTransitionWriter {
                 } => {
                     let display_model =
                         model.strip_prefix(&format!("{provider}/")).unwrap_or(model);
-                    println!(
+                    emitln!(
                         "  ⚡ Axiom: working with {provider}/{display_model} (step {iteration})..."
                     );
                 }
@@ -3878,7 +4204,7 @@ impl TransitionObserver for DurableTransitionWriter {
                             nu_ansi_term::Color::Cyan,
                         ));
                     } else {
-                        println!("  ⚙ Axiom Tool: executing {}{target}...", request.skill_id);
+                        emitln!("  ⚙ Axiom Tool: executing {}{target}...", request.skill_id);
                     }
                 }
                 AgentTransitionKind::ToolCompleted { event, .. } => {
@@ -3892,37 +4218,40 @@ impl TransitionObserver for DurableTransitionWriter {
                             let summary =
                                 format_tool_result_summary(&event.request.skill_id, &result.output);
                             if is_timeout {
-                                println!(
+                                emitln!(
                                     "  ⏱ Axiom Tool: timed out {} → {}",
-                                    event.request.skill_id, summary
+                                    event.request.skill_id,
+                                    summary
                                 );
                             } else {
-                                println!(
+                                emitln!(
                                     "  ✔ Axiom Tool: completed {} → {}",
-                                    event.request.skill_id, summary
+                                    event.request.skill_id,
+                                    summary
                                 );
                             }
                         }
                         ToolExecutionStatus::Failed(error) => {
-                            println!(
+                            emitln!(
                                 "  ✖ Axiom Tool: failed {} ({})",
-                                event.request.skill_id, error
+                                event.request.skill_id,
+                                error
                             );
                         }
                     }
                 }
                 AgentTransitionKind::ReflectQueued { .. } => {
-                    println!("  🔍 Axiom: verifying workspace changes...")
+                    emitln!("  🔍 Axiom: verifying workspace changes...")
                 }
                 AgentTransitionKind::ProviderDegradedNoTools {
                     provider, model, ..
                 } => {
                     let display_model =
                         model.strip_prefix(&format!("{provider}/")).unwrap_or(model);
-                    println!(
+                    emitln!(
                         "  ⚠ {provider} has no endpoint for {display_model} that supports tool use — finishing this turn without tools."
                     );
-                    println!(
+                    emitln!(
                         "    Switch to a tool-capable model with /model <id> or /models to browse."
                     );
                 }
@@ -4234,7 +4563,7 @@ pub(crate) fn render_animated_file_write(path: &str, content: &str) {
             visible_width(path) + visible_width(&format!("({total_lines} lines)")) + 12;
         let top_dashes = "─".repeat(header_text_len.max(24));
         let bottom_dashes = "─".repeat(header_text_len.max(24).saturating_sub(12));
-        println!(
+        emitln!(
             "  {peach}╭── {bold}{cyan}Writing {path}{reset} {dim}({total_lines} lines){reset} {peach}{top_dashes}╮{reset}"
         );
 
@@ -4256,21 +4585,21 @@ pub(crate) fn render_animated_file_write(path: &str, content: &str) {
                 line.to_string()
             };
             let colored = syntax_highlight_line(&display_text, path);
-            println!("  {peach}│{reset} {dim}{line_no:>3} │{reset} {colored}");
+            emitln!("  {peach}│{reset} {dim}{line_no:>3} │{reset} {colored}");
             let _ = std::io::stdout().flush();
             std::thread::sleep(std::time::Duration::from_millis(delay_ms));
         }
 
         if total_lines > preview_limit {
             let remaining = total_lines - preview_limit;
-            println!("  {peach}│{reset} {dim}    │ ... +{remaining} more lines written to {path} ...{reset}");
+            emitln!("  {peach}│{reset} {dim}    │ ... +{remaining} more lines written to {path} ...{reset}");
         }
 
-        println!(
+        emitln!(
             "  {peach}╰── {green}✔ {path} written locally{reset} {peach}{bottom_dashes}╯{reset}"
         );
     } else {
-        println!("  Writing {path} ({total_lines} lines)...");
+        emitln!("  Writing {path} ({total_lines} lines)...");
     }
 }
 
@@ -4507,7 +4836,7 @@ pub(crate) struct OrchestratorPlan {
     pub is_coding_task: bool,
 }
 
-async fn fetch_web_knowledge(query: &str) -> Option<String> {
+pub(crate) async fn fetch_web_knowledge(query: &str) -> Option<String> {
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(5))
         .build()
@@ -4551,7 +4880,7 @@ async fn fetch_web_knowledge(query: &str) -> Option<String> {
     }
 }
 
-async fn run_debugger_check(workspace: &Path, command_str: &str) -> Result<(), String> {
+pub(crate) async fn run_debugger_check(workspace: &Path, command_str: &str) -> Result<(), String> {
     if command_str.trim().is_empty() {
         return Ok(());
     }
@@ -4890,12 +5219,16 @@ pub(crate) fn render_interactive_mcq(
     let config = AxiomConfig::default();
     let renderer = crate::ui::Renderer::from_config(&config);
 
-    println!();
+    emitln_k!(LineKind::Success);
     let result = crate::ui::interactive_select(question, options, 0, allow_custom, &renderer);
 
     match result {
         crate::ui::SelectionResult::Selected { index, text } => {
-            println!("{}\n", renderer.success(&format!("Selected: {text}")));
+            emitln_k!(
+                LineKind::Success,
+                "{}\n",
+                renderer.success(&format!("Selected: {text}"))
+            );
             Ok(QuestionAnswer {
                 selected: text,
                 index: Some(index + 1),
@@ -4903,7 +5236,11 @@ pub(crate) fn render_interactive_mcq(
             })
         }
         crate::ui::SelectionResult::Custom(custom) => {
-            println!("{}\n", renderer.success(&format!("Custom reply: {custom}")));
+            emitln_k!(
+                LineKind::Success,
+                "{}\n",
+                renderer.success(&format!("Custom reply: {custom}"))
+            );
             Ok(QuestionAnswer {
                 selected: custom,
                 index: Some(options.len() + 1),
@@ -4915,7 +5252,8 @@ pub(crate) fn render_interactive_mcq(
                 .first()
                 .cloned()
                 .unwrap_or_else(|| question.to_string());
-            println!(
+            emitln_k!(
+                LineKind::Success,
                 "{}\n",
                 renderer.success(&format!("Selected default: {first}"))
             );
@@ -4928,7 +5266,7 @@ pub(crate) fn render_interactive_mcq(
     }
 }
 
-struct TerminalApprover {
+pub(crate) struct TerminalApprover {
     mode: PermissionMode,
 }
 
@@ -4940,9 +5278,10 @@ impl SkillApproval for TerminalApprover {
         if self.mode == PermissionMode::Velocity && request.risk_level != "high" {
             return true;
         }
-        println!(
+        emitln!(
             "Axiom approval required [{}]: {}",
-            request.risk_level, request.message
+            request.risk_level,
+            request.message
         );
         confirm("Approve skill execution?", false).unwrap_or(false)
     }
@@ -5006,7 +5345,10 @@ impl SkillApproval for RecordingApprover<'_, '_> {
     }
 }
 
-async fn handle_chat_command(session: &mut ChatSession, input: &str) -> Result<CommandResult> {
+pub(crate) async fn handle_chat_command(
+    session: &mut ChatSession,
+    input: &str,
+) -> Result<CommandResult> {
     let normalized = if let Some(stripped) = input.strip_prefix('!') {
         format!("/{stripped}")
     } else {
@@ -5067,7 +5409,8 @@ async fn handle_chat_command(session: &mut ChatSession, input: &str) -> Result<C
                             session.config.agent.work_mode = next_mode;
                             session.save_config()?;
                             session.persist_session()?;
-                            println!(
+                            emitln_k!(
+                                LineKind::Success,
                                 "{}",
                                 renderer.success(&format!(
                                     "Switched work mode to '{}'.",
@@ -5110,9 +5453,9 @@ async fn handle_chat_command(session: &mut ChatSession, input: &str) -> Result<C
                                 match session.set_variant(chosen) {
                                     Ok(res) => {
                                         session.persist_session()?;
-                                        println!("{}", res.display_message());
+                                        emitln!("{}", res.display_message());
                                     }
-                                    Err(err) => println!("{err}"),
+                                    Err(err) => emitln!("{err}"),
                                 }
                             }
                         }
@@ -5125,7 +5468,8 @@ async fn handle_chat_command(session: &mut ChatSession, input: &str) -> Result<C
                             session.config.llm.thinking = next_val;
                             session.save_config()?;
                             session.persist_session()?;
-                            println!(
+                            emitln_k!(
+                                LineKind::Success,
                                 "{}",
                                 renderer.success(&format!(
                                     "Thinking mode set to '{label}'. Active variant: {}.",
@@ -5140,7 +5484,8 @@ async fn handle_chat_command(session: &mut ChatSession, input: &str) -> Result<C
                                 PermissionMode::Strict => "velocity",
                             };
                             match session.set_permission_mode(next_perm) {
-                                Ok(m) => println!(
+                                Ok(m) => emitln_k!(
+                                    LineKind::Success,
                                     "{}",
                                     renderer.success(&format!(
                                         "Permission mode switched to '{}' ({}).",
@@ -5148,7 +5493,7 @@ async fn handle_chat_command(session: &mut ChatSession, input: &str) -> Result<C
                                         m.description()
                                     ))
                                 ),
-                                Err(err) => println!("{err}"),
+                                Err(err) => emitln!("{err}"),
                             }
                         }
                         4 => {
@@ -5156,28 +5501,35 @@ async fn handle_chat_command(session: &mut ChatSession, input: &str) -> Result<C
                                 let prov = prov.to_string();
                                 match session.available_models(&prov).await {
                                     Ok(models) if models.is_empty() => {
-                                        println!("No models returned by {prov}.");
+                                        emitln!("No models returned by {prov}.");
                                     }
                                     Ok(models) => {
                                         let (visible, total) = models_for_display(&models, None);
-                                        println!("Available models from {prov}:");
+                                        emitln!("Available models from {prov}:");
                                         for model in &visible {
-                                            println!("- {}", model.id);
+                                            emitln!("- {}", model.id);
                                         }
-                                        println!(
+                                        emitln!(
                                             "models: {} shown of {total} matching",
                                             visible.len()
                                         );
                                         if total > visible.len() {
-                                            println!(
+                                            emitln!(
                                                 "Catalog output is capped at {MAX_MODELS_DISPLAYED}; use `/models <filter>` to narrow it."
                                             );
                                         }
                                     }
-                                    Err(err) => println!("Could not fetch models: {err}"),
+                                    Err(err) => emitln_k!(
+                                        LineKind::Warning,
+                                        "Could not fetch models: {err}"
+                                    ),
                                 }
                             } else {
-                                println!("{}", renderer.warning("No active provider configured."));
+                                emitln_k!(
+                                    LineKind::Warning,
+                                    "{}",
+                                    renderer.warning("No active provider configured.")
+                                );
                             }
                         }
                         5 => {
@@ -5189,7 +5541,8 @@ async fn handle_chat_command(session: &mut ChatSession, input: &str) -> Result<C
                             let next_theme = themes[(current_idx + 1) % themes.len()];
                             session.config.ui.theme = next_theme.to_string();
                             session.persist_session()?;
-                            println!(
+                            emitln_k!(
+                                LineKind::Success,
                                 "{}",
                                 renderer.success(&format!("Switched theme to '{next_theme}'."))
                             );
@@ -5220,14 +5573,16 @@ async fn handle_chat_command(session: &mut ChatSession, input: &str) -> Result<C
                                             .and_then(Value::as_str)
                                             .unwrap_or("unknown");
                                         if passed {
-                                            println!(
+                                            emitln_k!(
+                                                LineKind::Success,
                                                 "{}",
                                                 renderer.success(&format!(
                                                     "Tests PASSED ({runner}):\n{output}"
                                                 ))
                                             );
                                         } else {
-                                            println!(
+                                            emitln_k!(
+                                                LineKind::Error,
                                                 "{}",
                                                 renderer.error(format!(
                                                     "Tests FAILED ({runner}):\n{output}"
@@ -5235,7 +5590,7 @@ async fn handle_chat_command(session: &mut ChatSession, input: &str) -> Result<C
                                             );
                                         }
                                     }
-                                    Err(err) => println!("Failed to run tests: {err}"),
+                                    Err(err) => emitln!("Failed to run tests: {err}"),
                                 }
                             }
                         }
@@ -5243,7 +5598,7 @@ async fn handle_chat_command(session: &mut ChatSession, input: &str) -> Result<C
                             session.display_queue(&renderer);
                         }
                         8 => {
-                            println!(
+                            emitln!(
                                 "Audit Proof Status: {}",
                                 if session.config.proof.enabled {
                                     "enabled"
@@ -5251,7 +5606,7 @@ async fn handle_chat_command(session: &mut ChatSession, input: &str) -> Result<C
                                     "disabled"
                                 }
                             );
-                            println!(
+                            emitln!(
                                 "Format: {}, Retention: {} days",
                                 session.config.proof.default_format,
                                 session.config.proof.retention_days
@@ -5260,22 +5615,22 @@ async fn handle_chat_command(session: &mut ChatSession, input: &str) -> Result<C
                         9 => {
                             let cards = session.installed_skill_cards()?;
                             if cards.is_empty() {
-                                println!("No enabled skills installed.");
+                                emitln!("No enabled skills installed.");
                             } else {
-                                println!("Installed enabled skills:");
+                                emitln!("Installed enabled skills:");
                                 for card in cards {
-                                    println!("- {}: {}", card.id, card.summary);
+                                    emitln!("- {}: {}", card.id, card.summary);
                                 }
                             }
                         }
                         10 => {
                             let checkpoints = list_checkpoints(session.agent_checkpoints_dir())?;
                             if checkpoints.is_empty() {
-                                println!("No agent recovery checkpoints in this session.");
+                                emitln!("No agent recovery checkpoints in this session.");
                             } else {
-                                println!("Agent recovery checkpoints:");
+                                emitln!("Agent recovery checkpoints:");
                                 for checkpoint in checkpoints {
-                                    println!(
+                                    emitln!(
                                         "- {} ({} file(s))",
                                         checkpoint.id,
                                         checkpoint.files.len()
@@ -5286,13 +5641,14 @@ async fn handle_chat_command(session: &mut ChatSession, input: &str) -> Result<C
                         11 => {
                             session.clear_history();
                             session.persist_session()?;
-                            println!(
+                            emitln_k!(
+                                LineKind::Success,
                                 "{}",
                                 renderer.success("Session conversation history cleared.")
                             );
                         }
                         12 => {
-                            println!("{}", renderer.command_palette());
+                            emitln!("{}", renderer.command_palette());
                             print_help();
                         }
                         13 => {
@@ -5302,21 +5658,31 @@ async fn handle_chat_command(session: &mut ChatSession, input: &str) -> Result<C
                     }
                 }
             } else {
-                println!("{}", renderer.command_palette());
+                emitln!("{}", renderer.command_palette());
             }
             Ok(CommandResult::Continue)
         }
         "/exit" => Ok(CommandResult::Exit),
         "/status" => {
             let ui = Renderer::from_config(&session.config);
-            println!(
+            emitln_k!(
+                LineKind::Notice,
                 "{}",
                 ui.orchestrator_notice("Checking Axiom install status...")
             );
             let report = run_status_report(&session.config).await;
-            println!("{}", ui.header("Axiom status", env!("CARGO_PKG_VERSION")));
-            println!("{}", ui.header("Install mode", report.mode));
-            println!(
+            emitln_k!(
+                LineKind::Notice,
+                "{}",
+                ui.header("Axiom status", env!("CARGO_PKG_VERSION"))
+            );
+            emitln_k!(
+                LineKind::Notice,
+                "{}",
+                ui.header("Install mode", report.mode)
+            );
+            emitln_k!(
+                LineKind::Notice,
                 "{}",
                 ui.header(
                     "Binary",
@@ -5324,11 +5690,12 @@ async fn handle_chat_command(session: &mut ChatSession, input: &str) -> Result<C
                 )
             );
             if let Some(notes) = &report.notes {
-                println!("{}", ui.warning(notes));
+                emitln_k!(LineKind::Warning, "{}", ui.warning(notes));
             }
             match report.update_state.as_str() {
                 "up_to_date" => {
-                    println!(
+                    emitln_k!(
+                        LineKind::Success,
                         "{}",
                         ui.success(&format!(
                             "Up to date: v{} is the latest release.",
@@ -5338,7 +5705,8 @@ async fn handle_chat_command(session: &mut ChatSession, input: &str) -> Result<C
                 }
                 "update_available" => {
                     if let Some(latest) = &report.latest_version {
-                        println!(
+                        emitln_k!(
+                            LineKind::Warning,
                             "{}",
                             ui.warning(&format!(
                                 "Update available: v{} -> v{latest}. Run /update to install.",
@@ -5348,10 +5716,10 @@ async fn handle_chat_command(session: &mut ChatSession, input: &str) -> Result<C
                     }
                 }
                 "stale" => {
-                    println!("{}", ui.warning(&format!("Stale install: npm package is v{}, but the running binary is v{}. Reinstall (npm install -g axiom-agent --allow-scripts=axiom-agent) or run /update.", report.latest_version.as_deref().unwrap_or("?"), env!("CARGO_PKG_VERSION"))));
+                    emitln_k!(LineKind::Warning, "{}", ui.warning(&format!("Stale install: npm package is v{}, but the running binary is v{}. Reinstall (npm install -g axiom-agent --allow-scripts=axiom-agent) or run /update.", report.latest_version.as_deref().unwrap_or("?"), env!("CARGO_PKG_VERSION"))));
                 }
                 _ => {
-                    println!("{}", ui.warning("Update check failed (network unreachable); version currency unknown. Run /update to retry."));
+                    emitln_k!(LineKind::Warning, "{}", ui.warning("Update check failed (network unreachable); version currency unknown. Run /update to retry."));
                 }
             }
             Ok(CommandResult::Continue)
@@ -5372,7 +5740,7 @@ async fn handle_chat_command(session: &mut ChatSession, input: &str) -> Result<C
         }
         "/help" => {
             let ui = Renderer::from_config(&session.config);
-            println!("{}", ui.command_palette());
+            emitln!("{}", ui.command_palette());
             print_help();
             Ok(CommandResult::Continue)
         }
@@ -5388,17 +5756,23 @@ async fn handle_chat_command(session: &mut ChatSession, input: &str) -> Result<C
                 session.display_queue(&ui);
             } else if rest == "clear" {
                 session.prompt_queue.clear();
-                println!("{}", ui.success("Cleared all pending tasks from queue."));
+                emitln_k!(
+                    LineKind::Success,
+                    "{}",
+                    ui.success("Cleared all pending tasks from queue.")
+                );
             } else if let Some(prompt) = rest.strip_prefix("add ") {
                 let task = prompt.trim();
                 if task.is_empty() {
-                    println!(
+                    emitln_k!(
+                        LineKind::Warning,
                         "{}",
                         ui.warning("Provide a task to enqueue: /queue add <task>")
                     );
                 } else {
                     session.prompt_queue.push_back(task.to_string());
-                    println!(
+                    emitln_k!(
+                        LineKind::Success,
                         "{}",
                         ui.success(&format!(
                             "Enqueued task #{} ({} pending): \"{}\"",
@@ -5410,7 +5784,8 @@ async fn handle_chat_command(session: &mut ChatSession, input: &str) -> Result<C
                 }
             } else {
                 session.prompt_queue.push_back(rest.to_string());
-                println!(
+                emitln_k!(
+                    LineKind::Success,
                     "{}",
                     ui.success(&format!(
                         "Enqueued task #{} ({} pending): \"{}\"",
@@ -5440,7 +5815,7 @@ async fn handle_chat_command(session: &mut ChatSession, input: &str) -> Result<C
                 input.strip_prefix("/resume ").unwrap_or("").trim()
             };
             if let Err(e) = session.switch_to_session(&ui, target) {
-                println!("{}", ui.error(e));
+                emitln_k!(LineKind::Error, "{}", ui.error(e));
             }
             Ok(CommandResult::Continue)
         }
@@ -5456,12 +5831,12 @@ async fn handle_chat_command(session: &mut ChatSession, input: &str) -> Result<C
                     false,
                 )? {
                     latest.restore(session.workspace_path())?;
-                    println!("Restored checkpoint {}.", latest.id);
+                    emitln!("Restored checkpoint {}.", latest.id);
                 } else {
-                    println!("Undo cancelled.");
+                    emitln!("Undo cancelled.");
                 }
             } else {
-                println!("No workspace checkpoints available to undo.");
+                emitln!("No workspace checkpoints available to undo.");
             }
             Ok(CommandResult::Continue)
         }
@@ -5499,9 +5874,9 @@ async fn handle_chat_command(session: &mut ChatSession, input: &str) -> Result<C
                     match session.set_variant(chosen) {
                         Ok(res) => {
                             session.persist_session()?;
-                            println!("{}", res.display_message());
+                            emitln!("{}", res.display_message());
                         }
-                        Err(error) => println!("{error}"),
+                        Err(error) => emitln!("{error}"),
                     }
                 }
             } else {
@@ -5513,11 +5888,11 @@ async fn handle_chat_command(session: &mut ChatSession, input: &str) -> Result<C
                     .active_provider
                     .as_deref()
                     .unwrap_or("none");
-                println!(
+                emitln!(
                     "Active Variant: {active_var} (model: {active_model}, provider: {active_prov})"
                 );
-                println!("Available variants: Default, low, medium, high, xhigh");
-                println!("Use `/variant <Default|low|medium|high|xhigh>` to switch.");
+                emitln!("Available variants: Default, low, medium, high, xhigh");
+                emitln!("Use `/variant <Default|low|medium|high|xhigh>` to switch.");
             }
             Ok(CommandResult::Continue)
         }
@@ -5533,13 +5908,13 @@ async fn handle_chat_command(session: &mut ChatSession, input: &str) -> Result<C
                 Ok(valid_var) => match session.set_variant(valid_var) {
                     Ok(res) => {
                         session.persist_session()?;
-                        println!("{}", res.display_message());
+                        emitln!("{}", res.display_message());
                     }
-                    Err(error) => println!("{error}"),
+                    Err(error) => emitln_k!(LineKind::Error, "{error}"),
                 },
                 Err(e) => {
                     let ui = Renderer::from_config(&session.config);
-                    println!("{}", ui.error(e));
+                    emitln_k!(LineKind::Error, "{}", ui.error(e));
                 }
             }
             Ok(CommandResult::Continue)
@@ -5548,7 +5923,8 @@ async fn handle_chat_command(session: &mut ChatSession, input: &str) -> Result<C
             session.set_work_mode(AgentWorkMode::Plan)?;
             session.persist_session()?;
             let ui = Renderer::from_config(&session.config);
-            println!(
+            emitln_k!(
+                LineKind::Notice,
                 "{}",
                 ui.orchestrator_notice(
                     "Switched to Plan Mode. Axiom will plan changes before modifying files."
@@ -5560,7 +5936,8 @@ async fn handle_chat_command(session: &mut ChatSession, input: &str) -> Result<C
             session.set_work_mode(AgentWorkMode::Build)?;
             session.persist_session()?;
             let ui = Renderer::from_config(&session.config);
-            println!(
+            emitln_k!(
+                LineKind::Notice,
                 "{}",
                 ui.orchestrator_notice(
                     "Switched to Build Mode. Axiom will actively implement and execute changes."
@@ -5597,16 +5974,16 @@ async fn handle_chat_command(session: &mut ChatSession, input: &str) -> Result<C
                     match session.set_thinking(new_state) {
                         Ok(_) => {
                             session.persist_session()?;
-                            println!("Thinking mode set to '{}'.", session.thinking_display());
+                            emitln!("Thinking mode set to '{}'.", session.thinking_display());
                         }
-                        Err(error) => println!("{error}"),
+                        Err(error) => emitln!("{error}"),
                     }
                 }
             } else {
                 let current = session.thinking_display();
-                println!("Current thinking mode: {current}");
-                println!("Available modes: auto, on, off");
-                println!("Use `/thinking <on|off|auto>` to switch.");
+                emitln!("Current thinking mode: {current}");
+                emitln!("Available modes: auto, on, off");
+                emitln!("Use `/thinking <on|off|auto>` to switch.");
             }
             Ok(CommandResult::Continue)
         }
@@ -5623,23 +6000,23 @@ async fn handle_chat_command(session: &mut ChatSession, input: &str) -> Result<C
                 "on" | "enable" | "enabled" | "true" => {
                     session.set_thinking(Some(true))?;
                     session.persist_session()?;
-                    println!("Thinking mode set to 'on' (thinking tokens enabled).");
+                    emitln!("Thinking mode set to 'on' (thinking tokens enabled).");
                 }
                 "off" | "disable" | "disabled" | "false" => {
                     session.set_thinking(Some(false))?;
                     session.persist_session()?;
-                    println!("Thinking mode set to 'off' (thinking tokens disabled).");
+                    emitln!("Thinking mode set to 'off' (thinking tokens disabled).");
                 }
                 "auto" | "default" | "reset" => {
                     session.set_thinking(None)?;
                     session.persist_session()?;
-                    println!("Thinking mode set to 'auto' (follows model/variant defaults).");
+                    emitln!("Thinking mode set to 'auto' (follows model/variant defaults).");
                 }
                 "status" => {
-                    println!("Current thinking mode: {}", session.thinking_display());
+                    emitln!("Current thinking mode: {}", session.thinking_display());
                 }
                 _ => {
-                    println!(
+                    emitln!(
                         "Unknown thinking setting '{target}'. Use `/thinking on`, `/thinking off`, or `/thinking auto`."
                     );
                 }
@@ -5648,16 +6025,18 @@ async fn handle_chat_command(session: &mut ChatSession, input: &str) -> Result<C
         }
         "/update" => {
             let ui = Renderer::from_config(&session.config);
-            println!(
+            emitln_k!(
+                LineKind::Notice,
                 "{}",
                 ui.orchestrator_notice("Checking for updates from GitHub...")
             );
             if let Some((curr, latest)) = check_for_startup_update(&session.config).await {
                 for line in ui.update_notification_card(&curr, &latest) {
-                    println!("{line}");
+                    emitln_k!(LineKind::Notice, "{line}");
                 }
-                println!();
-                println!(
+                emitln_k!(LineKind::Notice);
+                emitln_k!(
+                    LineKind::Notice,
                     "{}",
                     ui.orchestrator_notice(&format!(
                         "Downloading and installing Axiom v{latest}..."
@@ -5672,7 +6051,7 @@ async fn handle_chat_command(session: &mut ChatSession, input: &str) -> Result<C
 
                 match mode {
                     InstallationMode::CargoDev => {
-                        println!(
+                        emitln_k!(LineKind::Warning,
                             "{}",
                             ui.warning(
                                 "Running from Cargo development build. Auto-update is disabled for dev builds."
@@ -5680,7 +6059,8 @@ async fn handle_chat_command(session: &mut ChatSession, input: &str) -> Result<C
                         );
                     }
                     InstallationMode::NpmGlobal => {
-                        println!(
+                        emitln_k!(
+                            LineKind::Notice,
                             "{}",
                             ui.orchestrator_notice(&format!(
                                 "Restarting to install Axiom v{latest} globally via npm..."
@@ -5690,7 +6070,7 @@ async fn handle_chat_command(session: &mut ChatSession, input: &str) -> Result<C
                     }
                     _ => match crate::update_commands::install().await {
                         Ok(()) => {
-                            println!(
+                            emitln_k!(LineKind::Success,
                                 "{}",
                                 ui.success(&format!(
                                     "Successfully updated Axiom to v{latest}! Please restart Axiom to use the new version."
@@ -5701,15 +6081,19 @@ async fn handle_chat_command(session: &mut ChatSession, input: &str) -> Result<C
                             if crate::update_commands::run_npm_global_update(binary_path.as_deref())
                                 .is_ok()
                             {
-                                println!(
+                                emitln_k!(LineKind::Success,
                                     "{}",
                                     ui.success(&format!(
                                         "Successfully updated Axiom to v{latest}! Please restart Axiom to use the new version."
                                     ))
                                 );
                             } else {
-                                println!("{}", ui.error(format!("Automatic update failed: {err}")));
-                                println!(
+                                emitln_k!(
+                                    LineKind::Error,
+                                    "{}",
+                                    ui.error(format!("Automatic update failed: {err}"))
+                                );
+                                emitln!(
                                     "To update manually, run: npm install -g axiom-agent@latest"
                                 );
                             }
@@ -5717,7 +6101,8 @@ async fn handle_chat_command(session: &mut ChatSession, input: &str) -> Result<C
                     },
                 }
             } else {
-                println!(
+                emitln_k!(
+                    LineKind::Success,
                     "{}",
                     ui.success(&format!(
                         "Axiom is up to date (v{}).",
@@ -5758,24 +6143,24 @@ async fn handle_chat_command(session: &mut ChatSession, input: &str) -> Result<C
                     match session.set_permission_mode(target) {
                         Ok(new_mode) => {
                             let desc = new_mode.description();
-                            println!(
+                            emitln!(
                                 "Switched permission mode to '{}' ({}).",
                                 new_mode.as_str(),
                                 desc
                             );
                         }
-                        Err(error) => println!("{error}"),
+                        Err(error) => emitln!("{error}"),
                     }
                 }
             } else {
                 let mode = session.permission_mode();
-                println!("Active Permission Mode: {}", mode.as_str());
-                println!("Description: {}", mode.description());
-                println!("\nAvailable permission modes:");
-                println!("  - velocity:     Balanced agentic speed; auto-approves workspace edits & safe commands, asks on git/destructive actions (recommended)");
-                println!("  - full_machine: Unrestricted access; auto-approves all filesystem, process, network, and git actions without prompting");
-                println!("  - strict:       Zero-trust security; requires explicit confirmation for all writes, execution, and external requests");
-                println!(
+                emitln!("Active Permission Mode: {}", mode.as_str());
+                emitln!("Description: {}", mode.description());
+                emitln!("\nAvailable permission modes:");
+                emitln!("  - velocity:     Balanced agentic speed; auto-approves workspace edits & safe commands, asks on git/destructive actions (recommended)");
+                emitln!("  - full_machine: Unrestricted access; auto-approves all filesystem, process, network, and git actions without prompting");
+                emitln!("  - strict:       Zero-trust security; requires explicit confirmation for all writes, execution, and external requests");
+                emitln!(
                     "\nUse `/permission <velocity|full_machine|strict>` (alias: `/mode`) to switch."
                 );
             }
@@ -5806,7 +6191,7 @@ async fn handle_chat_command(session: &mut ChatSession, input: &str) -> Result<C
                         "Switched to Build Mode. Axiom will actively implement and execute changes."
                     }
                 };
-                println!("{}", ui.orchestrator_notice(notice));
+                emitln_k!(LineKind::Notice, "{}", ui.orchestrator_notice(notice));
                 return Ok(CommandResult::Continue);
             }
 
@@ -5814,17 +6199,17 @@ async fn handle_chat_command(session: &mut ChatSession, input: &str) -> Result<C
                 Ok(valid_perm) => match session.set_permission_mode(valid_perm.as_str()) {
                     Ok(new_mode) => {
                         let desc = new_mode.description();
-                        println!(
+                        emitln!(
                             "Switched permission mode to '{}' ({}).",
                             new_mode.as_str(),
                             desc
                         );
                     }
-                    Err(error) => println!("{error}"),
+                    Err(error) => emitln_k!(LineKind::Error, "{error}"),
                 },
                 Err(e) => {
                     let ui = Renderer::from_config(&session.config);
-                    println!("{}", ui.error(e));
+                    emitln_k!(LineKind::Error, "{}", ui.error(e));
                 }
             }
             Ok(CommandResult::Continue)
@@ -5864,12 +6249,12 @@ async fn handle_chat_command(session: &mut ChatSession, input: &str) -> Result<C
                     };
                     session.config.ui.theme = target.to_string();
                     session.persist_session()?;
-                    println!("Switched theme to '{target}'.");
+                    emitln!("Switched theme to '{target}'.");
                 }
             } else {
-                println!("Active Theme: {}", session.config.ui.theme);
-                println!("Available themes: axiom, blood_red, ash, high_contrast");
-                println!("Use `/theme <axiom|blood_red|ash|high_contrast>` to switch.");
+                emitln!("Active Theme: {}", session.config.ui.theme);
+                emitln!("Available themes: axiom, blood_red, ash, high_contrast");
+                emitln!("Use `/theme <axiom|blood_red|ash|high_contrast>` to switch.");
             }
             Ok(CommandResult::Continue)
         }
@@ -5885,9 +6270,9 @@ async fn handle_chat_command(session: &mut ChatSession, input: &str) -> Result<C
             if ["axiom", "blood_red", "ash", "high_contrast"].contains(&normalized.as_str()) {
                 session.config.ui.theme = normalized.clone();
                 session.persist_session()?;
-                println!("Switched theme to '{normalized}'.");
+                emitln!("Switched theme to '{normalized}'.");
             } else {
-                println!(
+                emitln!(
                     "Invalid theme '{target}'. Available: axiom, blood_red, ash, high_contrast"
                 );
             }
@@ -5897,30 +6282,30 @@ async fn handle_chat_command(session: &mut ChatSession, input: &str) -> Result<C
         "/show" => {
             let outputs = session.saved_output_ids()?;
             if outputs.is_empty() {
-                println!("No saved tool outputs in this session.");
+                emitln!("No saved tool outputs in this session.");
             } else {
-                println!("Saved tool outputs: {}", outputs.join(", "));
+                emitln!("Saved tool outputs: {}", outputs.join(", "));
             }
             Ok(CommandResult::Continue)
         }
         "/checkpoints" => {
             let checkpoints = list_checkpoints(session.agent_checkpoints_dir())?;
             if checkpoints.is_empty() {
-                println!("No agent recovery checkpoints in this session.");
+                emitln!("No agent recovery checkpoints in this session.");
             } else {
-                println!("Agent recovery checkpoints:");
+                emitln!("Agent recovery checkpoints:");
                 for checkpoint in checkpoints {
-                    println!("- {} ({} file(s))", checkpoint.id, checkpoint.files.len());
+                    emitln!("- {} ({} file(s))", checkpoint.id, checkpoint.files.len());
                 }
             }
             Ok(CommandResult::Continue)
         }
         "/model" | "/model current" => {
-            println!(
+            emitln!(
                 "Current model: {}",
                 session.active_model().unwrap_or("not configured")
             );
-            println!("Use `/model <name>` to switch, or `/model list` to see available models.");
+            emitln!("Use `/model <name>` to switch, or `/model list` to see available models.");
             Ok(CommandResult::Continue)
         }
         _ if input == "/model list"
@@ -5943,51 +6328,51 @@ async fn handle_chat_command(session: &mut ChatSession, input: &str) -> Result<C
                 input.strip_prefix("/model list").map(str::trim)
             };
             match session.available_models(&provider).await {
-                Ok(models) if models.is_empty() => println!("No models returned by {provider}."),
+                Ok(models) if models.is_empty() => emitln!("No models returned by {provider}."),
                 Ok(models) => {
                     let (visible, total) = models_for_display(&models, filter);
-                    println!("Available models from {provider}:");
+                    emitln!("Available models from {provider}:");
                     for model in &visible {
-                        println!("- {}", model.id);
+                        emitln!("- {}", model.id);
                     }
-                    println!("models: {} shown of {total} matching", visible.len());
+                    emitln!("models: {} shown of {total} matching", visible.len());
                     if total > visible.len() {
-                        println!(
+                        emitln!(
                             "Catalog output is capped at {MAX_MODELS_DISPLAYED}; use `/models <filter>` to narrow it."
                         );
                     }
                 }
-                Err(error) => println!("Could not fetch models: {error}"),
+                Err(error) => emitln!("Could not fetch models: {error}"),
             }
             Ok(CommandResult::Continue)
         }
         "/provider current" => {
-            println!(
+            emitln!(
                 "Current provider: {}",
                 session.active_provider().unwrap_or("not configured")
             );
             Ok(CommandResult::Continue)
         }
         "/provider" => {
-            println!(
+            emitln!(
                 "Current provider: {}",
                 session.active_provider().unwrap_or("not configured")
             );
             let providers = session.provider_names();
             if providers.is_empty() {
-                println!("No providers configured.");
-                println!("Add one with /provider add.");
+                emitln!("No providers configured.");
+                emitln!("Add one with /provider add.");
             } else {
-                println!("Configured providers:");
+                emitln!("Configured providers:");
                 for provider in providers {
                     let marker = if Some(provider.as_str()) == session.active_provider() {
                         "*"
                     } else {
                         "-"
                     };
-                    println!("{marker} {provider}");
+                    emitln!("{marker} {provider}");
                 }
-                println!("Switch with /provider <name>.");
+                emitln!("Switch with /provider <name>.");
             }
             Ok(CommandResult::Continue)
         }
@@ -6002,20 +6387,20 @@ async fn handle_chat_command(session: &mut ChatSession, input: &str) -> Result<C
             match session.set_provider(provider) {
                 Ok(provider) => {
                     session.persist_session()?;
-                    println!("Provider switched to {provider}.");
+                    emitln!("Provider switched to {provider}.");
                     if let Some(model) = session.active_model() {
-                        println!(
+                        emitln!(
                             "Model set to {model} (provider default; change with /model <id>)."
                         );
                     }
                 }
                 Err(error) => {
-                    println!("Provider switch failed: {error}");
+                    emitln!("Provider switch failed: {error}");
                     let configured = session.provider_names();
                     if configured.is_empty() {
-                        println!("No providers configured. Add one with /provider add.");
+                        emitln!("No providers configured. Add one with /provider add.");
                     } else {
-                        println!("Configured: {}", configured.join(", "));
+                        emitln!("Configured: {}", configured.join(", "));
                     }
                 }
             }
@@ -6024,16 +6409,16 @@ async fn handle_chat_command(session: &mut ChatSession, input: &str) -> Result<C
         "/provider list" => {
             let providers = session.provider_names();
             if providers.is_empty() {
-                println!("No providers configured.");
+                emitln!("No providers configured.");
             } else {
-                println!("Configured providers:");
+                emitln!("Configured providers:");
                 for provider in providers {
                     let marker = if Some(provider.as_str()) == session.active_provider() {
                         "*"
                     } else {
                         "-"
                     };
-                    println!("{marker} {provider}");
+                    emitln!("{marker} {provider}");
                 }
             }
             Ok(CommandResult::Continue)
@@ -6046,7 +6431,7 @@ async fn handle_chat_command(session: &mut ChatSession, input: &str) -> Result<C
                 let _ = io::stdout().flush();
             }
             let ui = Renderer::from_config(&session.config);
-            println!(
+            emitln!(
                 "{}",
                 ui.dashboard_banner(
                     session.active_provider().unwrap_or("not configured"),
@@ -6058,21 +6443,21 @@ async fn handle_chat_command(session: &mut ChatSession, input: &str) -> Result<C
                     session.work_mode().as_str(),
                 )
             );
-            println!("Conversation cleared.");
+            emitln!("Conversation cleared.");
             Ok(CommandResult::Continue)
         }
         "/proof on" => {
             session.set_proof_enabled(true)?;
-            println!("Proof Mode enabled.");
+            emitln!("Proof Mode enabled.");
             Ok(CommandResult::Continue)
         }
         "/proof off" => {
             session.set_proof_enabled(false)?;
-            println!("Proof Mode disabled.");
+            emitln!("Proof Mode disabled.");
             Ok(CommandResult::Continue)
         }
         "/proof status" => {
-            println!(
+            emitln!(
                 "Proof Mode: {}",
                 if session.config.proof.enabled {
                     "enabled"
@@ -6087,7 +6472,7 @@ async fn handle_chat_command(session: &mut ChatSession, input: &str) -> Result<C
                 &session.config_path,
             ))? {
                 Some(entry) => {
-                    println!(
+                    emitln!(
                         "Latest proof: {}",
                         entry
                             .markdown_path
@@ -6095,20 +6480,20 @@ async fn handle_chat_command(session: &mut ChatSession, input: &str) -> Result<C
                             .unwrap_or(&entry.json_path)
                             .display()
                     );
-                    println!("{} {} - {}", entry.task_id, entry.status, entry.summary);
+                    emitln!("{} {} - {}", entry.task_id, entry.status, entry.summary);
                 }
-                None => println!("No proof traces found."),
+                None => emitln!("No proof traces found."),
             }
             Ok(CommandResult::Continue)
         }
         "/skills" | "/skill" | "/skills list" | "/skill list" => {
             let cards = session.installed_skill_cards()?;
             if cards.is_empty() {
-                println!("No enabled skills installed.");
+                emitln!("No enabled skills installed.");
             } else {
-                println!("Installed enabled skills ({}):", cards.len());
+                emitln!("Installed enabled skills ({}):", cards.len());
                 for card in cards {
-                    println!("  • {}: {}", card.id, card.summary);
+                    emitln!("  • {}: {}", card.id, card.summary);
                 }
             }
             Ok(CommandResult::Continue)
@@ -6122,20 +6507,20 @@ async fn handle_chat_command(session: &mut ChatSession, input: &str) -> Result<C
                 ""
             };
             if target.is_empty() {
-                println!("Usage: /skill install <skill_id | local_path | github:owner/repo>");
-                println!("Examples:");
-                println!("  /skill install deep-research");
-                println!("  /skill install github-research");
-                println!("  /skill install humanized-codes");
-                println!("  /skill install game-builder");
-                println!("  /skill install test.run");
-                println!("  /skill install ./path/to/custom-skill");
-                println!("  /skill install github:owner/repo");
+                emitln!("Usage: /skill install <skill_id | local_path | github:owner/repo>");
+                emitln!("Examples:");
+                emitln!("  /skill install deep-research");
+                emitln!("  /skill install github-research");
+                emitln!("  /skill install humanized-codes");
+                emitln!("  /skill install game-builder");
+                emitln!("  /skill install test.run");
+                emitln!("  /skill install ./path/to/custom-skill");
+                emitln!("  /skill install github:owner/repo");
             } else {
-                println!("Installing skill '{target}'...");
+                emitln!("Installing skill '{target}'...");
                 match crate::skill_commands::install_skill_entry(target).await {
-                    Ok(()) => println!("✔ Skill '{target}' installed successfully! Type /skills to view active skills."),
-                    Err(e) => println!("✖ Failed to install skill '{target}': {e}"),
+                    Ok(()) => emitln!("✔ Skill '{target}' installed successfully! Type /skills to view active skills."),
+                    Err(e) => emitln!("✖ Failed to install skill '{target}': {e}"),
                 }
             }
             Ok(CommandResult::Continue)
@@ -6143,15 +6528,15 @@ async fn handle_chat_command(session: &mut ChatSession, input: &str) -> Result<C
         _ if input.starts_with("/skills selected") => {
             let prompt = input.trim_start_matches("/skills selected").trim();
             if prompt.is_empty() {
-                println!("Usage: /skills selected <message>");
+                emitln!("Usage: /skills selected <message>");
             } else {
                 let cards = session.select_skill_cards(prompt, 5)?;
                 if cards.is_empty() {
-                    println!("Selected no skills.");
+                    emitln!("Selected no skills.");
                 } else {
-                    println!("Selected skills:");
+                    emitln!("Selected skills:");
                     for card in cards {
-                        println!("- {}: {}", card.id, card.summary);
+                        emitln!("- {}: {}", card.id, card.summary);
                     }
                 }
             }
@@ -6181,16 +6566,16 @@ async fn handle_chat_command(session: &mut ChatSession, input: &str) -> Result<C
             };
 
             match session.resolve_and_switch_model(model, force).await {
-                Ok(outcome) => println!("{}", outcome.display_message()),
-                Err(error) => println!("Model switch failed: {error}"),
+                Ok(outcome) => emitln!("{}", outcome.display_message()),
+                Err(error) => emitln!("Model switch failed: {error}"),
             }
             Ok(CommandResult::Continue)
         }
         _ if input.starts_with("/show ") => {
             let id = input.trim_start_matches("/show ").trim();
             match session.show_saved_output(id) {
-                Ok(content) => println!("{content}"),
-                Err(error) => println!("Could not show output: {error}"),
+                Ok(content) => emitln!("{content}"),
+                Err(error) => emitln!("Could not show output: {error}"),
             }
             Ok(CommandResult::Continue)
         }
@@ -6201,7 +6586,7 @@ async fn handle_chat_command(session: &mut ChatSession, input: &str) -> Result<C
                     .bytes()
                     .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
             {
-                println!("Invalid checkpoint ID.");
+                emitln!("Invalid checkpoint ID.");
                 return Ok(CommandResult::Continue);
             }
             let checkpoint = WorkspaceCheckpoint::load(session.agent_checkpoints_dir().join(id))?;
@@ -6214,9 +6599,9 @@ async fn handle_chat_command(session: &mut ChatSession, input: &str) -> Result<C
                 false,
             )? {
                 checkpoint.restore(session.workspace_path())?;
-                println!("Restored checkpoint {}.", checkpoint.id);
+                emitln!("Restored checkpoint {}.", checkpoint.id);
             } else {
-                println!("Checkpoint restore cancelled.");
+                emitln!("Checkpoint restore cancelled.");
             }
             Ok(CommandResult::Continue)
         }
@@ -6247,12 +6632,12 @@ async fn handle_chat_command(session: &mut ChatSession, input: &str) -> Result<C
                                 );
                                 session.save_config()?;
                                 session.persist_session()?;
-                                println!("Provider '{}' added successfully!", preset.id);
+                                emitln!("Provider '{}' added successfully!", preset.id);
                             }
-                            Err(error) => println!("Failed to set up provider: {error}"),
+                            Err(error) => emitln!("Failed to set up provider: {error}"),
                         }
                     } else {
-                        println!("Configure Custom OpenAI-Compatible Provider:");
+                        emitln!("Configure Custom OpenAI-Compatible Provider:");
                         let name = crate::onboarding::prompt_required("Provider name")?;
                         let base_url = crate::onboarding::prompt_required(
                             "Base URL (e.g. https://api.myllm.com/v1)",
@@ -6280,12 +6665,12 @@ async fn handle_chat_command(session: &mut ChatSession, input: &str) -> Result<C
                         crate::onboarding::apply_provider_setup(&mut session.config, &setup);
                         session.save_config()?;
                         session.persist_session()?;
-                        println!("Custom provider '{name}' added successfully!");
+                        emitln!("Custom provider '{name}' added successfully!");
                     }
                 }
             } else {
-                println!("Usage: /provider add <provider_name>");
-                println!("Available presets: groq, openrouter, gemini, github-models, opencode, gmicloud, nvidia, openai, ollama, ollama_cloud, lm-studio");
+                emitln!("Usage: /provider add <provider_name>");
+                emitln!("Available presets: groq, openrouter, gemini, github-models, opencode, gmicloud, nvidia, openai, ollama, ollama_cloud, lm-studio");
             }
             Ok(CommandResult::Continue)
         }
@@ -6328,18 +6713,19 @@ async fn handle_chat_command(session: &mut ChatSession, input: &str) -> Result<C
                         crate::onboarding::apply_provider_setup(&mut session.config, &setup);
                         session.save_config()?;
                         session.persist_session()?;
-                        println!("Provider '{}' added and saved to config!", preset.id);
+                        emitln!("Provider '{}' added and saved to config!", preset.id);
                     }
-                    Err(error) => println!("Failed to set up provider: {error}"),
+                    Err(error) => emitln!("Failed to set up provider: {error}"),
                 }
             } else {
-                println!("Unknown preset '{preset_name}'. Supported: groq, openrouter, gemini, github-models, opencode, gmicloud, nvidia, openai, ollama, ollama_cloud, lm-studio");
+                emitln!("Unknown preset '{preset_name}'. Supported: groq, openrouter, gemini, github-models, opencode, gmicloud, nvidia, openai, ollama, ollama_cloud, lm-studio");
             }
             Ok(CommandResult::Continue)
         }
         "/test" | "/tests" => {
             let ui = Renderer::from_config(&session.config);
-            println!(
+            emitln_k!(
+                LineKind::Notice,
                 "{}",
                 ui.orchestrator_notice(
                     "Auto-detecting workspace tests and running verification..."
@@ -6368,19 +6754,20 @@ async fn handle_chat_command(session: &mut ChatSession, input: &str) -> Result<C
                         let summary = result.get("summary").and_then(Value::as_str).unwrap_or("");
                         let output = result.get("output").and_then(Value::as_str).unwrap_or("");
                         if passed {
-                            println!(
+                            emitln_k!(
+                                LineKind::Success,
                                 "{}",
                                 ui.success(&format!("Tests Passed [{framework}]: {summary}"))
                             );
                         } else {
-                            println!("  ✖ Test Failure [{framework}]: {summary}");
+                            emitln!("  ✖ Test Failure [{framework}]: {summary}");
                             if !output.trim().is_empty() {
-                                println!("\n{output}");
+                                emitln!("\n{output}");
                             }
                         }
                     }
                     Err(err) => {
-                        println!("  ✖ Failed to run tests: {err}");
+                        emitln!("  ✖ Failed to run tests: {err}");
                     }
                 }
             }
@@ -6393,7 +6780,8 @@ async fn handle_chat_command(session: &mut ChatSession, input: &str) -> Result<C
                 input.trim_start_matches("/tests ").trim()
             };
             let ui = Renderer::from_config(&session.config);
-            println!(
+            emitln_k!(
+                LineKind::Notice,
                 "{}",
                 ui.orchestrator_notice(&format!("Running test command: `{cmd}`..."))
             );
@@ -6416,16 +6804,20 @@ async fn handle_chat_command(session: &mut ChatSession, input: &str) -> Result<C
                         let summary = result.get("summary").and_then(Value::as_str).unwrap_or("");
                         let output = result.get("output").and_then(Value::as_str).unwrap_or("");
                         if passed {
-                            println!("{}", ui.success(&format!("Tests Passed: {summary}")));
+                            emitln_k!(
+                                LineKind::Success,
+                                "{}",
+                                ui.success(&format!("Tests Passed: {summary}"))
+                            );
                         } else {
-                            println!("  ✖ Test Failure: {summary}");
+                            emitln!("  ✖ Test Failure: {summary}");
                             if !output.trim().is_empty() {
-                                println!("\n{output}");
+                                emitln!("\n{output}");
                             }
                         }
                     }
                     Err(err) => {
-                        println!("  ✖ Failed to run tests: {err}");
+                        emitln!("  ✖ Failed to run tests: {err}");
                     }
                 }
             }
@@ -6436,69 +6828,69 @@ async fn handle_chat_command(session: &mut ChatSession, input: &str) -> Result<C
             match session.set_provider(provider) {
                 Ok(provider) => {
                     session.persist_session()?;
-                    println!("Provider switched to {provider}.")
+                    emitln!("Provider switched to {provider}.")
                 }
-                Err(error) => println!("Provider switch failed: {error}"),
+                Err(error) => emitln!("Provider switch failed: {error}"),
             }
             Ok(CommandResult::Continue)
         }
         _ => {
-            println!("Unknown command. Type /help for commands, or / to view suggestions.");
+            emitln!("Unknown command. Type /help for commands, or / to view suggestions.");
             Ok(CommandResult::Continue)
         }
     }
 }
 
 fn print_help() {
-    println!("Commands (prefix with '/'):");
-    println!(
+    emitln!("Commands (prefix with '/'):");
+    emitln!(
         "  /variant [Default|low|medium|high|xhigh]  Configure model variant (alias: /variants)"
     );
-    println!(
+    emitln!(
         "  /thinking [on|off|auto]             Toggle reasoning/thinking mode (alias: /reasoning)"
     );
-    println!(
+    emitln!(
         "  /test [command]                     Auto-detect and run workspace tests (alias: /tests)"
     );
-    println!("  /model [name]                       Switch or view active LLM model");
-    println!("  /model list [FILTER]                Fetch catalog view of available models");
-    println!("  /models [FILTER]                    Alias for `/model list [FILTER]`");
-    println!("  /permission [velocity|full|strict]  Switch permission mode (alias: /mode)");
-    println!("  /theme [axiom|blood|ash|high]       Switch visual color theme (alias: /themes)");
-    println!(
+    emitln!("  /model [name]                       Switch or view active LLM model");
+    emitln!("  /model list [FILTER]                Fetch catalog view of available models");
+    emitln!("  /models [FILTER]                    Alias for `/model list [FILTER]`");
+    emitln!("  /permission [velocity|full|strict]  Switch permission mode (alias: /mode)");
+    emitln!("  /theme [axiom|blood|ash|high]       Switch visual color theme (alias: /themes)");
+    emitln!(
         "  /update                             Check for and automatically install latest updates"
     );
-    println!("  /status                             Show version, install mode, and binary health");
-    println!("  /queue [add <task>|list|clear]      Manage sequential background task queue");
-    println!("  /undo                               Restore latest workspace checkpoint");
-    println!("  /checkpoints                        List recovery snapshots");
-    println!("  /restore CHECKPOINT_ID              Restore an agent recovery snapshot");
-    println!("  /skills                             List active and installed skills");
-    println!("  /skills selected <message>          Simulate skill routing for a message");
-    println!("  /provider [<name>]                 Show or switch the active LLM provider");
-    println!("  /provider current | list | use <p>  Inspect providers (aliases)");
-    println!(
+    emitln!("  /status                             Show version, install mode, and binary health");
+    emitln!("  /queue [add <task>|list|clear]      Manage sequential background task queue");
+    emitln!("  /undo                               Restore latest workspace checkpoint");
+    emitln!("  /checkpoints                        List recovery snapshots");
+    emitln!("  /restore CHECKPOINT_ID              Restore an agent recovery snapshot");
+    emitln!("  /skills                             List active and installed skills");
+    emitln!("  /skills selected <message>          Simulate skill routing for a message");
+    emitln!("  /provider [<name>]                 Show or switch the active LLM provider");
+    emitln!("  /provider current | list | use <p>  Inspect providers (aliases)");
+    emitln!(
         "  /provider add [name]                Add or configure a new provider post-onboarding"
     );
-    println!("  /clear                              Clear session history");
-    println!("  /proof on | off | status | latest   Audit and execution provenance");
-    println!(
+    emitln!("  /clear                              Clear session history");
+    emitln!("  /proof on | off | status | latest   Audit and execution provenance");
+    emitln!(
         "  /plan                               Switch to plan mode (read-only until you apply)"
     );
-    println!("  /build                              Switch to build mode (normal tool execution)");
-    println!(
+    emitln!("  /build                              Switch to build mode (normal tool execution)");
+    emitln!(
         "  /todo                               Show the plan Axiom is tracking for this session"
     );
-    println!(
+    emitln!(
         "  /workspace [path]                   Show or change the directory the agent may write to"
     );
-    println!("  /history [SESSION_ID]               List past sessions or switch to one");
-    println!("  /resume SESSION_ID                  Continue a previous conversation");
-    println!("  /multi                              Enter multiline prompt mode (/send to run)");
-    println!("  /show [OUTPUT_ID]                   Display durable tool output");
-    println!("  /commands                           Display interactive command palette");
-    println!("  /help                               Show this help message");
-    println!("  /exit                               Exit Axiom session");
+    emitln!("  /history [SESSION_ID]               List past sessions or switch to one");
+    emitln!("  /resume SESSION_ID                  Continue a previous conversation");
+    emitln!("  /multi                              Enter multiline prompt mode (/send to run)");
+    emitln!("  /show [OUTPUT_ID]                   Display durable tool output");
+    emitln!("  /commands                           Display interactive command palette");
+    emitln!("  /help                               Show this help message");
+    emitln!("  /exit                               Exit Axiom session");
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -6579,9 +6971,9 @@ pub(crate) fn confirm(label: &str, default: bool) -> Result<bool> {
         let mut input = String::new();
         let bytes = io::stdin().read_line(&mut input)?;
         if bytes == 0 {
-            println!();
-            println!("No answer received (end of input). Treating this as 'no' to stay safe.");
-            println!("Re-run in a terminal to answer interactively, or pass --yes explicitly.");
+            emitln!();
+            emitln!("No answer received (end of input). Treating this as 'no' to stay safe.");
+            emitln!("Re-run in a terminal to answer interactively, or pass --yes explicitly.");
             return Ok(false);
         }
 
@@ -6589,7 +6981,7 @@ pub(crate) fn confirm(label: &str, default: bool) -> Result<bool> {
         let trimmed = cleaned.trim().to_ascii_lowercase();
         if trimmed.is_empty() {
             if !io::stdin().is_terminal() {
-                println!("Non-interactive input: please answer y or n explicitly.");
+                emitln!("Non-interactive input: please answer y or n explicitly.");
                 return Ok(false);
             }
             return Ok(default);
@@ -6598,13 +6990,13 @@ pub(crate) fn confirm(label: &str, default: bool) -> Result<bool> {
         match trimmed.as_str() {
             "y" | "yes" => return Ok(true),
             "n" | "no" => return Ok(false),
-            _ => println!("Please type y or n (yes/no)."),
+            _ => emitln!("Please type y or n (yes/no)."),
         }
     }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum CommandResult {
+pub(crate) enum CommandResult {
     Continue,
     Exit,
     Multiline,

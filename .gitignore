@@ -33,4 +33,5 @@ Thumbs.db
 
 # Developer tools and utility scripts
 scripts/strip-comments.js
+.freebuff/
 
