@@ -17,7 +17,11 @@ use std::time::Duration;
 use anyhow::{anyhow, Result};
 use axiom_agent::StreamObserver;
 use axiom_llm::ChatStreamUpdate;
-use ratatui::crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use ratatui::crossterm::event::{
+    self, DisableBracketedPaste, EnableBracketedPaste, Event, KeyCode, KeyEvent, KeyEventKind,
+    KeyModifiers,
+};
+use ratatui::crossterm::execute;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -279,6 +283,7 @@ struct RestoreOnDrop;
 
 impl Drop for RestoreOnDrop {
     fn drop(&mut self) {
+        let _ = execute!(io::stdout(), DisableBracketedPaste);
         ratatui::restore();
     }
 }
@@ -317,6 +322,145 @@ struct TranscriptLine {
     text: String,
 }
 
+pub(crate) struct SlashCommandDef {
+    pub(crate) name: &'static str,
+    pub(crate) args: &'static str,
+    pub(crate) desc: &'static str,
+}
+
+pub(crate) const SLASH_COMMANDS: &[SlashCommandDef] = &[
+    SlashCommandDef {
+        name: "/help",
+        args: "",
+        desc: "Show help and command reference",
+    },
+    SlashCommandDef {
+        name: "/model",
+        args: "[name]",
+        desc: "Switch or view active LLM model",
+    },
+    SlashCommandDef {
+        name: "/models",
+        args: "[filter]",
+        desc: "List catalog view of available models",
+    },
+    SlashCommandDef {
+        name: "/provider",
+        args: "[name]",
+        desc: "Show or switch active LLM provider",
+    },
+    SlashCommandDef {
+        name: "/plan",
+        args: "",
+        desc: "Switch to plan mode (read-only until applied)",
+    },
+    SlashCommandDef {
+        name: "/build",
+        args: "",
+        desc: "Switch to build mode (tool execution)",
+    },
+    SlashCommandDef {
+        name: "/todo",
+        args: "",
+        desc: "Show the plan Axiom is tracking",
+    },
+    SlashCommandDef {
+        name: "/skills",
+        args: "",
+        desc: "List active and installed skills",
+    },
+    SlashCommandDef {
+        name: "/workspace",
+        args: "[path]",
+        desc: "Show or change active workspace directory",
+    },
+    SlashCommandDef {
+        name: "/status",
+        args: "",
+        desc: "Show version, install mode, and binary health",
+    },
+    SlashCommandDef {
+        name: "/update",
+        args: "",
+        desc: "Check for and automatically install updates",
+    },
+    SlashCommandDef {
+        name: "/variant",
+        args: "[xhigh|high|medium|low]",
+        desc: "Configure model effort/variant",
+    },
+    SlashCommandDef {
+        name: "/thinking",
+        args: "[on|off|auto]",
+        desc: "Toggle reasoning/thinking mode",
+    },
+    SlashCommandDef {
+        name: "/test",
+        args: "[command]",
+        desc: "Auto-detect and run workspace tests",
+    },
+    SlashCommandDef {
+        name: "/permission",
+        args: "[velocity|full|strict]",
+        desc: "Switch permission mode",
+    },
+    SlashCommandDef {
+        name: "/theme",
+        args: "[axiom|blood|ash|high]",
+        desc: "Switch visual color theme",
+    },
+    SlashCommandDef {
+        name: "/clear",
+        args: "",
+        desc: "Clear conversation history",
+    },
+    SlashCommandDef {
+        name: "/undo",
+        args: "",
+        desc: "Restore latest workspace checkpoint",
+    },
+    SlashCommandDef {
+        name: "/checkpoints",
+        args: "",
+        desc: "List recovery snapshots",
+    },
+    SlashCommandDef {
+        name: "/restore",
+        args: "<id>",
+        desc: "Restore an agent recovery snapshot",
+    },
+    SlashCommandDef {
+        name: "/proof",
+        args: "[on|off|status|latest]",
+        desc: "Audit and execution provenance",
+    },
+    SlashCommandDef {
+        name: "/history",
+        args: "[id]",
+        desc: "List past sessions or switch to one",
+    },
+    SlashCommandDef {
+        name: "/resume",
+        args: "<id>",
+        desc: "Continue a previous conversation",
+    },
+    SlashCommandDef {
+        name: "/show",
+        args: "<output_id>",
+        desc: "Display durable tool output",
+    },
+    SlashCommandDef {
+        name: "/commands",
+        args: "",
+        desc: "Display interactive command palette",
+    },
+    SlashCommandDef {
+        name: "/exit",
+        args: "",
+        desc: "Exit Axiom session",
+    },
+];
+
 /// Everything the render thread knows.
 struct App {
     transcript: VecDeque<TranscriptLine>,
@@ -333,6 +477,10 @@ struct App {
     quit: bool,
     /// Reaches the turn that is running, so Ctrl+C can cancel it.
     cancel: TurnCancellation,
+    /// Highlighted index in slash command autocomplete popup.
+    autocomplete_index: usize,
+    /// Whether slash command autocomplete was dismissed by Esc for the current prefix.
+    autocomplete_dismissed: bool,
 }
 
 impl App {
@@ -361,6 +509,8 @@ impl Default for App {
             modal: None,
             quit: false,
             cancel: TurnCancellation::default(),
+            autocomplete_index: 0,
+            autocomplete_dismissed: false,
         }
     }
 }
@@ -426,7 +576,28 @@ impl App {
         self.input.clear();
         self.cursor = 0;
         self.busy = true;
+        self.autocomplete_dismissed = false;
+        self.autocomplete_index = 0;
         input.send(text).ok();
+    }
+
+    /// Return the list of slash commands matching the user's current typed prefix.
+    fn matching_slash_commands(&self) -> Vec<&'static SlashCommandDef> {
+        if self.busy || self.modal.is_some() || self.autocomplete_dismissed {
+            return Vec::new();
+        }
+        let trimmed = self.input.trim_start();
+        if !trimmed.starts_with('/') {
+            return Vec::new();
+        }
+        if trimmed.contains(' ') {
+            return Vec::new();
+        }
+        let prefix = trimmed.to_lowercase();
+        SLASH_COMMANDS
+            .iter()
+            .filter(|cmd| cmd.name.starts_with(&prefix))
+            .collect()
     }
 
     fn on_key(&mut self, key: KeyEvent, input: &tokio::sync::mpsc::UnboundedSender<String>) {
@@ -450,11 +621,70 @@ impl App {
             self.on_modal_key(key);
             return;
         }
+        let slash_matches = self.matching_slash_commands();
+        if !slash_matches.is_empty() {
+            match key.code {
+                KeyCode::Tab => {
+                    let idx = self
+                        .autocomplete_index
+                        .min(slash_matches.len().saturating_sub(1));
+                    let cmd = slash_matches[idx];
+                    self.input = format!("{} ", cmd.name);
+                    self.cursor = self.input.chars().count();
+                    self.autocomplete_index = 0;
+                    return;
+                }
+                KeyCode::Up => {
+                    self.autocomplete_index = self.autocomplete_index.saturating_sub(1);
+                    return;
+                }
+                KeyCode::Down => {
+                    self.autocomplete_index =
+                        (self.autocomplete_index + 1).min(slash_matches.len().saturating_sub(1));
+                    return;
+                }
+                KeyCode::Esc => {
+                    self.autocomplete_dismissed = true;
+                    return;
+                }
+                _ => {}
+            }
+        }
         match key.code {
-            KeyCode::Enter => self.submit(input),
-            KeyCode::Char(c) => self.insert_char(c),
-            KeyCode::Backspace => self.backspace(),
-            KeyCode::Delete => self.delete_forward(),
+            KeyCode::Enter => {
+                if !slash_matches.is_empty() && self.input.trim() == "/" {
+                    let idx = self
+                        .autocomplete_index
+                        .min(slash_matches.len().saturating_sub(1));
+                    let cmd = slash_matches[idx];
+                    self.input = format!("{} ", cmd.name);
+                    self.cursor = self.input.chars().count();
+                    self.autocomplete_index = 0;
+                    return;
+                }
+                if key.modifiers.contains(KeyModifiers::SHIFT)
+                    || key.modifiers.contains(KeyModifiers::ALT)
+                {
+                    self.insert_char('\n');
+                } else {
+                    self.submit(input);
+                }
+            }
+            KeyCode::Char(c) => {
+                self.autocomplete_dismissed = false;
+                self.autocomplete_index = 0;
+                self.insert_char(c);
+            }
+            KeyCode::Backspace => {
+                self.autocomplete_dismissed = false;
+                self.autocomplete_index = 0;
+                self.backspace();
+            }
+            KeyCode::Delete => {
+                self.autocomplete_dismissed = false;
+                self.autocomplete_index = 0;
+                self.delete_forward();
+            }
             KeyCode::Left => self.cursor = self.cursor.saturating_sub(1),
             KeyCode::Right => self.cursor = (self.cursor + 1).min(self.input.chars().count()),
             KeyCode::Home => self.cursor = 0,
@@ -465,6 +695,63 @@ impl App {
             KeyCode::Down => self.scroll_back = self.scroll_back.saturating_sub(1),
             _ => {}
         }
+    }
+
+    /// Paste text into the input field or active modal.
+    fn on_paste(&mut self, text: &str) {
+        let normalized = text.replace("\r\n", "\n").replace('\r', "\n");
+        if normalized.is_empty() {
+            return;
+        }
+        if let Some(modal) = self.modal.take() {
+            match modal {
+                Modal::Plan { answer, .. } => {
+                    self.modal = Some(Modal::Choose {
+                        question: "Adjust the plan, then press Enter.".to_string(),
+                        options: Vec::new(),
+                        selected: 0,
+                        answer,
+                    });
+                    self.input.clear();
+                    self.cursor = 0;
+                    self.insert_str(&normalized);
+                }
+                Modal::Choose {
+                    question,
+                    options,
+                    selected,
+                    answer,
+                } => {
+                    self.insert_str(&normalized);
+                    self.modal = Some(Modal::Choose {
+                        question,
+                        options,
+                        selected,
+                        answer,
+                    });
+                }
+                other => {
+                    self.modal = Some(other);
+                }
+            }
+            return;
+        }
+        if self.busy {
+            return;
+        }
+        self.autocomplete_dismissed = false;
+        self.autocomplete_index = 0;
+        self.insert_str(&normalized);
+    }
+
+    fn insert_str(&mut self, value: &str) {
+        let mut chars: Vec<char> = self.input.chars().collect();
+        let at = self.cursor.min(chars.len());
+        let insert_chars: Vec<char> = value.chars().collect();
+        let count = insert_chars.len();
+        chars.splice(at..at, insert_chars);
+        self.input = chars.into_iter().collect();
+        self.cursor = at + count;
     }
 
     /// Ctrl+C at an idle prompt leaves, which is the same gesture that leaves the inline
@@ -647,12 +934,17 @@ impl App {
     fn draw(&self, frame: &mut Frame) {
         let area = frame.area();
         let show_plan = area.width >= 100 && !self.plan.is_empty();
+        let inner_width = area.width.saturating_sub(2).max(1) as usize;
+        let input_lines = wrap_text(&self.input, inner_width).len();
+        let max_input_height = (area.height / 3).clamp(3, 8);
+        let input_box_height = (input_lines as u16 + 2).clamp(3, max_input_height);
+
         let rows = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
                 Constraint::Length(1),
                 Constraint::Min(3),
-                Constraint::Length(3),
+                Constraint::Length(input_box_height),
                 Constraint::Length(1),
             ])
             .split(area);
@@ -675,6 +967,8 @@ impl App {
         self.draw_status(frame, rows[3]);
         if let Some(modal) = self.modal.as_ref() {
             draw_modal(frame, area, modal, &self.input, &self.plan);
+        } else {
+            self.draw_autocomplete(frame, rows[2]);
         }
     }
 
@@ -779,6 +1073,19 @@ impl App {
         } else {
             " Message "
         };
+        let inner_width = area.width.saturating_sub(2).max(1) as usize;
+        let inner_height = area.height.saturating_sub(2).max(1) as usize;
+        let before = &self.input[..byte_offset(&self.input, self.cursor)];
+        let wrapped_before = wrap_text(before, inner_width);
+        let cursor_row = wrapped_before.len().saturating_sub(1);
+        let cursor_col = wrapped_before.last().map_or(0, |line| line.width() as u16);
+
+        let scroll_offset = if cursor_row >= inner_height {
+            cursor_row - inner_height + 1
+        } else {
+            0
+        };
+
         frame.render_widget(
             Paragraph::new(self.input.as_str())
                 .style(Style::default().fg(Color::Indexed(255)))
@@ -792,22 +1099,124 @@ impl App {
                         }))
                         .title(title),
                 )
-                .wrap(Wrap { trim: false }),
+                .wrap(Wrap { trim: false })
+                .scroll((scroll_offset as u16, 0)),
             area,
         );
         if self.modal.is_none() {
-            // The box wraps, so the cursor is wherever the text before it ended up, not simply
-            // that many columns along the first row.
-            let inner_width = area.width.saturating_sub(2).max(1) as usize;
-            let before = &self.input[..byte_offset(&self.input, self.cursor)];
-            let wrapped = wrap_text(before, inner_width);
-            let row = (wrapped.len().saturating_sub(1)).min(area.height.saturating_sub(2) as usize);
-            let column = wrapped.last().map_or(0, |line| line.width() as u16);
+            let visible_row = cursor_row.saturating_sub(scroll_offset);
             frame.set_cursor_position((
-                area.x + 1 + column.min(area.width.saturating_sub(2)),
-                area.y + 1 + row as u16,
+                area.x + 1 + cursor_col.min(area.width.saturating_sub(2)),
+                area.y + 1 + visible_row as u16,
             ));
         }
+    }
+
+    /// Draw a Minecraft/IDE-style floating command palette above the input box when typing `/`.
+    fn draw_autocomplete(&self, frame: &mut Frame, input_area: Rect) {
+        let matches = self.matching_slash_commands();
+        if matches.is_empty() {
+            return;
+        }
+
+        let max_visible = 6usize;
+        let total = matches.len();
+        let selected = self.autocomplete_index.min(total.saturating_sub(1));
+
+        let start = if selected >= max_visible {
+            selected - max_visible + 1
+        } else {
+            0
+        };
+        let end = (start + max_visible).min(total);
+        let visible_items = &matches[start..end];
+
+        let content_height = visible_items.len() as u16;
+        let box_height = content_height + 2;
+        let box_width = (input_area.width.saturating_sub(2)).clamp(45, 78);
+
+        let box_y = input_area.y.saturating_sub(box_height);
+        let box_x = input_area.x + 1;
+
+        let popup_area = Rect {
+            x: box_x,
+            y: box_y,
+            width: box_width,
+            height: box_height,
+        };
+
+        let mut lines = Vec::new();
+        for (i, cmd) in visible_items.iter().enumerate() {
+            let actual_idx = start + i;
+            let is_selected = actual_idx == selected;
+
+            let marker = if is_selected { "▶ " } else { "  " };
+            let cmd_with_args = if cmd.args.is_empty() {
+                cmd.name.to_string()
+            } else {
+                format!("{} {}", cmd.name, cmd.args)
+            };
+
+            let left_col_width = 30usize;
+            let cmd_formatted = format!("{:<left_col_width$}", cmd_with_args);
+
+            let available_for_desc =
+                (box_width.saturating_sub(4) as usize).saturating_sub(left_col_width + 2);
+            let desc_truncated = if cmd.desc.chars().count() > available_for_desc {
+                let kept: String = cmd
+                    .desc
+                    .chars()
+                    .take(available_for_desc.saturating_sub(1))
+                    .collect();
+                format!("{kept}…")
+            } else {
+                cmd.desc.to_string()
+            };
+
+            let line_style = if is_selected {
+                Style::default().bg(Color::Indexed(238))
+            } else {
+                Style::default()
+            };
+
+            let cmd_style = if is_selected {
+                Style::default()
+                    .fg(Color::Indexed(75))
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(Color::Indexed(114))
+            };
+
+            let desc_style = if is_selected {
+                Style::default()
+                    .fg(Color::Indexed(255))
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(Color::Indexed(243))
+            };
+
+            lines.push(
+                Line::from(vec![
+                    Span::styled(marker, cmd_style),
+                    Span::styled(cmd_formatted, cmd_style),
+                    Span::styled(desc_truncated, desc_style),
+                ])
+                .style(line_style),
+            );
+        }
+
+        let title = format!(" Commands ({}/{}) · Tab to complete ", selected + 1, total);
+
+        frame.render_widget(Clear, popup_area);
+        frame.render_widget(
+            Paragraph::new(lines).block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(Color::Indexed(75)))
+                    .title(title),
+            ),
+            popup_area,
+        );
     }
 
     fn draw_status(&self, frame: &mut Frame, area: Rect) {
@@ -859,9 +1268,16 @@ impl App {
                 "Enter select · Esc dismiss",
                 "Esc dismiss",
             ]
+        } else if !self.matching_slash_commands().is_empty() {
+            vec![
+                "Tab complete · ↑/↓ choose · Esc dismiss · Enter send",
+                "Tab complete · ↑/↓ choose",
+                "Tab complete",
+            ]
         } else {
             vec![
-                "Enter send · PgUp/PgDn scroll · Ctrl+L clear · Ctrl+C exit",
+                "Enter send (Shift+Enter newline) · PgUp/PgDn scroll · Ctrl+L clear · Ctrl+C exit",
+                "Enter send · PgUp/PgDn scroll · Ctrl+C exit",
                 "Enter send · Ctrl+C exit",
                 "Ctrl+C exit",
             ]
@@ -991,44 +1407,36 @@ fn truncate_chars(text: &str, limit: usize) -> String {
     format!("{kept}…")
 }
 
-/// Soft-wrap plain text to `width` display columns.
-///
-/// The transcript is pre-wrapped so the scroll offset can be a plain line count, which keeps
-/// "scroll to the bottom" exact instead of a guess about ratatui's own wrapping.
-fn wrap_text(text: &str, width: usize) -> Vec<String> {
-    if text.is_empty() {
+/// Soft-wrap a single line without embedded newlines to `width` display columns.
+fn wrap_single_line(line: &str, width: usize) -> Vec<String> {
+    if line.is_empty() {
         return vec![String::new()];
     }
     let width = width.max(1);
-    if text.is_empty() {
-        return vec![String::new()];
-    }
     let mut lines = Vec::new();
     let mut current = String::new();
     let mut current_width = 0usize;
-    for word in text.split_whitespace() {
+    for word in line.split_whitespace() {
         let word_width = word.width();
         if current_width > 0 {
             if current_width + 1 + word_width <= width {
                 current.push(' ');
                 current.push_str(word);
                 current_width += 1 + word_width;
+                continue;
             } else {
                 lines.push(std::mem::take(&mut current));
-                current_width = 0;
             }
         }
-        if current_width == 0 {
-            if word_width <= width {
-                current.push_str(word);
-                current_width = word_width;
-                continue;
-            }
+        if word_width <= width {
+            current.push_str(word);
+            current_width = word_width;
+        } else {
             // A single token wider than the pane has to be broken mid-word.
             let mut taken = 0usize;
             for character in word.chars() {
-                let char_width = character.to_string().width();
-                if taken + char_width > width {
+                let char_width = unicode_width::UnicodeWidthChar::width(character).unwrap_or(1);
+                if taken + char_width > width && !current.is_empty() {
                     lines.push(std::mem::take(&mut current));
                     taken = 0;
                 }
@@ -1039,6 +1447,22 @@ fn wrap_text(text: &str, width: usize) -> Vec<String> {
         }
     }
     lines.push(current);
+    lines
+}
+
+/// Soft-wrap plain text to `width` display columns, respecting embedded newlines.
+///
+/// The transcript is pre-wrapped so the scroll offset can be a plain line count, which keeps
+/// "scroll to the bottom" exact instead of a guess about ratatui's own wrapping.
+fn wrap_text(text: &str, width: usize) -> Vec<String> {
+    if text.is_empty() {
+        return vec![String::new()];
+    }
+    let mut lines = Vec::new();
+    for raw_line in text.split('\n') {
+        let trimmed = raw_line.strip_suffix('\r').unwrap_or(raw_line);
+        lines.extend(wrap_single_line(trimmed, width));
+    }
     lines
 }
 
@@ -1136,6 +1560,7 @@ fn render_loop(
             return;
         }
     };
+    let _ = execute!(io::stdout(), EnableBracketedPaste);
     ready.send(Ok(())).ok();
     let _restore = RestoreOnDrop;
     let mut app = App::new(cancel);
@@ -1166,6 +1591,7 @@ fn render_loop(
         if event::poll(TICK).unwrap_or(false) {
             match event::read() {
                 Ok(Event::Key(key)) => app.on_key(key, input),
+                Ok(Event::Paste(text)) => app.on_paste(&text),
                 // Any other event just means the next loop iteration redraws.
                 Ok(_) => {}
                 Err(_) => break,
@@ -1219,7 +1645,7 @@ mod tests {
             permission: "velocity".to_string(),
             work_mode: "build".to_string(),
             workspace: "~/Axiom".to_string(),
-            version: "1.0.22".to_string(),
+            version: "1.0.23".to_string(),
         })));
         app.apply(ToRenderer::Output {
             kind: LineKind::Success,
@@ -1290,7 +1716,7 @@ mod tests {
         for width in [24u16, 30, 40, 60, 80, 120] {
             let frame = render(&app, width, 14);
             assert!(
-                frame.contains("v1.0.22"),
+                frame.contains("v1.0.23"),
                 "version lost at {width} columns:\n{frame}"
             );
         }
@@ -1312,7 +1738,7 @@ mod tests {
         let narrow = render(&populated(), 24, 14);
         assert!(narrow.contains("Ctrl+C exit"), "in:\n{narrow}");
         assert!(!narrow.contains("Enter send"), "in:\n{narrow}");
-        assert!(narrow.contains("v1.0.22"), "in:\n{narrow}");
+        assert!(narrow.contains("v1.0.23"), "in:\n{narrow}");
     }
 
     #[test]
@@ -1553,5 +1979,116 @@ mod tests {
             app.transcript.back().expect("newest line").text,
             format!("line {}", MAX_TRANSCRIPT_LINES + 24)
         );
+    }
+
+    #[test]
+    fn pasting_inserts_multiline_text_and_positions_cursor_at_end() {
+        let mut app = App::default();
+        let prompt =
+            "You are the dataset agent.\nCraftyAI is Minecraft-focused.\nYour job is to validate.";
+        app.on_paste(prompt);
+        assert_eq!(app.input, prompt);
+        assert_eq!(app.cursor, prompt.chars().count());
+    }
+
+    #[test]
+    fn pasting_normalizes_crlf_to_lf() {
+        let mut app = App::default();
+        app.on_paste("line1\r\nline2\rline3");
+        assert_eq!(app.input, "line1\nline2\nline3");
+    }
+
+    #[test]
+    fn pasting_is_ignored_when_busy() {
+        let mut app = App {
+            busy: true,
+            ..App::default()
+        };
+        app.on_paste("should not appear");
+        assert_eq!(app.input, "");
+    }
+
+    #[test]
+    fn shift_enter_inserts_newline_into_input() {
+        let (input, _lines) = tokio::sync::mpsc::unbounded_channel();
+        let mut app = App::default();
+        app.insert_char('a');
+        let shift_enter = KeyEvent::new(KeyCode::Enter, KeyModifiers::SHIFT);
+        app.on_key(shift_enter, &input);
+        app.insert_char('b');
+        assert_eq!(app.input, "a\nb");
+        assert_eq!(app.cursor, 3);
+    }
+
+    #[test]
+    fn wrapping_respects_embedded_newlines() {
+        let text = "Paragraph 1\n\nParagraph 2 is longer than the width";
+        let lines = wrap_text(text, 15);
+        assert_eq!(lines[0], "Paragraph 1");
+        assert_eq!(lines[1], "");
+        assert_eq!(lines[2], "Paragraph 2 is");
+        assert_eq!(lines[3], "longer than the");
+        assert_eq!(lines[4], "width");
+    }
+
+    #[test]
+    fn typing_slash_triggers_autocomplete_and_tab_completes() {
+        let (input, _lines) = tokio::sync::mpsc::unbounded_channel();
+        let mut app = App::default();
+        app.on_key(key(KeyCode::Char('/')), &input);
+        assert!(!app.matching_slash_commands().is_empty());
+
+        // Tab autocompletes the first option (/help)
+        app.on_key(key(KeyCode::Tab), &input);
+        assert_eq!(app.input, "/help ");
+        assert!(app.matching_slash_commands().is_empty());
+    }
+
+    #[test]
+    fn typing_slash_prefix_filters_matching_commands() {
+        let (input, _lines) = tokio::sync::mpsc::unbounded_channel();
+        let mut app = App::default();
+        app.on_key(key(KeyCode::Char('/')), &input);
+        app.on_key(key(KeyCode::Char('m')), &input);
+        let matches = app.matching_slash_commands();
+        assert!(matches.iter().all(|c| c.name.starts_with("/m")));
+        assert!(matches.iter().any(|c| c.name == "/model"));
+        assert!(matches.iter().any(|c| c.name == "/models"));
+
+        // Tab completes the first match (/model)
+        app.on_key(key(KeyCode::Tab), &input);
+        assert_eq!(app.input, "/model ");
+    }
+
+    #[test]
+    fn up_and_down_arrows_navigate_autocomplete_options() {
+        let (input, _lines) = tokio::sync::mpsc::unbounded_channel();
+        let mut app = App::default();
+        app.on_key(key(KeyCode::Char('/')), &input);
+        app.on_key(key(KeyCode::Char('m')), &input);
+        assert_eq!(app.autocomplete_index, 0);
+
+        // Down arrow selects the next suggestion (/models)
+        app.on_key(key(KeyCode::Down), &input);
+        assert_eq!(app.autocomplete_index, 1);
+
+        app.on_key(key(KeyCode::Tab), &input);
+        assert_eq!(app.input, "/models ");
+    }
+
+    #[test]
+    fn esc_dismisses_autocomplete_until_next_character() {
+        let (input, _lines) = tokio::sync::mpsc::unbounded_channel();
+        let mut app = App::default();
+        app.on_key(key(KeyCode::Char('/')), &input);
+        assert!(!app.matching_slash_commands().is_empty());
+
+        // Esc dismisses the autocomplete popup
+        app.on_key(key(KeyCode::Esc), &input);
+        assert!(app.matching_slash_commands().is_empty());
+
+        // Typing another char reactivates it
+        app.on_key(key(KeyCode::Char('p')), &input);
+        assert!(!app.matching_slash_commands().is_empty());
     }
 }

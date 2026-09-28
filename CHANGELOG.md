@@ -4,6 +4,14 @@ All notable changes to Axiom are documented here. Versions follow semantic
 versioning. Stable releases document user-visible changes, configuration or
 proof migrations, security fixes, and upgrade actions.
 
+## 1.0.23
+
+- Fixed
+  - TUI clipboard paste and bracketed paste support: enabled `EnableBracketedPaste` on terminal startup and hooked up crossterm's `Event::Paste(text)` in the event loop, ensuring pasted text (including multi-line prompts and code blocks) is inserted into the input box or modal rather than discarded.
+  - Multi-line input editing: the `[ Message ]` input box dynamically expands up to 8 rows when multiline text is pasted or entered, with smooth paragraph scrolling and accurate cursor tracking.
+  - Preserved line breaks and paragraph spacing in multi-line prompts and outputs by splitting on explicit newlines in `wrap_text` rather than flattening all whitespace.
+  - Added `Shift+Enter` and `Alt+Enter` keybinding support to insert newlines into the message box without submitting.
+
 ## 1.0.22
 
 - Added
