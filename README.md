@@ -14,7 +14,7 @@ Proof Mode records what happened during each session: what you asked, which skil
 
 ## Current Status
 
-This repository contains Axiom `1.0.22`, a stable release with a full-screen terminal UI, a self-verifying agent loop (bounded automatic fix passes instead of waiting for you to type "continue"), an implementation-plan approval gate for Build mode, learning skill capture, selectable workspaces, and roughly half the per-turn system-message overhead:
+This repository contains Axiom `1.0.23`, a stable release with clipboard paste, dynamic multiline expansion, Minecraft-style slash command autocomplete, a full-screen terminal UI, a self-verifying agent loop (bounded automatic fix passes instead of waiting for you to type "continue"), an implementation-plan approval gate for Build mode, learning skill capture, selectable workspaces, and roughly half the per-turn system-message overhead:
 
 ```bash
 npm install -g axiom-agent
