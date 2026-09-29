@@ -4,6 +4,12 @@ All notable changes to Axiom are documented here. Versions follow semantic
 versioning. Stable releases document user-visible changes, configuration or
 proof migrations, security fixes, and upgrade actions.
 
+## 1.0.24
+
+- Fixed
+  - Native tool invocation message history: when an LLM model emits tool calls without accompanying visible text, the assistant turn in conversation history is now populated with descriptive invocation details (`[Invoking tool <name> with arguments <args>]`) instead of a blank string (`""`). This prevents OpenAI-compatible providers, tokenizer templates, and model servers (such as NVIDIA NIM and GLM) from stalling or crashing when receiving an empty assistant turn before tool results.
+  - Initial stream timeout: added `STREAM_INITIAL_TIMEOUT` (180s) to `HttpChatStream::next_chunk` before the first SSE event arrives. This prevents indefinite hangs if an LLM provider accepts the connection but becomes unresponsive before streaming the first byte, cleanly triggering autonomous stream recovery.
+
 ## 1.0.23
 
 - Fixed

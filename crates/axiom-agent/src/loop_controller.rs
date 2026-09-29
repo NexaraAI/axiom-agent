@@ -1106,9 +1106,26 @@ impl<'a> AgentLoop<'a> {
                 }
             };
             progress.partial = assistant_content.clone();
+            let effective_assistant_content =
+                if assistant_content.trim().is_empty() && !response.tool_calls.is_empty() {
+                    response
+                        .tool_calls
+                        .iter()
+                        .map(|call| {
+                            let name = &call.name;
+                            let args = &call.arguments;
+                            format!("[Invoking tool `{name}` with arguments {args}]")
+                        })
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                } else if assistant_content.trim().is_empty() {
+                    "[No response content]".to_string()
+                } else {
+                    assistant_content.clone()
+                };
             let assistant_message = ChatMessage {
                 role: "assistant".to_string(),
-                content: assistant_content.clone(),
+                content: effective_assistant_content,
             };
             messages.push(assistant_message.clone());
             progress.history_delta.push(assistant_message);
@@ -2468,6 +2485,9 @@ mod tests {
         };
 
         assert_eq!(completion.content, "both tool results received");
+        assert!(completion.history_delta[1]
+            .content
+            .contains("[Invoking tool `axiom_file_read`"));
         assert_eq!(completion.tool_events.len(), 2);
         assert_eq!(provider.calls.load(Ordering::SeqCst), 2);
     }

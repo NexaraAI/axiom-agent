@@ -1,6 +1,6 @@
 {
   "name": "axiom-agent",
-  "version": "1.0.23",
+  "version": "1.0.24",
   "description": "Terminal-first Rust CLI for Axiom Agent.",
   "license": "MIT",
   "repository": {

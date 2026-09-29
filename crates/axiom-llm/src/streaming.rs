@@ -76,6 +76,10 @@ struct HttpChatStream {
 /// finish event or closing; without this bound the client would wait for the
 /// full request timeout (minutes of dead air) before recovering.
 pub(crate) const STREAM_IDLE_TIMEOUT: Duration = Duration::from_secs(120);
+/// Maximum time allowed before the very first stream chunk arrives. Providers that
+/// hang indefinitely without producing events will be timed out so the client does
+/// not remain stalled forever.
+pub(crate) const STREAM_INITIAL_TIMEOUT: Duration = Duration::from_secs(180);
 
 impl std::fmt::Debug for ChatStream {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -735,10 +739,14 @@ impl HttpChatStream {
                     }),
                 }
             } else {
-                self.response
-                    .chunk()
-                    .await
-                    .map_err(|error| map_chunk_error(&self.provider, error, self.idle_timeout))
+                let initial_timeout = STREAM_INITIAL_TIMEOUT.max(self.idle_timeout);
+                match tokio::time::timeout(initial_timeout, self.response.chunk()).await {
+                    Ok(Ok(chunk)) => Ok(chunk),
+                    Ok(Err(error)) => Err(map_chunk_error(&self.provider, error, initial_timeout)),
+                    Err(_) => Err(LlmError::StreamDisconnected {
+                        provider: self.provider.clone(),
+                    }),
+                }
             };
             match chunk_result? {
                 Some(bytes) => {
