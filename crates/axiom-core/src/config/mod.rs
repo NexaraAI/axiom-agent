@@ -848,4 +848,90 @@ format = "json"
             }
         }
     }
+    /// The provider/variant model table used to be written down twice: once
+    /// as a `match` in `LlmConfig::default_variant_model` and once as the
+    /// `variant_models` map. The map is consulted first, so the `match` was
+    /// only reachable for providers absent from the map, and where both
+    /// existed they had already drifted apart in 14 places (`nvidia`
+    /// high/xhigh, `ollama` all variants, and the `ollama_cloud` low/medium
+    /// arms, which were transposed).
+    ///
+    /// Pinning the values here means a future edit to the table has to
+    /// update this test too, so an accidental swap is visible in review
+    /// rather than silently changing which model a variant selects.
+    #[test]
+    fn variant_model_table_matches_the_pinned_expectations() {
+        let map = crate::config::defaults::default_variant_models();
+        let expected: &[(&str, &str, &str)] = &[
+            ("nvidia", "default", "nvidia/nemotron-3.5-lightning-30b-a3b"),
+            ("nvidia", "low", "meta/llama-3.1-8b-instruct"),
+            ("nvidia", "high", "nvidia/nemotron-4-340b-instruct"),
+            ("nvidia", "xhigh", "nvidia/nemotron-4-340b-instruct"),
+            ("groq", "default", "llama-3.3-70b-versatile"),
+            ("groq", "low", "llama-3.1-8b-instant"),
+            ("groq", "high", "deepseek-r1-distill-llama-70b"),
+            ("openrouter", "default", "anthropic/claude-3.7-sonnet"),
+            ("openrouter", "high", "deepseek/deepseek-r1"),
+            (
+                "openrouter",
+                "xhigh",
+                "anthropic/claude-3.7-sonnet:thinking",
+            ),
+            ("gemini", "default", "gemini-2.5-flash"),
+            ("gemini", "high", "gemini-2.5-pro"),
+            ("github-models", "default", "openai/gpt-4.1"),
+            ("github-models", "xhigh", "openai/o1"),
+            ("openai", "default", "gpt-4o"),
+            ("openai", "low", "gpt-4o-mini"),
+            ("anthropic", "default", "claude-3-7-sonnet-latest"),
+            ("anthropic", "low", "claude-3-5-haiku-latest"),
+            ("gmi", "default", "deepseek-ai/DeepSeek-V4-Pro"),
+            ("gmi", "medium", "meta-llama/Llama-3.3-70B-Instruct"),
+            ("ollama", "default", "llama3.2"),
+            ("ollama", "low", "llama3.2:1b"),
+            ("ollama_cloud", "low", "qwen2.5-coder:32b"),
+            ("ollama_cloud", "medium", "llama3.3:70b"),
+            ("mock", "default", "mock-model"),
+            ("cloudflare", "default", "openai/gpt-4o"),
+            ("lm-studio", "default", "default"),
+        ];
+        for (provider, variant, model) in expected {
+            let actual = map
+                .get(*provider)
+                .and_then(|variants| variants.get(*variant))
+                .map(String::as_str)
+                .unwrap_or_else(|| panic!("{provider}/{variant} missing from the table"));
+            assert_eq!(actual, *model, "{provider}/{variant}");
+        }
+    }
+
+    #[test]
+    fn model_for_variant_resolves_provider_aliases_and_falls_through_to_none() {
+        let llm = LlmConfig {
+            active_provider: None,
+            active_model: None,
+            provider_models: std::collections::BTreeMap::new(),
+            stream: true,
+            variant: "Default".to_string(),
+            variant_models: crate::config::defaults::default_variant_models(),
+            thinking: None,
+        };
+        // Provider keys resolve regardless of case and separator style.
+        assert_eq!(
+            llm.model_for_variant("openrouter", "high"),
+            Some("deepseek/deepseek-r1")
+        );
+        assert_eq!(
+            llm.model_for_variant("OpenRouter", "HIGH"),
+            Some("deepseek/deepseek-r1")
+        );
+        assert_eq!(
+            llm.model_for_variant("github_models", "xhigh"),
+            Some("openai/o1")
+        );
+        // An unknown provider or variant has no opinion, rather than a
+        // value left over from a different table.
+        assert_eq!(llm.model_for_variant("nope", "high"), None);
+        assert_eq!(llm.model_for_variant("openrouter", "nope"), None);
+    }
 }
