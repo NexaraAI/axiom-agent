@@ -2,7 +2,6 @@ use std::{
     collections::BTreeMap,
     fs,
     path::{Path, PathBuf},
-    time::{SystemTime, UNIX_EPOCH},
 };
 
 use axiom_core::atomic_write;
@@ -647,11 +646,7 @@ token_budget = 350
 }
 
 pub(crate) fn now_timestamp() -> String {
-    let seconds = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_secs())
-        .unwrap_or_default();
-    format!("unix:{seconds}")
+    axiom_core::time::now_timestamp()
 }
 
 fn default_enabled() -> bool {

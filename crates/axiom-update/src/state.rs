@@ -1,7 +1,6 @@
 use std::{
     fs,
     path::{Path, PathBuf},
-    time::{SystemTime, UNIX_EPOCH},
 };
 
 use axiom_core::atomic_write;
@@ -129,19 +128,16 @@ impl UpdateState {
 }
 
 pub fn now_timestamp() -> String {
-    let seconds = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_secs())
-        .unwrap_or_default();
-    format!("unix:{seconds}")
+    axiom_core::time::now_timestamp()
 }
 
 #[cfg(test)]
 mod tests {
+    use std::time::{SystemTime, UNIX_EPOCH};
+
     use std::{
         fs,
         sync::atomic::{AtomicU64, Ordering},
-        time::{SystemTime, UNIX_EPOCH},
     };
 
     use super::*;

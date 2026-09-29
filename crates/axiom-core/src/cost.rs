@@ -4,7 +4,7 @@ use std::{
     io,
     path::{Path, PathBuf},
     thread,
-    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant},
 };
 
 use serde::{Deserialize, Serialize};
@@ -342,24 +342,15 @@ pub enum CostLedgerError {
 }
 
 pub fn current_utc_month() -> String {
-    let seconds = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_secs())
-        .unwrap_or_default();
-    utc_month_from_unix_seconds(seconds)
+    crate::time::utc_month()
 }
 
 pub fn utc_month_from_unix_seconds(seconds: u64) -> String {
-    let days = (seconds / 86_400) as i64;
-    let (year, month, _) = civil_from_days(days);
-    format!("{year:04}-{month:02}")
+    crate::time::utc_month_from_seconds(seconds)
 }
 
 pub fn now_unix_seconds() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_secs())
-        .unwrap_or_default()
+    crate::time::unix_seconds()
 }
 
 pub fn usd_to_microusd(usd: f64) -> Option<u64> {
@@ -393,20 +384,6 @@ fn validate_event(event: &CostLedgerEvent) -> Result<(), CostLedgerError> {
         )));
     }
     Ok(())
-}
-
-fn civil_from_days(days_since_unix_epoch: i64) -> (i32, u32, u32) {
-    let z = days_since_unix_epoch + 719_468;
-    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
-    let doe = z - era * 146_097;
-    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
-    let y = yoe + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let day = doy - (153 * mp + 2) / 5 + 1;
-    let month = mp + if mp < 10 { 3 } else { -9 };
-    let year = y + if month <= 2 { 1 } else { 0 };
-    (year as i32, month as u32, day as u32)
 }
 
 #[cfg(test)]

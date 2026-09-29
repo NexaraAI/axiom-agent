@@ -326,20 +326,11 @@ pub fn new_event_id(prefix: &str) -> String {
 }
 
 pub fn now_timestamp() -> String {
-    let seconds = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_secs())
-        .unwrap_or_default();
-    format!("unix:{seconds}")
+    axiom_core::time::now_timestamp()
 }
 
 pub fn current_date_path() -> String {
-    let days = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| (duration.as_secs() / 86_400) as i64)
-        .unwrap_or_default();
-    let (year, month, day) = civil_from_days(days);
-    format!("{year:04}-{month:02}-{day:02}")
+    axiom_core::time::utc_date()
 }
 
 fn next_id_suffix() -> String {
@@ -349,20 +340,6 @@ fn next_id_suffix() -> String {
         .unwrap_or_default();
     let counter = ID_COUNTER.fetch_add(1, Ordering::Relaxed);
     format!("{millis:x}-{counter:04x}")
-}
-
-fn civil_from_days(days_since_unix_epoch: i64) -> (i32, u32, u32) {
-    let z = days_since_unix_epoch + 719_468;
-    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
-    let doe = z - era * 146_097;
-    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
-    let y = yoe + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let day = doy - (153 * mp + 2) / 5 + 1;
-    let month = mp + if mp < 10 { 3 } else { -9 };
-    let year = y + if month <= 2 { 1 } else { 0 };
-    (year as i32, month as u32, day as u32)
 }
 
 #[cfg(test)]

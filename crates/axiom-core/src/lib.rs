@@ -4,6 +4,7 @@ pub mod config;
 pub mod cost;
 pub mod errors;
 pub mod session;
+pub mod time;
 pub mod workspace;
 
 pub use atomic::atomic_write;
