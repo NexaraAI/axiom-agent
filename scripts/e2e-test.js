@@ -11,10 +11,27 @@ const { runSelfTest: runSecuritySelfTest } = require("./security-check");
 const REPO_ROOT = path.resolve(__dirname, "..");
 const AXIOM_BINARY = process.platform === "win32" ? "axiom.exe" : "axiom";
 const OFFICIAL_REGISTRY_URL = "https://raw.githubusercontent.com/NexaraAI/axiom-skills/main/registry.json";
-const CONFIG_SOURCE = fs.readFileSync(
-  path.join(REPO_ROOT, "crates", "axiom-core", "src", "config.rs"),
-  "utf8"
-);
+// axiom-core's config module is a directory; read all of it so facts that used
+// to live in one config.rs are found wherever they landed.
+const CONFIG_SOURCE = (() => {
+  const configDir = path.join(REPO_ROOT, "crates", "axiom-core", "src", "config");
+  const files = [];
+  if (fs.existsSync(path.join(configDir, "mod.rs"))) {
+    for (const name of fs.readdirSync(configDir)) {
+      if (name.endsWith(".rs")) {
+        files.push(path.join(configDir, name));
+      }
+    }
+  } else if (fs.existsSync(path.join(REPO_ROOT, "crates", "axiom-core", "src", "config.rs"))) {
+    files.push(path.join(REPO_ROOT, "crates", "axiom-core", "src", "config.rs"));
+  }
+  if (files.length === 0) {
+    throw new Error(
+      "could not find the axiom-core config module (expected src/config/mod.rs or src/config.rs)"
+    );
+  }
+  return files.map((file) => fs.readFileSync(file, "utf8")).join("\n");
+})();
 const CONFIG_VERSION_MATCH = CONFIG_SOURCE.match(/CURRENT_CONFIG_VERSION:\s*u32\s*=\s*(\d+)/);
 assert(CONFIG_VERSION_MATCH, "could not determine CURRENT_CONFIG_VERSION");
 const CURRENT_CONFIG_VERSION = Number(CONFIG_VERSION_MATCH[1]);

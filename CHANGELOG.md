@@ -4,6 +4,25 @@ All notable changes to Axiom are documented here. Versions follow semantic
 versioning. Stable releases document user-visible changes, configuration or
 proof migrations, security fixes, and upgrade actions.
 
+## 1.0.25
+
+- Security
+  - Secret redaction no longer has a second, weaker implementation. `chat.rs` carried its own JSON redactor whose key test was a substring match over seven needles, a strict subset of the rules in `axiom-proof`. It missed `private_key` among others, so a value returned under that key was written to persisted session state in the clear. Both now use the single implementation in `axiom-proof::redact_value`.
+  - `test.run` now applies the destructive-command blocklist. It authorizes the Process side effect, which answers whether a process may run rather than whether a given command is destructive, so a model asking to run tests could pass `rm -rf /` and reach through a test invocation the guard that protects every other spawn. Normal test commands are unaffected.
+  - `lint.check` now refuses secret-looking paths (`.env`, `*.pem`, `credentials.json`, and the rest) before reading them, matching every other file-reading tool. It previously resolved inside the workspace and skipped that check.
+  - Credential and gateway/MCP secret environment variable names are validated by one rule set instead of three. The config-time check accepted 11 reserved names case-sensitively while the runtime check rejected 27 case-insensitively, so a config naming `TEMP` or `COMSPEC` loaded successfully and then failed when the gateway started. `axiom-llm` now depends on `axiom-core` for the shared rule.
+- Fixed
+  - The provider/variant model table was written down twice, as a `match` and as the `variant_models` map, and had already diverged in 14 places. The `ollama_cloud` low/medium pair was transposed, `nvidia` high/xhigh and all four `ollama` variants disagreed, and every provider the `match` covered also existed in the map, which is consulted first. The dead table is deleted and the surviving values are pinned by test. No provider loses its defaults, and unknown provider or variant pairs now return no model instead of a stale second opinion.
+  - `file.read_many` recorded a hardcoded `.` as its authorization target, so every proof entry claimed the workspace root regardless of which paths were requested. The target now names the requested root. Per-path reads were always resolved and secret-checked individually, so this affected the audit record rather than access control.
+  - The secret-path check is now structural. Five call sites repeated a four-line pattern (reject the supplied name, resolve inside the workspace, reject the resolved target); the second check is what stops a symlink from pointing at a secret outside the workspace, and repeating it five times meant a future edit could drop it in one place. `Workspace::resolve_secret_free` performs both, and each crate maps the error in a thin adapter. Escaping the workspace and naming a secret remain distinct failures.
+  - `proof.redact_secrets` was a setting that did nothing. Redaction is mandatory for durable proof artifacts and always runs; the flag is retained so existing configs keep loading, but `PROOF_MODE.md` no longer advertises it as tunable and the code documents why it is ignored.
+- Changed
+  - No user-visible behavior changes to chat, the TUI, the turn loop, or the CLI surface. `axiom --help`, `axiom chat --help`, and `axiom code --help` produce byte-identical output.
+  - `LlmConfig::default_variant_model` is removed. It was the second copy of the model table described above and was only reachable for providers absent from the map, which is every provider it covered. `LlmConfig::model_for_variant` is unchanged for callers.
+  - `axiom-llm` gains a path dependency on `axiom-core`. No new external crates; the dependency graph change is one internal edge.
+  - The largest modules are split into focused files: `chat.rs` (8394 lines) into 8, `executor.rs` (6396) into 4, `loop_controller.rs` (3779) into 11, `config.rs` (2284) into 4, `tui.rs` (2094) into 7, and `main.rs` (1538) into `cli_args.rs` and `doctor.rs`. Time helpers, the secret-path check, and tool-completion handling in the turn loop are each single-sourced rather than repeated.
+  - The release gate resolves the axiom-core config module by scanning the directory instead of hardcoding `config.rs`, so splitting that module further does not silently break the gate.
+
 ## 1.0.24
 
 - Fixed

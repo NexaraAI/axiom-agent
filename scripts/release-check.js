@@ -120,11 +120,33 @@ function assertGeneratedCompilerArtifactsIgnored() {
   }
 }
 
+// axiom-core's config module is a directory, so facts that used to live in a
+// single config.rs can be spread across config/mod.rs and its siblings.
+// Read all of them together so these gates keep working as the module is
+// split further, instead of silently checking one file and missing the value.
+function readAxiomCoreConfig() {
+  const configDir = path.join(REPO_ROOT, "crates", "axiom-core", "src", "config");
+  const candidates = [];
+  if (fs.existsSync(path.join(configDir, "mod.rs"))) {
+    for (const name of fs.readdirSync(configDir)) {
+      if (name.endsWith(".rs")) {
+        candidates.push(path.join(configDir, name));
+      }
+    }
+  } else if (fs.existsSync(path.join(REPO_ROOT, "crates", "axiom-core", "src", "config.rs"))) {
+    candidates.push(path.join(REPO_ROOT, "crates", "axiom-core", "src", "config.rs"));
+  }
+
+  if (candidates.length === 0) {
+    return fail(
+      "Could not find the axiom-core config module (expected src/config/mod.rs or src/config.rs)."
+    );
+  }
+  return candidates.map((file) => fs.readFileSync(file, "utf8")).join("\n");
+}
+
 function assertDefaultRegistry() {
-  const config = fs.readFileSync(
-    path.join(REPO_ROOT, "crates", "axiom-core", "src", "config.rs"),
-    "utf8"
-  );
+  const config = readAxiomCoreConfig();
   if (!config.includes("NexaraAI/axiom-skills")) {
     fail("Default skills registry must point to NexaraAI/axiom-skills.");
   }
@@ -147,10 +169,7 @@ function assertReadmeStatus() {
 }
 
 function assertConfigSchemaDocumentation() {
-  const configSource = fs.readFileSync(
-    path.join(REPO_ROOT, "crates", "axiom-core", "src", "config.rs"),
-    "utf8"
-  );
+  const configSource = readAxiomCoreConfig();
   const versionMatch = configSource.match(/CURRENT_CONFIG_VERSION:\s*u32\s*=\s*(\d+)/);
   if (!versionMatch) {
     fail("Could not determine CURRENT_CONFIG_VERSION from axiom-core.");
