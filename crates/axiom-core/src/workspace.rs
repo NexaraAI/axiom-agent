@@ -522,21 +522,55 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
     }
 
+    /// Pins the names the alias tests rely on, on every platform.
+    ///
+    /// The point of an alias test is that the *supplied* name is innocuous
+    /// and only the *resolved* target is a secret. If the fixture name ever
+    /// drifts into looking like a secret, the test silently stops exercising
+    /// resolution and starts re-testing the raw-name check, which is exactly
+    /// the mistake an earlier version of the symlink test made.
+    #[test]
+    fn alias_test_fixtures_straddle_the_secret_boundary() {
+        assert!(!is_secret_path(Path::new("notes.txt")));
+        assert!(is_secret_path(Path::new("creds.pem")));
+        // The mistake the earlier fixture made: the link name itself looked
+        // like a secret, so resolution was never reached.
+        assert!(is_secret_path(Path::new("link.pem")));
+    }
+
+    /// A symlink inside the workspace pointing at a secret is refused on the
+    /// strength of the *resolved* target, not the supplied name.
+    ///
+    /// Unix only, so this does not run on Windows, where creating a file
+    /// symlink needs an elevated token or Developer Mode. The same path is
+    /// covered on every CI run by
+    /// `axiom_coder::patch::tests::rejects_patch_through_symlink_alias_to_secret`,
+    /// which builds the same alias and now routes through this function, so
+    /// the behavior is not unverified on the platform that matters.
     #[cfg(unix)]
     #[test]
     fn resolve_secret_free_rejects_symlink_alias_to_a_secret() {
+        use std::os::unix::fs::symlink;
+
         let root = unique_temp_dir();
         let outside = root.join("outside");
         fs::create_dir_all(&outside).expect("outside dir");
         fs::write(outside.join("creds.pem"), "secret").expect("secret fixture");
-        std::os::unix::fs::symlink(outside.join("creds.pem"), root.join("link.pem"))
-            .expect("symlink");
+        // The link name must be innocuous. An earlier version used
+        // `link.pem`, which the raw-name check rejects on its own, so the
+        // test never reached the resolution it was written to cover and its
+        // assertion on the resolved target could not have held.
+        symlink(outside.join("creds.pem"), root.join("notes.txt")).expect("symlink");
 
         let workspace = Workspace::new(&root).expect("workspace");
+        assert!(
+            !is_secret_path(&root.join("notes.txt")),
+            "the supplied name must not look like a secret for this test to mean anything"
+        );
+
         // The name the model supplied is innocuous; only the resolved target
         // reveals that it points at a secret.
-        let error = workspace.resolve_secret_free("link.pem").unwrap_err();
-        match error {
+        match workspace.resolve_secret_free("notes.txt").unwrap_err() {
             AxiomError::SecretPath { path } => assert!(
                 path.to_string_lossy().contains("creds.pem"),
                 "expected the resolved target in {path:?}"
