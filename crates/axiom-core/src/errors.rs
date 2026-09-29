@@ -25,6 +25,8 @@ pub enum AxiomError {
     },
     #[error("path is outside the workspace: {path}")]
     UnsafeWorkspacePath { path: PathBuf },
+    #[error("refusing to access a secret-looking path: {path}")]
+    SecretPath { path: PathBuf },
     #[error("path cannot be normalized safely: {path}")]
     InvalidPath { path: PathBuf },
 }

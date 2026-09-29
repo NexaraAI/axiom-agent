@@ -1,6 +1,6 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
-use axiom_core::is_secret_path;
+use axiom_core::{is_secret_path, Workspace};
 
 use crate::{
     ApprovalRequest, PolicyAction, PolicyOutcome, SideEffectAuditSink, SideEffectClass,
@@ -77,4 +77,24 @@ pub(super) fn block_secret_path(path: impl AsRef<Path>) -> Result<(), SkillExecu
     } else {
         Ok(())
     }
+}
+
+/// Resolves `path` inside `workspace`, refusing secret-looking paths on both
+/// the supplied name and the resolved target.
+///
+/// The double check is what stops a symlink inside the workspace from
+/// pointing at a `.env` or `*.pem` outside it; `Workspace::resolve_secret_free`
+/// performs both checks so no call site can accidentally skip one.
+pub(super) fn resolve_secret_free(
+    workspace: &Workspace,
+    path: impl AsRef<Path>,
+) -> Result<PathBuf, SkillExecutionError> {
+    workspace
+        .resolve_secret_free(path)
+        .map_err(|error| match error {
+            axiom_core::AxiomError::SecretPath { path } => {
+                SkillExecutionError::SecretPath(path.display().to_string())
+            }
+            other => SkillExecutionError::Workspace(other),
+        })
 }

@@ -26,7 +26,7 @@ mod parsers;
 mod schema;
 
 pub use gate::authorize_side_effect;
-use gate::block_secret_path;
+use gate::{block_secret_path, resolve_secret_free};
 pub use parsers::extract_tool_request;
 pub use schema::{normalize_tool_arguments, validate_schema_value};
 
@@ -1803,10 +1803,8 @@ fn file_read(
     context: &SkillExecutionContext,
 ) -> Result<Value, SkillExecutionError> {
     let path = string_arg(request, "path")?;
-    block_secret_path(&path)?;
     let workspace = Workspace::new(&context.workspace_root)?;
-    let resolved = workspace.resolve_inside(&path)?;
-    block_secret_path(&resolved)?;
+    let resolved = resolve_secret_free(&workspace, &path)?;
     let metadata = fs::metadata(&resolved)?;
     if metadata.len() > context.max_file_read_bytes {
         return Err(SkillExecutionError::FileTooLarge {
@@ -1869,10 +1867,8 @@ fn file_write(
 ) -> Result<Value, SkillExecutionError> {
     let path = string_arg(request, "path")?;
     let content = string_arg(request, "content")?;
-    block_secret_path(&path)?;
     let workspace = Workspace::new(&context.workspace_root)?;
-    let resolved = workspace.resolve_inside(&path)?;
-    block_secret_path(&resolved)?;
+    let resolved = resolve_secret_free(&workspace, &path)?;
     let created = !resolved.exists();
 
     let old_content = if resolved.exists() {
@@ -1922,10 +1918,8 @@ fn file_replace(
         .and_then(Value::as_bool)
         .unwrap_or(false);
 
-    block_secret_path(&path)?;
     let workspace = Workspace::new(&context.workspace_root)?;
-    let resolved = workspace.resolve_inside(&path)?;
-    block_secret_path(&resolved)?;
+    let resolved = resolve_secret_free(&workspace, &path)?;
 
     if !resolved.exists() {
         return Err(SkillExecutionError::ExecutionFailed {

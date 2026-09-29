@@ -221,6 +221,32 @@ impl Workspace {
     pub fn contains(&self, path: impl AsRef<Path>) -> bool {
         self.resolve_inside(path).is_ok()
     }
+
+    /// Resolves `path` inside the workspace and refuses secret-looking paths.
+    ///
+    /// The secret check runs twice on purpose: once on the caller-supplied
+    /// string and once on the resolved path. A single check is not enough,
+    /// because a symlink or junction inside the workspace can point at a
+    /// `.env` or a `*.pem` outside it, and only the resolved path reveals
+    /// that. Doing both checks here makes the invariant structural instead
+    /// of relying on every call site to remember it.
+    ///
+    /// The two rejection reasons stay distinct: escaping the workspace is a
+    /// different failure from naming a secret, and callers report them
+    /// differently.
+    pub fn resolve_secret_free(&self, path: impl AsRef<Path>) -> Result<PathBuf> {
+        let raw = path.as_ref();
+        if is_secret_path(raw) {
+            return Err(AxiomError::SecretPath {
+                path: raw.to_path_buf(),
+            });
+        }
+        let resolved = self.resolve_inside(raw)?;
+        if is_secret_path(&resolved) {
+            return Err(AxiomError::SecretPath { path: resolved });
+        }
+        Ok(resolved)
+    }
 }
 
 fn nearest_existing_ancestor(path: &Path) -> PathBuf {
@@ -455,6 +481,70 @@ mod tests {
         }
 
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn resolve_secret_free_rejects_directly_named_secrets() {
+        let root = unique_temp_dir();
+        fs::create_dir_all(&root).expect("workspace");
+        let workspace = Workspace::new(&root).expect("workspace");
+
+        let error = workspace.resolve_secret_free(".env").unwrap_err();
+        match error {
+            AxiomError::SecretPath { path } => {
+                assert!(path.ends_with(".env"), "{}", path.display())
+            }
+            other => panic!("expected SecretPath, got {other:?}"),
+        }
+
+        let safe = workspace
+            .resolve_secret_free("notes.txt")
+            .expect("safe path resolves");
+        assert!(safe.ends_with("notes.txt"));
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn resolve_secret_free_distinguishes_escape_from_secret() {
+        let root = unique_temp_dir();
+        fs::create_dir_all(&root).expect("workspace");
+        let workspace = Workspace::new(&root).expect("workspace");
+
+        // Escaping the workspace is a different failure from naming a
+        // secret, and callers report them differently.
+        let error = workspace.resolve_secret_free("../outside.txt").unwrap_err();
+        assert!(
+            matches!(error, AxiomError::UnsafeWorkspacePath { .. }),
+            "expected UnsafeWorkspacePath, got {error:?}"
+        );
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn resolve_secret_free_rejects_symlink_alias_to_a_secret() {
+        let root = unique_temp_dir();
+        let outside = root.join("outside");
+        fs::create_dir_all(&outside).expect("outside dir");
+        fs::write(outside.join("creds.pem"), "secret").expect("secret fixture");
+        std::os::unix::fs::symlink(outside.join("creds.pem"), root.join("link.pem"))
+            .expect("symlink");
+
+        let workspace = Workspace::new(&root).expect("workspace");
+        // The name the model supplied is innocuous; only the resolved target
+        // reveals that it points at a secret.
+        let error = workspace.resolve_secret_free("link.pem").unwrap_err();
+        match error {
+            AxiomError::SecretPath { path } => assert!(
+                path.to_string_lossy().contains("creds.pem"),
+                "expected the resolved target in {path:?}"
+            ),
+            other => panic!("expected SecretPath, got {other:?}"),
+        }
+
+        let _ = fs::remove_dir_all(&root);
     }
 
     fn unique_temp_dir() -> PathBuf {

@@ -1,6 +1,9 @@
-use std::{fs, path::Path};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+};
 
-use axiom_core::{is_secret_path, AxiomError, Workspace};
+use axiom_core::{AxiomError, Workspace};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
@@ -144,9 +147,7 @@ pub fn validate_change(change: &FileChange, workspace: &Workspace) -> Result<(),
     }
     validate_hunk_order(change)?;
 
-    block_secret_path(&change.path)?;
-    let resolved = workspace.resolve_inside(&change.path)?;
-    block_secret_path(&resolved)?;
+    resolve_secret_free(workspace, &change.path)?;
     Ok(())
 }
 
@@ -206,9 +207,7 @@ pub fn verify_prepared_patch(
 ) -> Result<(), PatchError> {
     let workspace = Workspace::new(workspace_root)?;
     for file in &patch.files {
-        block_secret_path(&file.path)?;
-        let resolved = workspace.resolve_inside(&file.path)?;
-        block_secret_path(&resolved)?;
+        let resolved = resolve_secret_free(&workspace, &file.path)?;
         let current_sha256 = if resolved.exists() {
             Some(sha256_hex(&fs::read(&resolved)?))
         } else {
@@ -379,13 +378,18 @@ fn extract_patch_json(text: &str) -> Result<&str, PatchError> {
     Err(PatchError::MissingPatchBlock)
 }
 
-fn block_secret_path(path: impl AsRef<Path>) -> Result<(), PatchError> {
-    let path = path.as_ref();
-    if is_secret_path(path) {
-        Err(PatchError::SecretPath(path.display().to_string()))
-    } else {
-        Ok(())
-    }
+/// Resolves `path` inside `workspace`, refusing secret-looking paths on
+/// both the supplied name and the resolved target.
+fn resolve_secret_free(
+    workspace: &Workspace,
+    path: impl AsRef<Path>,
+) -> Result<PathBuf, PatchError> {
+    workspace
+        .resolve_secret_free(path)
+        .map_err(|error| match error {
+            AxiomError::SecretPath { path } => PatchError::SecretPath(path.display().to_string()),
+            other => PatchError::Workspace(other),
+        })
 }
 
 #[cfg(test)]
