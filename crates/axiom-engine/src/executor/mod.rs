@@ -436,7 +436,17 @@ impl SkillExecutor for FileReadManyExecutor {
                 self.id(),
                 "fs.read_many",
                 [SideEffectClass::FilesystemRead],
-                Some(".".to_string()),
+                // The real reads are per-path and each one is resolved and
+                // secret-checked individually, but the authorization and the
+                // audit record describe the operation as a whole. Recording a
+                // hardcoded "." made every proof entry claim the workspace
+                // root regardless of which files were touched, so a review
+                // of the trace could not tell what had been read. Name the
+                // path the reads are rooted at instead.
+                Some(
+                    optional_string_arg(request, "path")
+                        .unwrap_or_else(|| context.workspace_root.display().to_string()),
+                ),
             ),
         )?;
         file_read_many(request, context)
@@ -3497,6 +3507,12 @@ fn execute_test_command(
     cmd_str: &str,
     credential_env_names: &[String],
 ) -> Result<(bool, i32, String), SkillExecutionError> {
+    // A test command is still a shell command. `test.run` authorizes the
+    // Process side effect, but that only answers "may a process run", not
+    // "is this specific command destructive". Without this check a model
+    // that asks to run tests can supply any command at all, and reach
+    // through a test invocation the blocklist that guards `shell.run`.
+    check_dangerous_command(cmd_str)?;
     let mut command = create_shell_command("shell.run", cmd_str, cwd, credential_env_names);
     command
         .stdout(std::process::Stdio::piped())
@@ -4351,15 +4367,18 @@ const LINT_MAX_FINDINGS: usize = 20;
 
 fn lint_check(path: &str, context: &SkillExecutionContext) -> Result<Value, SkillExecutionError> {
     let workspace = Workspace::new(&context.workspace_root)?;
-    let resolved = match workspace.resolve_inside(path) {
-        Ok(resolved) => resolved,
-        Err(_) => {
-            return Err(SkillExecutionError::ExecutionFailed {
-                skill_id: "lint.check".to_string(),
-                message: format!("`{path}` is outside the active workspace"),
-            });
-        }
-    };
+    // Every other file-reading tool rejects secret-looking paths before
+    // touching their contents. Lint was resolving inside the workspace but
+    // skipping that check, so a hook-driven lint of a `.env` would read it.
+    // The output is only line lengths and tab positions, so nothing is echoed
+    // back, but the read itself is the thing being prevented elsewhere.
+    let resolved = resolve_secret_free(&workspace, path).map_err(|error| match error {
+        SkillExecutionError::SecretPath(path) => SkillExecutionError::SecretPath(path),
+        _ => SkillExecutionError::ExecutionFailed {
+            skill_id: "lint.check".to_string(),
+            message: format!("`{path}` is outside the active workspace"),
+        },
+    })?;
     if !resolved.is_file() {
         return Ok(json!({
             "path": path,
@@ -4468,6 +4487,108 @@ mod tests {
     };
 
     use super::*;
+
+    /// `lint.check` resolved paths inside the workspace but never rejected
+    /// secret-looking ones, unlike every other file-reading tool. The output
+    /// is only line lengths and tab positions so nothing is echoed back, but
+    /// the read is exactly what the other tools refuse to do.
+    #[test]
+    fn lint_check_refuses_secret_paths() {
+        for name in [".env", "credentials.json", "server.pem", "id.key"] {
+            let root = unique_temp_dir();
+            fs::create_dir_all(&root).expect("root");
+            fs::write(root.join(name), "SECRET=value\nA=B\n").expect("fixture");
+            let result = lint_check(name, &context(&root));
+            let _ = fs::remove_dir_all(&root);
+
+            let error = result.expect_err("secret path should be refused");
+            assert!(
+                matches!(error, SkillExecutionError::SecretPath(_)),
+                "{name} was linted instead of refused: {error:?}"
+            );
+        }
+    }
+
+    /// The audit record for a read should name what was read. `file.read_many`
+    /// hardcoded "." regardless of the request, so every proof entry claimed
+    /// the workspace root even when the paths came from somewhere else.
+    #[tokio::test]
+    async fn read_many_audit_records_the_requested_root() {
+        let root = unique_temp_dir();
+        fs::create_dir_all(root.join("nested")).expect("root");
+        fs::write(root.join("nested").join("a.txt"), "a").expect("fixture");
+
+        let request = ToolRequest {
+            skill_id: "file.read_many".to_string(),
+            arguments: json!({ "path": "nested", "paths": ["a.txt"] }),
+        };
+        let policy = SideEffectPolicy::allow_all();
+        let mut approval = AllowAllApprover;
+        let mut audit = RecordingSideEffectAuditSink::default();
+        FileReadManyExecutor
+            .execute_with_policy(
+                &request,
+                &context(&root),
+                &mut approval,
+                &policy,
+                &mut audit,
+            )
+            .await
+            .expect("read_many succeeds");
+        let _ = fs::remove_dir_all(&root);
+
+        let decisions = audit.into_decisions();
+        let decision = decisions.first().expect("a decision was recorded");
+        assert_eq!(
+            decision.evaluation.request.target.as_deref(),
+            Some("nested"),
+            "audit target should name the requested root"
+        );
+    }
+
+    /// `test.run` accepts a model-supplied command and runs it through a
+    /// shell. Authorizing the Process side effect answers "may a process
+    /// run", not "is this command destructive", so before the fix a model
+    /// asking to run tests could pass a destructive command and reach
+    /// through a test invocation the blocklist that guards `shell.run`.
+    #[test]
+    fn test_run_rejects_destructive_commands() {
+        for command in [
+            "cargo test",
+            "rm -rf / #",
+            "rmdir /s /q c:",
+            "format c:",
+            ":(){ :|:& };:",
+        ] {
+            let root = unique_temp_dir();
+            fs::create_dir_all(&root).expect("root");
+            let request = ToolRequest {
+                skill_id: "test.run".to_string(),
+                arguments: json!({ "path": ".", "command": command }),
+            };
+            let context = context(&root);
+            let result = test_run(&request, &context);
+            let _ = fs::remove_dir_all(&root);
+
+            if command == "cargo test" {
+                // The benign case is not rejected as destructive. Whether it
+                // then passes or fails depends on the machine, and either
+                // outcome is fine; the point is that the guard let it through.
+                if let Err(rejection) = &result {
+                    assert!(
+                        !rejection.to_string().contains("destructive"),
+                        "a normal test command was blocked: {rejection}"
+                    );
+                }
+            } else {
+                let rejection = result.expect_err("destructive command");
+                assert!(
+                    rejection.to_string().contains("destructive"),
+                    "{command} was not rejected as destructive: {rejection}"
+                );
+            }
+        }
+    }
 
     #[derive(Default)]
     struct CountingApprover {
