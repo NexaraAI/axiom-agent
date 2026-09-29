@@ -5,6 +5,7 @@ pub mod report;
 pub mod storage;
 pub mod trace;
 
+pub use export::redact_value;
 pub use recorder::{
     new_approval, new_tool_call, LensSelectionRecord, ProofExportPaths, ProofRecorder,
     ProofSettings,

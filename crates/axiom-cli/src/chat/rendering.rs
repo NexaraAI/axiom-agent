@@ -164,43 +164,15 @@ pub(crate) fn render_animated_file_write(path: &str, content: &str) {
     }
 }
 
+/// Redacts secrets from a JSON value using the single implementation in
+/// `axiom-proof`.
+///
+/// This used to carry its own, weaker copy of the key rules: a substring
+/// test over seven needles. That missed keys the strong redactor knows
+/// about, `private_key` among them, so values carrying them were persisted
+/// to session state in the clear.
 pub(crate) fn redact_json_value(value: serde_json::Value) -> serde_json::Value {
-    match value {
-        serde_json::Value::Object(values) => serde_json::Value::Object(
-            values
-                .into_iter()
-                .map(|(key, value)| {
-                    let lower = key.to_ascii_lowercase();
-                    let secret = [
-                        "api_key",
-                        "apikey",
-                        "token",
-                        "secret",
-                        "password",
-                        "authorization",
-                        "credential",
-                    ]
-                    .iter()
-                    .any(|needle| lower.contains(needle));
-                    (
-                        key,
-                        if secret {
-                            serde_json::Value::String("[REDACTED]".to_string())
-                        } else {
-                            redact_json_value(value)
-                        },
-                    )
-                })
-                .collect(),
-        ),
-        serde_json::Value::Array(values) => {
-            serde_json::Value::Array(values.into_iter().map(redact_json_value).collect())
-        }
-        serde_json::Value::String(value) => {
-            serde_json::Value::String(axiom_proof::redact_text(&value))
-        }
-        value => value,
-    }
+    axiom_proof::redact_value(value)
 }
 
 pub(crate) fn session_todo_status_label(status: TodoStatus) -> &'static str {
@@ -311,5 +283,48 @@ pub(crate) fn give_up_reason_label(reason: &GiveUpReason) -> String {
                 label
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    /// Keys that the strong redactor in axiom-proof covers but a naive
+    /// substring check misses. Each of these leaked into persisted
+    /// session state before the redactors were unified.
+    #[test]
+    fn redact_json_value_covers_camel_case_and_suffixed_secret_keys() {
+        let value = json!({
+            "accessToken": "at-LEAKED-1",
+            "clientSecret": "cs-LEAKED-2",
+            "refresh_token": "rt-LEAKED-3",
+            "private_key": "pk-LEAKED-4",
+            "apiToken": "apt-LEAKED-5",
+            "awsSecretAccessKey": "aws-LEAKED-6",
+            "ordinary": "keep me"
+        });
+        let redacted = redact_json_value(value);
+        let text = redacted.to_string();
+        for leaked in [
+            "LEAKED-1", "LEAKED-2", "LEAKED-3", "LEAKED-4", "LEAKED-5", "LEAKED-6",
+        ] {
+            assert!(
+                !text.contains(leaked),
+                "{leaked} survived redaction in {text}"
+            );
+        }
+        assert_eq!(redacted["ordinary"], json!("keep me"));
+    }
+
+    #[test]
+    fn redact_json_value_recurses_through_arrays_and_strings() {
+        let value = json!({
+            "items": [{ "accessToken": "arr-LEAKED" }],
+            "note": "token=ghi789012345",
+        });
+        let text = redact_json_value(value).to_string();
+        assert!(!text.contains("arr-LEAKED"), "{text}");
     }
 }

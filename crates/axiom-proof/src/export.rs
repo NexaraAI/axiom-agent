@@ -23,6 +23,19 @@ fn redacted_value(trace: &ProofTrace) -> serde_json::Result<Value> {
     Ok(value)
 }
 
+/// Returns a copy of `value` with secrets redacted.
+///
+/// The in-place `redact_json_value` above is what the exporter uses. This
+/// by-value wrapper exists so callers that already own a `Value` do not
+/// have to reimplement the key rules; sharing one implementation is the
+/// point, because the duplicate this replaced matched a strict subset of
+/// these keys and so leaked the difference.
+pub fn redact_value(value: Value) -> Value {
+    let mut value = value;
+    redact_json_value(&mut value);
+    value
+}
+
 fn redact_json_value(value: &mut Value) {
     match value {
         Value::String(text) => *text = redact_string(text),
