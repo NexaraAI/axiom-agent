@@ -1302,74 +1302,23 @@ impl<'a> AgentLoop<'a> {
                             request: request.clone(),
                         },
                     )?;
-                    let status = match tool_result {
-                        Ok(result) => {
-                            consecutive_tool_errors = 0;
-                            ToolExecutionStatus::Succeeded(result)
-                        }
-                        Err(error) => {
-                            let err_str = error.to_string();
-                            let is_non_fatal = err_str.contains("approval denied")
-                                || err_str.contains("timeout")
-                                || err_str.contains("timed out")
-                                || err_str.contains("cancelled");
-                            if !is_non_fatal {
-                                consecutive_tool_errors += 1;
-                            }
-                            ToolExecutionStatus::Failed(err_str)
-                        }
-                    };
-                    let mut hooks = pre_hooks.get(index).cloned().unwrap_or_default();
-                    let outcome_phase = match &status {
-                        ToolExecutionStatus::Succeeded(_) => HookPhase::Post,
-                        ToolExecutionStatus::Failed(_) => HookPhase::OnError,
-                    };
-                    hooks.extend(
-                        self.fire_hooks(outcome_phase, &request, &mut hook_budget, &mut progress)
-                            .await,
-                    );
+                    let pre_hooks = pre_hooks.get(index).cloned().unwrap_or_default();
                     progress
                         .policy_decisions
                         .extend(policy_audit.into_decisions());
-                    let event = ToolExecutionEvent {
-                        request: request.clone(),
-                        latency_ms: tool_started_at
-                            .elapsed()
-                            .as_millis()
-                            .min(u128::from(u64::MAX)) as u64,
-                        status,
-                        hooks,
-                    };
-                    let observation = tool_observation(&event);
-                    let observation_message = ChatMessage {
-                        role: "user".to_string(),
-                        content: observation.clone(),
-                    };
-                    progress.tool_events.push(event.clone());
-                    if tool_sequence > 1 && messages.last().is_some_and(|m| m.role == "user") {
-                        let last = messages.last_mut().expect("last message exists");
-                        last.content.push_str("\n\n");
-                        last.content.push_str(&observation);
-                        if let Some(last_delta) = progress
-                            .history_delta
-                            .last_mut()
-                            .filter(|m| m.role == "user")
-                        {
-                            last_delta.content = last.content.clone();
-                        }
-                    } else {
-                        messages.push(observation_message.clone());
-                        progress.history_delta.push(observation_message.clone());
-                    }
-                    self.record_transition(
+                    self.record_tool_completion(
+                        &request,
+                        Some(tool_result),
+                        tool_started_at,
+                        pre_hooks,
+                        &mut hook_budget,
                         &mut progress,
-                        AgentTransitionKind::ToolCompleted {
-                            iteration,
-                            tool_sequence,
-                            event,
-                            observation: observation_message,
-                        },
-                    )?;
+                        &mut messages,
+                        iteration,
+                        tool_sequence,
+                        &mut consecutive_tool_errors,
+                    )
+                    .await?;
                 }
             } else {
                 for request in tool_requests {
@@ -1418,77 +1367,22 @@ impl<'a> AgentLoop<'a> {
                             _ = self.cancellation.cancelled() => None,
                         }
                     };
-                    let status = match tool_result {
-                        Some(Ok(result)) => {
-                            consecutive_tool_errors = 0;
-                            ToolExecutionStatus::Succeeded(result)
-                        }
-                        Some(Err(error)) => {
-                            let err_str = error.to_string();
-                            let is_non_fatal = err_str.contains("approval denied")
-                                || err_str.contains("timeout")
-                                || err_str.contains("timed out")
-                                || err_str.contains("cancelled");
-                            if !is_non_fatal {
-                                consecutive_tool_errors += 1;
-                            }
-                            ToolExecutionStatus::Failed(err_str)
-                        }
-                        None => ToolExecutionStatus::Failed(
-                            "Tool execution cancelled by user".to_string(),
-                        ),
-                    };
-                    let mut hooks = pre_hooks;
-                    let outcome_phase = match &status {
-                        ToolExecutionStatus::Succeeded(_) => HookPhase::Post,
-                        ToolExecutionStatus::Failed(_) => HookPhase::OnError,
-                    };
-                    hooks.extend(
-                        self.fire_hooks(outcome_phase, &request, &mut hook_budget, &mut progress)
-                            .await,
-                    );
                     progress
                         .policy_decisions
                         .extend(policy_audit.into_decisions());
-                    let event = ToolExecutionEvent {
-                        request: request.clone(),
-                        latency_ms: tool_started_at
-                            .elapsed()
-                            .as_millis()
-                            .min(u128::from(u64::MAX)) as u64,
-                        status,
-                        hooks,
-                    };
-                    let observation = tool_observation(&event);
-                    let observation_message = ChatMessage {
-                        role: "user".to_string(),
-                        content: observation.clone(),
-                    };
-                    progress.tool_events.push(event.clone());
-                    if tool_sequence > 1 && messages.last().is_some_and(|m| m.role == "user") {
-                        let last = messages.last_mut().expect("last message exists");
-                        last.content.push_str("\n\n");
-                        last.content.push_str(&observation);
-                        if let Some(last_delta) = progress
-                            .history_delta
-                            .last_mut()
-                            .filter(|m| m.role == "user")
-                        {
-                            last_delta.content = last.content.clone();
-                        }
-                    } else {
-                        messages.push(observation_message.clone());
-                        progress.history_delta.push(observation_message.clone());
-                    }
-                    self.record_transition(
+                    self.record_tool_completion(
+                        &request,
+                        tool_result,
+                        tool_started_at,
+                        pre_hooks,
+                        &mut hook_budget,
                         &mut progress,
-                        AgentTransitionKind::ToolCompleted {
-                            iteration,
-                            tool_sequence,
-                            event,
-                            observation: observation_message,
-                        },
-                    )?;
+                        &mut messages,
+                        iteration,
+                        tool_sequence,
+                        &mut consecutive_tool_errors,
+                    )
+                    .await?;
 
                     if self.cancellation.is_cancelled() {
                         return self.give_up(GiveUpReason::Cancelled, iteration, progress);
@@ -1656,6 +1550,94 @@ impl<'a> AgentLoop<'a> {
             })?;
         }
         Ok(())
+    }
+
+    /// Classifies a tool result, runs the outcome hooks, folds the
+    /// observation into the transcript, and records the `ToolCompleted`
+    /// transition.
+    ///
+    /// The parallel and sequential dispatch paths differ only in how they
+    /// obtain the raw result and the pre-hooks, so everything after the
+    /// call itself lives here to keep the two branches from drifting.
+    ///
+    /// `tool_result` is `None` when execution was cancelled before the
+    /// tool returned, which is reported as a non-fatal failure.
+    #[allow(clippy::too_many_arguments)]
+    async fn record_tool_completion(
+        &mut self,
+        request: &ToolRequest,
+        tool_result: Option<Result<SkillExecutionResult, SkillExecutionError>>,
+        tool_started_at: Instant,
+        pre_hooks: Vec<HookExecution>,
+        hook_budget: &mut HookBudget,
+        progress: &mut TurnProgress,
+        messages: &mut Vec<ChatMessage>,
+        iteration: u32,
+        tool_sequence: u32,
+        consecutive_tool_errors: &mut u32,
+    ) -> Result<()> {
+        let status = match tool_result {
+            Some(Ok(result)) => {
+                *consecutive_tool_errors = 0;
+                ToolExecutionStatus::Succeeded(result)
+            }
+            Some(Err(error)) => {
+                let err_str = error.to_string();
+                if !is_non_fatal_tool_error(&err_str) {
+                    *consecutive_tool_errors = consecutive_tool_errors.saturating_add(1);
+                }
+                ToolExecutionStatus::Failed(err_str)
+            }
+            None => ToolExecutionStatus::Failed("Tool execution cancelled by user".to_string()),
+        };
+        let outcome_phase = match &status {
+            ToolExecutionStatus::Succeeded(_) => HookPhase::Post,
+            ToolExecutionStatus::Failed(_) => HookPhase::OnError,
+        };
+        let mut hooks = pre_hooks;
+        hooks.extend(
+            self.fire_hooks(outcome_phase, request, hook_budget, progress)
+                .await,
+        );
+        let event = ToolExecutionEvent {
+            request: request.clone(),
+            latency_ms: tool_started_at
+                .elapsed()
+                .as_millis()
+                .min(u128::from(u64::MAX)) as u64,
+            status,
+            hooks,
+        };
+        let observation = tool_observation(&event);
+        let observation_message = ChatMessage {
+            role: "user".to_string(),
+            content: observation.clone(),
+        };
+        progress.tool_events.push(event.clone());
+        if tool_sequence > 1 && messages.last().is_some_and(|m| m.role == "user") {
+            let last = messages.last_mut().expect("last message exists");
+            last.content.push_str("\n\n");
+            last.content.push_str(&observation);
+            if let Some(last_delta) = progress
+                .history_delta
+                .last_mut()
+                .filter(|m| m.role == "user")
+            {
+                last_delta.content = last.content.clone();
+            }
+        } else {
+            messages.push(observation_message.clone());
+            progress.history_delta.push(observation_message.clone());
+        }
+        self.record_transition(
+            progress,
+            AgentTransitionKind::ToolCompleted {
+                iteration,
+                tool_sequence,
+                event,
+                observation: observation_message,
+            },
+        )
     }
 
     fn cost_limit_reached(&self, ledger: &UsageLedger) -> bool {
@@ -1863,6 +1845,16 @@ fn is_readonly_tool(skill_id: &str) -> bool {
             | "code.glob"
             | "code.list"
     )
+}
+
+/// A tool failure that should not count toward the consecutive-error budget:
+/// the user declined it, or the attempt timed out or was cancelled. These
+/// are recoverable, so the loop keeps going instead of giving up.
+fn is_non_fatal_tool_error(error: &str) -> bool {
+    error.contains("approval denied")
+        || error.contains("timeout")
+        || error.contains("timed out")
+        || error.contains("cancelled")
 }
 
 /// The model-facing observation for a finished tool call: the tool result
