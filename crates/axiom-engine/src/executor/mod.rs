@@ -10,19 +10,25 @@ use std::{
 };
 
 use async_trait::async_trait;
-use axiom_core::{
-    atomic_write, is_secret_path, run_command_bounded, Workspace, SECRET_GIT_PATHSPEC_EXCLUSIONS,
-};
+use axiom_core::{atomic_write, run_command_bounded, Workspace, SECRET_GIT_PATHSPEC_EXCLUSIONS};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use thiserror::Error;
 
 use crate::{
     check_manifest_compatibility, current_axiom_version, ExternalToolSource, InstalledSkill,
-    Permission, Platform, PolicyAction, PolicyOutcome, RiskLevel, SideEffectAuditSink,
-    SideEffectClass, SideEffectDecision, SideEffectPolicy, SideEffectRequest, SkillLifecycleState,
-    SkillType, TrustLevel,
+    Permission, Platform, RiskLevel, SideEffectAuditSink, SideEffectClass, SideEffectDecision,
+    SideEffectPolicy, SideEffectRequest, SkillLifecycleState, SkillType, TrustLevel,
 };
+
+mod gate;
+mod parsers;
+mod schema;
+
+pub use gate::authorize_side_effect;
+use gate::block_secret_path;
+pub use parsers::extract_tool_request;
+pub use schema::{normalize_tool_arguments, validate_schema_value};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ToolRequest {
@@ -449,30 +455,30 @@ struct WebFetchExecutor;
 struct GitHubSearchExecutor;
 struct GitStatusExecutor;
 struct GitDiffExecutor;
-pub struct ShellExecutor {
+struct ShellExecutor {
     id: &'static str,
 }
 
 impl ShellExecutor {
-    pub const fn powershell() -> Self {
+    const fn powershell() -> Self {
         Self {
             id: "shell.powershell.safe",
         }
     }
-    pub const fn bash() -> Self {
+    const fn bash() -> Self {
         Self {
             id: "shell.bash.safe",
         }
     }
-    pub const fn zsh() -> Self {
+    const fn zsh() -> Self {
         Self {
             id: "shell.zsh.safe",
         }
     }
-    pub const fn python_run() -> Self {
+    const fn python_run() -> Self {
         Self { id: "python.run" }
     }
-    pub const fn generic_run() -> Self {
+    const fn generic_run() -> Self {
         Self { id: "shell.run" }
     }
 }
@@ -1407,140 +1413,6 @@ pub enum SkillExecutionError {
     CommandFailed(String),
     #[error("skill `{skill_id}` execution failed: {message}")]
     ExecutionFailed { skill_id: String, message: String },
-}
-
-pub fn extract_tool_request(text: &str) -> Result<ToolRequest, SkillExecutionError> {
-    let markers = &[
-        "```axiom-tool",
-        "```axiom_tool",
-        "```tool-call",
-        "```tool_call",
-        "```tool",
-    ];
-    let mut found = None;
-    for marker in markers {
-        if let Some(pos) = text.find(marker) {
-            found = Some((pos, marker.len()));
-            break;
-        }
-    }
-    if found.is_none() {
-        if let Some(pos) = text.find("```json") {
-            let json_start = pos + "```json".len();
-            if let Some(end) = text[json_start..].find("```") {
-                let candidate = &text[json_start..json_start + end];
-                if candidate.contains("\"skill_id\"")
-                    || (candidate.contains("\"name\"")
-                        && (candidate.contains("file.")
-                            || candidate.contains("project.")
-                            || candidate.contains("axiom_")))
-                {
-                    found = Some((pos, "```json".len()));
-                }
-            }
-        }
-    }
-    let (start, marker_len) = found.ok_or(SkillExecutionError::MissingToolBlock)?;
-    let json_start = start + marker_len;
-    let after_start = text[json_start..].trim_start();
-    let json_text = if let Some(end) = after_start.find("```") {
-        after_start[..end].trim()
-    } else {
-        after_start.trim()
-    };
-
-    let raw: serde_json::Value = repair_and_parse_json(json_text)?;
-    normalize_tool_request_value(raw)
-}
-
-fn repair_and_parse_json(text: &str) -> Result<serde_json::Value, serde_json::Error> {
-    if let Ok(val) = serde_json::from_str(text) {
-        return Ok(val);
-    }
-    let mut cleaned = text.trim().to_string();
-    if cleaned.ends_with('>') {
-        cleaned.pop();
-        cleaned.push('}');
-    }
-    if let Ok(val) = serde_json::from_str(&cleaned) {
-        return Ok(val);
-    }
-    let open_braces = cleaned.chars().filter(|c| *c == '{').count();
-    let close_braces = cleaned.chars().filter(|c| *c == '}').count();
-    if open_braces > close_braces {
-        let quote_count = cleaned.chars().filter(|c| *c == '"').count();
-        if quote_count % 2 == 1 {
-            cleaned.push('"');
-        }
-        for _ in 0..(open_braces - close_braces) {
-            cleaned.push('}');
-        }
-    }
-    serde_json::from_str(&cleaned)
-}
-
-fn normalize_tool_request_value(
-    raw: serde_json::Value,
-) -> Result<ToolRequest, SkillExecutionError> {
-    if let serde_json::Value::Object(map) = raw {
-        let mut skill_id = if let Some(id) = map.get("skill_id").and_then(serde_json::Value::as_str)
-        {
-            id.to_string()
-        } else if let Some(name) = map.get("name").and_then(serde_json::Value::as_str) {
-            name.strip_prefix("axiom_").unwrap_or(name).to_string()
-        } else if let Some(tool) = map.get("tool").and_then(serde_json::Value::as_str) {
-            tool.to_string()
-        } else {
-            return Err(SkillExecutionError::SchemaValidation {
-                skill_id: "unknown".to_string(),
-                direction: "input",
-                message: "missing skill_id or name in tool request".to_string(),
-            });
-        };
-
-        if skill_id == "shell_run"
-            || skill_id == "shell.run"
-            || skill_id == "run_shell"
-            || skill_id == "exec"
-            || skill_id == "shell"
-        {
-            #[cfg(windows)]
-            {
-                skill_id = "shell.powershell.safe".to_string();
-            }
-            #[cfg(target_os = "macos")]
-            {
-                skill_id = "shell.zsh.safe".to_string();
-            }
-            #[cfg(not(any(windows, target_os = "macos")))]
-            {
-                skill_id = "shell.bash.safe".to_string();
-            }
-        } else if !skill_id.contains('.') && skill_id.contains('_') {
-            skill_id = skill_id.replace('_', ".");
-        }
-
-        let arguments = if let Some(args) = map.get("arguments") {
-            args.clone()
-        } else if let Some(params) = map.get("parameters") {
-            params.clone()
-        } else if let Some(args) = map.get("args") {
-            args.clone()
-        } else {
-            serde_json::json!({})
-        };
-
-        Ok(ToolRequest {
-            skill_id,
-            arguments,
-        })
-    } else {
-        Err(SkillExecutionError::SchemaValidation {
-            skill_id: "unknown".to_string(),
-            direction: "input",
-            message: "expected json object for tool request".to_string(),
-        })
-    }
 }
 
 pub async fn execute_installed_tool(
@@ -3311,7 +3183,7 @@ fn spawn_stream_reader<R: Read + Send + 'static>(
     });
 }
 
-pub(crate) fn normalize_powershell_command(command: &str) -> String {
+fn normalize_powershell_command(command: &str) -> String {
     let mut result = String::with_capacity(command.len());
     let mut in_single = false;
     let mut in_double = false;
@@ -3342,7 +3214,7 @@ pub(crate) fn normalize_powershell_command(command: &str) -> String {
     result
 }
 
-pub(crate) const POWERSHELL_COMPAT_BOOTSTRAP: &str = concat!(
+const POWERSHELL_COMPAT_BOOTSTRAP: &str = concat!(
     "if (Test-Path alias:curl) { Remove-Item alias:curl -Force -ErrorAction SilentlyContinue }; ",
     "if (Test-Path alias:wget) { Remove-Item alias:wget -Force -ErrorAction SilentlyContinue }; ",
     "if (Test-Path alias:sleep) { Remove-Item alias:sleep -Force -ErrorAction SilentlyContinue }; ",
@@ -4019,364 +3891,6 @@ fn test_run(
     }))
 }
 
-/// Validates a JSON value against the subset of JSON Schema Axiom enforces for
-/// tool inputs and outputs. External tool sources use this to gate calls with
-/// the same rules as built-in executors.
-pub fn validate_schema_value(value: &Value, schema: &Value) -> std::result::Result<(), String> {
-    if let Some(expected) = schema.get("type").and_then(Value::as_str) {
-        let matches = match expected {
-            "object" => value.is_object(),
-            "array" => value.is_array(),
-            "string" => value.is_string(),
-            "integer" => value.as_i64().is_some() || value.as_u64().is_some(),
-            "number" => value.is_number(),
-            "boolean" => value.is_boolean(),
-            "null" => value.is_null(),
-            other => return Err(format!("unsupported schema type `{other}`")),
-        };
-        if !matches {
-            return Err(format!("expected {expected}"));
-        }
-    }
-    let Some(object) = value.as_object() else {
-        return Ok(());
-    };
-    if let Some(required) = schema.get("required").and_then(Value::as_array) {
-        for key in required.iter().filter_map(Value::as_str) {
-            if !object.contains_key(key) {
-                return Err(format!("missing required property `{key}`"));
-            }
-        }
-    }
-    let properties = schema
-        .get("properties")
-        .and_then(Value::as_object)
-        .cloned()
-        .unwrap_or_default();
-    if schema.get("additionalProperties").and_then(Value::as_bool) == Some(false) {
-        if let Some(key) = object.keys().find(|key| !properties.contains_key(*key)) {
-            return Err(format!("unknown property `{key}`"));
-        }
-    }
-    for (key, property_schema) in properties {
-        let Some(property) = object.get(&key) else {
-            continue;
-        };
-        validate_schema_value(property, &property_schema)
-            .map_err(|message| format!("property `{key}`: {message}"))?;
-        if let (Some(value), Some(minimum)) = (
-            property.as_str(),
-            property_schema.get("minLength").and_then(Value::as_u64),
-        ) {
-            if value.chars().count() < usize::try_from(minimum).unwrap_or(usize::MAX) {
-                return Err(format!("property `{key}` is shorter than {minimum}"));
-            }
-        }
-        if let Some(number) = property.as_u64() {
-            if property_schema
-                .get("minimum")
-                .and_then(Value::as_u64)
-                .is_some_and(|minimum| number < minimum)
-            {
-                return Err(format!("property `{key}` is below minimum"));
-            }
-            if property_schema
-                .get("maximum")
-                .and_then(Value::as_u64)
-                .is_some_and(|maximum| number > maximum)
-            {
-                return Err(format!("property `{key}` is above maximum"));
-            }
-        }
-    }
-    Ok(())
-}
-
-pub fn normalize_tool_arguments(request: &mut ToolRequest) {
-    let Some(map) = request.arguments.as_object_mut() else {
-        return;
-    };
-
-    match request.skill_id.as_str() {
-        "question.ask" => {
-            if !map.contains_key("options") {
-                if let Some(opts) = map
-                    .remove("choices")
-                    .or_else(|| map.remove("items"))
-                    .or_else(|| map.remove("answers"))
-                {
-                    map.insert("options".to_string(), opts);
-                }
-            }
-            if let Some(options_val) = map.get("options").cloned() {
-                match options_val {
-                    Value::Array(_) => {}
-                    Value::String(s) => {
-                        let trimmed = s.trim();
-                        if trimmed.starts_with('[') && trimmed.ends_with(']') {
-                            if let Ok(Value::Array(arr)) = serde_json::from_str(&s) {
-                                map.insert("options".to_string(), Value::Array(arr));
-                            }
-                        } else if trimmed.contains('\n') {
-                            let items = trimmed
-                                .lines()
-                                .map(|line| {
-                                    line.trim_start_matches(|c: char| {
-                                        c.is_numeric()
-                                            || c == '.'
-                                            || c == '-'
-                                            || c == ')'
-                                            || c == ' '
-                                    })
-                                    .trim()
-                                })
-                                .filter(|line| !line.is_empty())
-                                .map(|line| Value::String(line.to_string()))
-                                .collect::<Vec<_>>();
-                            if !items.is_empty() {
-                                map.insert("options".to_string(), Value::Array(items));
-                            }
-                        } else if trimmed.contains(',') {
-                            let items = trimmed
-                                .split(',')
-                                .map(str::trim)
-                                .filter(|item| !item.is_empty())
-                                .map(|item| Value::String(item.to_string()))
-                                .collect::<Vec<_>>();
-                            if !items.is_empty() {
-                                map.insert("options".to_string(), Value::Array(items));
-                            }
-                        } else if !trimmed.is_empty() {
-                            map.insert(
-                                "options".to_string(),
-                                Value::Array(vec![Value::String(trimmed.to_string())]),
-                            );
-                        }
-                    }
-                    Value::Object(obj) => {
-                        let mut entries = obj.into_iter().collect::<Vec<_>>();
-                        entries.sort_by(|a, b| a.0.cmp(&b.0));
-                        let items = entries
-                            .into_iter()
-                            .map(|(_, v)| match v {
-                                Value::String(s) => Value::String(s),
-                                other => Value::String(other.to_string()),
-                            })
-                            .collect::<Vec<_>>();
-                        map.insert("options".to_string(), Value::Array(items));
-                    }
-                    _ => {}
-                }
-            }
-            if let Some(Value::String(custom_str)) = map.get("allow_custom") {
-                if let Ok(b) = custom_str.parse::<bool>() {
-                    map.insert("allow_custom".to_string(), Value::Bool(b));
-                }
-            }
-        }
-        "github.search" => {
-            if !map.contains_key("org") {
-                if let Some(org) = map
-                    .remove("organization")
-                    .or_else(|| map.remove("user"))
-                    .or_else(|| map.remove("owner"))
-                {
-                    map.insert("org".to_string(), org);
-                }
-            }
-            if !map.contains_key("repo") {
-                if let Some(repo) = map.remove("repository").or_else(|| map.remove("project")) {
-                    map.insert("repo".to_string(), repo);
-                }
-            }
-            if !map.contains_key("query") {
-                if let Some(query) = map
-                    .remove("q")
-                    .or_else(|| map.remove("search"))
-                    .or_else(|| map.remove("keyword"))
-                {
-                    map.insert("query".to_string(), query);
-                }
-            }
-        }
-        "file.read" => {
-            if !map.contains_key("path") {
-                if let Some(path) = map
-                    .remove("file")
-                    .or_else(|| map.remove("filepath"))
-                    .or_else(|| map.remove("filename"))
-                {
-                    map.insert("path".to_string(), path);
-                }
-            }
-            if let Some(Value::String(offset_str)) = map.get("offset") {
-                if let Ok(n) = offset_str.parse::<u64>() {
-                    map.insert("offset".to_string(), Value::Number(n.into()));
-                }
-            }
-            if let Some(Value::String(limit_str)) = map.get("limit") {
-                if let Ok(n) = limit_str.parse::<u64>() {
-                    map.insert("limit".to_string(), Value::Number(n.into()));
-                }
-            }
-        }
-        "file.write" => {
-            if !map.contains_key("path") {
-                if let Some(path) = map
-                    .remove("file")
-                    .or_else(|| map.remove("filepath"))
-                    .or_else(|| map.remove("filename"))
-                {
-                    map.insert("path".to_string(), path);
-                }
-            }
-            if !map.contains_key("content") {
-                if let Some(content) = map
-                    .remove("text")
-                    .or_else(|| map.remove("body"))
-                    .or_else(|| map.remove("code"))
-                {
-                    map.insert("content".to_string(), content);
-                }
-            }
-        }
-        "file.replace" => {
-            if !map.contains_key("path") {
-                if let Some(path) = map
-                    .remove("file")
-                    .or_else(|| map.remove("filepath"))
-                    .or_else(|| map.remove("filename"))
-                {
-                    map.insert("path".to_string(), path);
-                }
-            }
-            if !map.contains_key("target_content") {
-                if let Some(target) = map
-                    .remove("target")
-                    .or_else(|| map.remove("find"))
-                    .or_else(|| map.remove("old_content"))
-                    .or_else(|| map.remove("old_string"))
-                {
-                    map.insert("target_content".to_string(), target);
-                }
-            }
-            if !map.contains_key("replacement_content") {
-                if let Some(rep) = map
-                    .remove("replacement")
-                    .or_else(|| map.remove("replace"))
-                    .or_else(|| map.remove("new_content"))
-                    .or_else(|| map.remove("new_string"))
-                {
-                    map.insert("replacement_content".to_string(), rep);
-                }
-            }
-            if let Some(Value::String(mult_str)) = map.get("allow_multiple") {
-                if let Ok(b) = mult_str.parse::<bool>() {
-                    map.insert("allow_multiple".to_string(), Value::Bool(b));
-                }
-            }
-        }
-        "web.fetch" => {
-            if !map.contains_key("url") {
-                if let Some(url) = map
-                    .remove("link")
-                    .or_else(|| map.remove("uri"))
-                    .or_else(|| map.remove("target_url"))
-                {
-                    map.insert("url".to_string(), url);
-                }
-            }
-            if !map.contains_key("query") {
-                if let Some(query) = map.remove("search").or_else(|| map.remove("q")) {
-                    map.insert("query".to_string(), query);
-                }
-            }
-        }
-        "project.scan" if !map.contains_key("path") => {
-            if let Some(p) = map
-                .remove("directory")
-                .or_else(|| map.remove("dir"))
-                .or_else(|| map.remove("folder"))
-            {
-                map.insert("path".to_string(), p);
-            }
-        }
-        _ => {}
-    }
-}
-
-pub fn authorize_side_effect(
-    policy: &SideEffectPolicy,
-    audit: &mut dyn SideEffectAuditSink,
-    approval: &mut dyn SkillApproval,
-    side_effect: SideEffectRequest,
-) -> Result<(), SkillExecutionError> {
-    let evaluation = policy.evaluate(side_effect);
-    let prompt = policy_approval_prompt(&evaluation.request);
-    let outcome = match evaluation.action {
-        PolicyAction::Allow => PolicyOutcome::Allowed,
-        PolicyAction::Deny => PolicyOutcome::Denied,
-        PolicyAction::Ask => {
-            let request = ApprovalRequest {
-                skill_id: evaluation.request.skill_id.clone(),
-                message: prompt.clone(),
-                risk_level: policy_risk_level(&evaluation.request).to_string(),
-            };
-            if approval.approve(&request) {
-                PolicyOutcome::Allowed
-            } else {
-                PolicyOutcome::Denied
-            }
-        }
-    };
-    let action = evaluation.action;
-    let decision = SideEffectDecision {
-        evaluation,
-        outcome,
-    };
-    audit.record(&decision);
-
-    match (action, outcome) {
-        (PolicyAction::Deny, _) => Err(SkillExecutionError::SideEffectPolicyDenied(Box::new(
-            decision,
-        ))),
-        (PolicyAction::Ask, PolicyOutcome::Denied) => {
-            Err(SkillExecutionError::ApprovalDenied(prompt))
-        }
-        _ => Ok(()),
-    }
-}
-
-fn policy_approval_prompt(request: &SideEffectRequest) -> String {
-    match request.target.as_deref() {
-        Some(target) => format!(
-            "Allow `{}` to perform `{}` on `{target}`?",
-            request.skill_id, request.operation
-        ),
-        None => format!(
-            "Allow `{}` to perform `{}`?",
-            request.skill_id, request.operation
-        ),
-    }
-}
-
-fn policy_risk_level(request: &SideEffectRequest) -> &'static str {
-    if request.classes == [SideEffectClass::FilesystemRead] {
-        "low"
-    } else {
-        "medium"
-    }
-}
-
-fn block_secret_path(path: impl AsRef<Path>) -> Result<(), SkillExecutionError> {
-    let path = path.as_ref();
-    if is_secret_path(path) {
-        Err(SkillExecutionError::SecretPath(path.display().to_string()))
-    } else {
-        Ok(())
-    }
-}
-
 const MAX_SEARCH_FILE_BYTES: u64 = 1_048_576;
 const DEFAULT_GREP_RESULTS: usize = 100;
 const MAX_GREP_RESULTS: usize = 500;
@@ -4952,6 +4466,8 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use semver::Version;
+
+    use crate::PolicyOutcome;
 
     use crate::{
         InstalledSkill, InstalledSkillRecord, RecordingSideEffectAuditSink, SkillManifest,
