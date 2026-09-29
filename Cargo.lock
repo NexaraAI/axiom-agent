@@ -330,6 +330,7 @@ name = "axiom-llm"
 version = "1.0.24"
 dependencies = [
  "async-trait",
+ "axiom-core",
  "reqwest",
  "serde",
  "serde_json",

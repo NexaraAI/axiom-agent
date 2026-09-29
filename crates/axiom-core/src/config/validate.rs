@@ -88,34 +88,20 @@ pub fn validate_permission(mode: &str) -> Result<PermissionMode> {
     }
 }
 
+/// Validates a variable name that will hold a gateway or MCP server secret.
+///
+/// Delegates to the shared `credentials::validate_credential_env_name` so the
+/// config-time check and the runtime credential check cannot disagree. This
+/// previously used its own, weaker list: 11 names compared case-sensitively,
+/// against the credential path's 27 case-insensitively, so `TEMP` and
+/// `COMSPEC` passed config validation and failed at runtime.
 pub(super) fn validate_gateway_token_env_name(variable: &str) -> Result<()> {
-    const RESERVED: &[&str] = &[
-        "PATH",
-        "HOME",
-        "SHELL",
-        "PWD",
-        "LD_PRELOAD",
-        "LD_LIBRARY_PATH",
-        "HTTP_PROXY",
-        "HTTPS_PROXY",
-        "ALL_PROXY",
-        "NO_PROXY",
-        "AXIOM_HOME",
-    ];
-    let mut characters = variable.chars();
-    let valid_syntax = characters
-        .next()
-        .is_some_and(|character| character == '_' || character.is_ascii_alphabetic())
-        && characters.all(|character| character == '_' || character.is_ascii_alphanumeric());
-    if !valid_syntax || RESERVED.contains(&variable) {
-        return Err(AxiomError::InvalidConfig {
+    crate::credentials::validate_credential_env_name(variable).map_err(|error| {
+        AxiomError::InvalidConfig {
             field: "gateway token env",
-            message: format!(
-                "unsafe token variable `{variable}`; use a dedicated name like TELEGRAM_BOT_TOKEN"
-            ),
-        });
-    }
-    Ok(())
+            message: error.to_string(),
+        }
+    })
 }
 
 pub(super) fn validate_host_pattern(field: &'static str, pattern: &str) -> Result<()> {

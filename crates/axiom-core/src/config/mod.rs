@@ -934,4 +934,62 @@ format = "json"
         assert_eq!(llm.model_for_variant("nope", "high"), None);
         assert_eq!(llm.model_for_variant("openrouter", "nope"), None);
     }
+
+    /// The gateway/MCP secret-variable check and the credential-manager check
+    /// used to be separate implementations with different reserved-name sets:
+    /// 11 names compared case-sensitively at config time, 27
+    /// case-insensitively at runtime. A config naming `TEMP` or `COMSPEC`
+    /// loaded without complaint and then failed the first time the gateway
+    /// tried to read the token, so the user got the error at the worst
+    /// possible moment.
+    ///
+    /// This pins the agreement: anything the credential path rejects must be
+    /// rejected at config load too, and for the same reason.
+    #[test]
+    fn gateway_token_env_names_agree_with_the_credential_validator() {
+        let config = AxiomConfig::default();
+        for name in [
+            "TEMP",
+            "COMSPEC",
+            "RUST_LOG",
+            "NODE_OPTIONS",
+            "PATHEXT",
+            "LD_PRELOAD",
+            "DYLD_INSERT_LIBRARIES",
+            "RUSTFLAGS",
+        ] {
+            let mut candidate = config.clone();
+            candidate.gateway.telegram_bot_token_env = Some(name.to_string());
+            let at_config_time = candidate.ensure_valid();
+
+            let at_runtime = crate::credentials::validate_credential_env_name(name);
+
+            assert!(
+                at_config_time.is_err(),
+                "{name} was accepted at config time"
+            );
+            assert!(
+                at_runtime.is_err(),
+                "{name} was accepted by the credential validator"
+            );
+        }
+    }
+
+    #[test]
+    fn gateway_token_env_names_accept_dedicated_variables() {
+        let config = AxiomConfig::default();
+        for name in [
+            "TELEGRAM_BOT_TOKEN",
+            "AXIOM_TELEGRAM_BOT_TOKEN",
+            "MY_BOT_TOKEN_2",
+        ] {
+            let mut candidate = config.clone();
+            candidate.gateway.telegram_bot_token_env = Some(name.to_string());
+            assert!(
+                candidate.ensure_valid().is_ok(),
+                "{name} should be accepted: {:?}",
+                candidate.ensure_valid()
+            );
+        }
+    }
 }

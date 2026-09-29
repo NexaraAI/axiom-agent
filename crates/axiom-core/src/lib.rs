@@ -2,6 +2,7 @@ pub mod atomic;
 pub mod child_process;
 pub mod config;
 pub mod cost;
+pub mod credentials;
 pub mod errors;
 pub mod session;
 pub mod time;

@@ -151,50 +151,18 @@ pub(crate) fn ensure_response_content_length(
     }
 }
 
+/// Validates an environment variable name that will hold a provider secret.
+///
+/// The rules live in `axiom-core::credentials` so they cannot drift from the
+/// config-time check that runs when a gateway or MCP secret variable is
+/// declared. Two copies with different rules let a config that names `TEMP`
+/// or `COMSPEC` load successfully and then fail when the credential is read.
 pub fn validate_credential_env_name(env: &str) -> Result<()> {
-    const RESERVED_ENV_NAMES: &[&str] = &[
-        "ALL_PROXY",
-        "APPDATA",
-        "AXIOM_HOME",
-        "COMSPEC",
-        "DYLD_INSERT_LIBRARIES",
-        "DYLD_LIBRARY_PATH",
-        "HOME",
-        "HTTP_PROXY",
-        "HTTPS_PROXY",
-        "LD_LIBRARY_PATH",
-        "LD_PRELOAD",
-        "LOCALAPPDATA",
-        "NODE_OPTIONS",
-        "NO_PROXY",
-        "PATH",
-        "PATHEXT",
-        "PWD",
-        "RUSTFLAGS",
-        "RUST_BACKTRACE",
-        "RUST_LOG",
-        "SHELL",
-        "SYSTEMROOT",
-        "TEMP",
-        "TMP",
-        "USERPROFILE",
-        "WINDIR",
-    ];
-    let mut characters = env.chars();
-    let valid_syntax = characters
-        .next()
-        .is_some_and(|character| character == '_' || character.is_ascii_alphabetic())
-        && characters.all(|character| character == '_' || character.is_ascii_alphanumeric());
-    let reserved = RESERVED_ENV_NAMES
-        .iter()
-        .any(|candidate| env.eq_ignore_ascii_case(candidate));
-    if env.len() <= 128 && valid_syntax && !reserved {
-        Ok(())
-    } else {
-        Err(LlmError::UnsafeCredentialEnv {
+    axiom_core::credentials::validate_credential_env_name(env).map_err(|_| {
+        LlmError::UnsafeCredentialEnv {
             env: env.to_string(),
-        })
-    }
+        }
+    })
 }
 
 pub fn validate_provider_endpoint(
