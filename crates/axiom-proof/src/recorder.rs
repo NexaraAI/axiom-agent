@@ -18,6 +18,8 @@ pub struct ProofSettings {
     pub proofs_dir: PathBuf,
     pub trace_json: bool,
     pub auto_export_markdown: bool,
+    /// Accepted for config compatibility and ignored. Proof redaction is
+    /// mandatory, so `false` does not disable it.
     pub redact_secrets: bool,
     pub max_capture_chars: usize,
 
@@ -447,8 +449,16 @@ pub fn new_approval(
     }
 }
 
+/// Captures a field for a durable proof artifact: redacted, then bounded.
+///
+/// `settings.redact_secrets` is intentionally not consulted. Redaction is a
+/// property of the artifact format, not a user preference: proof traces are
+/// written to disk, exported, and pasted into issues, so a config knob that
+/// turned it off would be a footgun. The field stays on `ProofSettings` so
+/// older config files still deserialize; the `let _ =` documents that
+/// discarding it is deliberate rather than an oversight.
 fn capture_with_settings(settings: &ProofSettings, value: String) -> String {
-    let _legacy_redaction_preference = settings.redact_secrets;
+    let _ignored_because_redaction_is_mandatory = settings.redact_secrets;
     summarize_text(&value, settings.max_capture_chars)
 }
 
@@ -519,6 +529,9 @@ mod tests {
         let secret = ["opaque", "prompt", "boundary", "1234567890"].join("-");
         crate::register_secret_for_redaction(&secret);
         let mut proof_settings = settings(&dir);
+        // Explicitly off: the flag is accepted for compatibility and must not
+        // weaken the artifact. Durable proofs are exported and shared, so
+        // redaction is a property of the format, not a preference.
         proof_settings.redact_secrets = false;
         proof_settings.max_capture_chars = 48;
         let prompt = format!("use {secret} then {}", "x".repeat(200));

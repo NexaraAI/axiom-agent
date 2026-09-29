@@ -614,6 +614,8 @@ pub struct ProofConfig {
     pub default_format: String,
     #[serde(default = "default_proof_trace_json")]
     pub trace_json: bool,
+    /// Accepted for config compatibility and ignored. Proof redaction is
+    /// mandatory, so `false` does not disable it.
     #[serde(default = "default_proof_redact_secrets")]
     pub redact_secrets: bool,
     #[serde(default = "default_proof_auto_export_markdown")]

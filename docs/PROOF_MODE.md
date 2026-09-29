@@ -9,6 +9,8 @@ Proof Mode is on by default:
 enabled = true
 default_format = "markdown"
 trace_json = true
+# redact_secrets is accepted for compatibility and ignored. Redaction of
+# durable proof artifacts is always on; see "Redaction" below.
 redact_secrets = true
 auto_export_markdown = true
 max_capture_chars = 4000
@@ -84,8 +86,14 @@ review proof content before sharing it. Axiom redacts:
 - long captured text over `proof.max_capture_chars`.
 
 Redaction and capture limits are mandatory for durable proof artifacts. The
-legacy `proof.redact_secrets` setting remains readable for config compatibility,
-but setting it to `false` cannot disable proof redaction.
+legacy `proof.redact_secrets` setting is still accepted so that older config
+files keep loading, but it is **ignored**: setting it to `false` does not
+disable redaction. Do not set it expecting otherwise. Redaction is a
+guarantee of the artifact format, not a preference.
+
+If you need to keep a value out of a proof trace entirely, do not rely on
+this setting. Register it with the credential manager and reference it by
+environment variable name, or narrow `proof.max_capture_chars`.
 
 Execution safety blocks secret-looking file paths (`.env`, `.env.*`, `*.pem`, `*.key`, `credentials.json`, `token.json`) before Axiom reads or writes their contents.
 
