@@ -4,6 +4,13 @@ All notable changes to Axiom are documented here. Versions follow semantic
 versioning. Stable releases document user-visible changes, configuration or
 proof migrations, security fixes, and upgrade actions.
 
+## 1.0.29
+
+- Fixed
+  - A macOS-only test failure in the patch apply suite no longer depends on luck. Ten `axiom-coder` patch tests each built their temp directory from wall-clock nanoseconds and deleted it on the way out. macOS hands out coarse `SystemTime` values often enough that two tests landed on the same timestamp, shared a directory, and one removed the other's files mid-assertion. The visible symptom was `existing_full_file_replacement_requires_matching_base_hash` failing on a conflict it expected but did not get: with its file deleted by a neighbour, the write was treated as a create and quietly succeeded. The failure looked like a patch-apply bug and is not one. Directories are now keyed on the process id plus a per-process counter, so uniqueness holds regardless of clock resolution. Test-only; no runtime behaviour changes.
+- Changed
+  - No changes to the CLI surface. `axiom --help`, `axiom chat --help`, and `axiom code --help` are unchanged.
+
 ## 1.0.28
 
 - Changed
