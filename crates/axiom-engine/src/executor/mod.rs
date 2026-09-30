@@ -2625,6 +2625,81 @@ fn validated_github_target(
     Ok(target)
 }
 
+/// Reduces a GitHub API object to the fields a caller actually reasons about.
+///
+/// The repository payload is 83 fields wide, and roughly 89% of them are
+/// derived URLs and flags that never carry information a model can act on:
+/// `archive_url`, `assignees_url`, `blobs_url`, `branches_url`,
+/// `collaborators_url`, `comments_url`, `git_refs_url`, `hooks_url`,
+/// `issue_events_url`, `keys_url`, `labels_url`, `languages_url`,
+/// `mirror_url`, `network_count`, `role_name`, `subscribers_url`, and so on.
+/// A 15-repository organization listing returned about 110 kB, of which
+/// under 10 kB was content.
+///
+/// Unknown fields are dropped rather than passed through, so a payload whose
+/// shape we do not recognize is reduced to an empty object rather than
+/// silently re-inflated. That is deliberate: this function is the only thing
+/// standing between a wide API response and the model's context.
+fn project_github_object(value: &Value) -> Value {
+    let Some(object) = value.as_object() else {
+        return Value::Null;
+    };
+
+    // `readme` mode returns { "readme": "..." } rather than repo objects.
+    if let Some(readme) = object.get("readme").and_then(Value::as_str) {
+        return json!({ "readme": readme });
+    }
+
+    const KEPT: &[&str] = &[
+        "name",
+        "full_name",
+        "description",
+        "html_url",
+        "url",
+        "homepage",
+        "language",
+        "fork",
+        "archived",
+        "stargazers_count",
+        "forks_count",
+        "open_issues_count",
+        "topics",
+        "license",
+        "default_branch",
+        "created_at",
+        "updated_at",
+        "pushed_at",
+        "size",
+        "visibility",
+        "tag_name",
+        "body",
+    ];
+    let mut kept = serde_json::Map::new();
+    for key in KEPT {
+        if let Some(found) = object.get(*key) {
+            kept.insert((*key).to_string(), found.clone());
+        }
+    }
+    // `license` arrives as an object; keep the SPDX id, not the whole blob.
+    if let Some(license) = kept.get("license").cloned() {
+        let spdx = license
+            .get("spdx_id")
+            .and_then(Value::as_str)
+            .map(Value::from)
+            .unwrap_or(Value::Null);
+        kept.insert("license".to_string(), spdx);
+    }
+    Value::Object(kept)
+}
+
+/// Applies [`project_github_object`] across an array, or to a single object.
+fn project_github_results(value: Value) -> Value {
+    match value {
+        Value::Array(items) => Value::Array(items.iter().map(project_github_object).collect()),
+        other => project_github_object(&other),
+    }
+}
+
 async fn github_search(
     request: &ToolRequest,
     context: &SkillExecutionContext,
@@ -2784,7 +2859,7 @@ async fn github_search(
                             "source": "github",
                             "mode": "user_repos",
                             "status": 200,
-                            "results": json_val,
+                            "results": project_github_results(json_val),
                         }));
                     }
                 }
@@ -2799,7 +2874,9 @@ async fn github_search(
     let parsed_results = if mode == "readme" {
         json!({ "readme": text })
     } else {
-        serde_json::from_str::<Value>(&text).unwrap_or_else(|_| json!({ "raw": text }))
+        serde_json::from_str::<Value>(&text)
+            .map(project_github_results)
+            .unwrap_or_else(|_| json!({ "raw": text }))
     };
 
     Ok(json!({
@@ -4487,6 +4564,173 @@ mod tests {
     };
 
     use super::*;
+
+    /// A payload shaped like a real `github.search` organization listing: fifteen
+    /// repositories, each carrying the full GitHub API object.
+    fn github_search_payload(repo_count: usize) -> Value {
+        let repos: Vec<Value> = (0..repo_count)
+        .map(|index| {
+            let mut repo = json!({
+                "id": 1000 + index,
+                "node_id": format!("R_kgDOABC{index}"),
+                "name": format!("project-{index}"),
+                "full_name": format!("demonzdevelopment/project-{index}"),
+                "private": false,
+                "html_url": format!("https://github.com/demonzdevelopment/project-{index}"),
+                "description": format!("A Minecraft mod project number {index}"),
+                "fork": false,
+                "language": "Java",
+                "stargazers_count": 12,
+                "forks_count": 1,
+                "open_issues_count": 2,
+                "topics": ["minecraft", "mod"],
+                "license": {"key": "mit", "name": "MIT License", "spdx_id": "MIT", "url": "https://api.github.com/licenses/mit"},
+                "default_branch": "main",
+                "created_at": "2024-01-02T03:04:05Z",
+                "updated_at": "2026-05-23T22:04:09Z",
+                "pushed_at": "2026-09-20T12:05:08Z",
+                "size": 4096,
+                "visibility": "public",
+            });
+            // The 73 derived fields that make the real object 83 wide.
+            for key in [
+                "allow_forking",
+                "archive_url",
+                "archived",
+                "assignees_url",
+                "blobs_url",
+                "branches_url",
+                "clone_url",
+                "collaborators_url",
+                "comments_url",
+                "commits_url",
+                "compare_url",
+                "contents_url",
+                "contributors_url",
+                "deployments_url",
+                "downloads_url",
+                "events_url",
+                "forks_url",
+                "git_commits_url",
+                "git_refs_url",
+                "git_tags_url",
+                "git_url",
+                "hooks_url",
+                "issue_comment_url",
+                "issue_events_url",
+                "issues_url",
+                "keys_url",
+                "labels_url",
+                "languages_url",
+                "merges_url",
+                "milestones_url",
+                "mirror_url",
+                "network_count",
+                "notifications_url",
+                "pulls_url",
+                "releases_url",
+                "role_name",
+                "stargazers_url",
+                "statuses_url",
+                "subscribers_url",
+                "subscription_url",
+                "svn_url",
+                "teams_url",
+                "trees_url",
+            ] {
+                repo[key] = json!(format!("https://api.github.com/repos/demo/project-{index}/{key}"));
+            }
+            repo
+        })
+        .collect();
+
+        json!({
+            "source": "github",
+            "mode": "org_repos",
+            "status": 200,
+            "results": repos,
+        })
+    }
+
+    /// The projection is what actually removes the waste, so the capped output
+    /// must be dramatically smaller than the raw payload.
+    #[test]
+    fn projected_github_results_are_far_smaller_than_the_raw_payload() {
+        let payload = github_search_payload(15);
+        let raw_len = payload.to_string().chars().count();
+
+        // Mirror the real call site, which projects the parsed API response
+        // and assigns it to the `results` key of the envelope.
+        let projected_results = super::project_github_results(payload["results"].clone());
+        let projected = json!({
+            "source": "github",
+            "mode": "org_repos",
+            "status": 200,
+            "results": projected_results,
+        });
+        let projected_len = projected.to_string().chars().count();
+
+        assert!(
+            projected_len * 4 < raw_len,
+            "projection cut too little: {raw_len} -> {projected_len}"
+        );
+
+        let results = projected["results"].as_array().expect("array of results");
+        assert_eq!(results.len(), 15, "no repository may be dropped");
+
+        let first = &results[0];
+        for kept in [
+            "name",
+            "full_name",
+            "description",
+            "html_url",
+            "stargazers_count",
+            "topics",
+        ] {
+            assert!(first.get(kept).is_some(), "{kept} should be kept");
+        }
+        for dropped in [
+            "archive_url",
+            "assignees_url",
+            "blobs_url",
+            "clone_url",
+            "node_id",
+            "role_name",
+        ] {
+            assert!(first.get(dropped).is_none(), "{dropped} should be dropped");
+        }
+        assert_eq!(
+            first["license"],
+            json!("MIT"),
+            "license reduces to its SPDX id"
+        );
+    }
+
+    /// The projection must not silently pass through an object it does not
+    /// recognize, since passing it through is exactly the failure being fixed.
+    #[test]
+    fn projection_drops_unknown_shapes_rather_than_passing_them_through() {
+        let unknown = json!([{
+            "totally": "unrecognized",
+            "payload": {"nested": [1, 2, 3]},
+        }]);
+        let projected = super::project_github_results(unknown);
+        assert_eq!(
+            projected,
+            json!([{}]),
+            "unknown fields are dropped, not forwarded"
+        );
+    }
+
+    /// `readme` mode returns a body rather than repo objects, and must survive.
+    #[test]
+    fn projection_preserves_readme_bodies() {
+        let readme = json!({ "readme": "# Title\n\nSome body text." });
+        assert_eq!(
+            super::project_github_results(readme),
+            json!({ "readme": "# Title\n\nSome body text." })
+        );
+    }
 
     /// `lint.check` resolved paths inside the workspace but never rejected
     /// secret-looking ones, unlike every other file-reading tool. The output

@@ -8,6 +8,8 @@ mod tool_dispatch;
 mod turn;
 
 #[cfg(test)]
+mod observation_tests;
+#[cfg(test)]
 mod tests;
 
 use axiom_engine::{

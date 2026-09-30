@@ -244,7 +244,11 @@ pub(crate) fn format_tool_result_message(result: &SkillExecutionResult) -> Strin
 /// `file.read` or `shell.run` payload is multiplied by the number of calls in the turn and
 /// then by every later turn. The tool stays available and the note explains how to fetch
 /// more, so nothing becomes unreachable — it just stops being re-sent for free.
-pub(crate) const TOOL_RESULT_HISTORY_CHARS: usize = 8_000;
+///
+/// The budget itself lives in `axiom-agent`, because that is where the agent
+/// loop folds tool results into the transcript. This module caps the
+/// single-shot path, and the two must agree.
+pub(crate) const TOOL_RESULT_HISTORY_CHARS: usize = axiom_agent::TOOL_RESULT_BUDGET_CHARS;
 
 /// Trim a tool payload to the history budget, on a character boundary.
 pub(crate) fn cap_tool_payload_for_history(payload: &str) -> String {
