@@ -564,7 +564,7 @@ mod tests {
 
         let workspace = Workspace::new(&root).expect("workspace");
         assert!(
-            !is_secret_path(&root.join("notes.txt")),
+            !is_secret_path(root.join("notes.txt")),
             "the supplied name must not look like a secret for this test to mean anything"
         );
 
