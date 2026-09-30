@@ -155,11 +155,24 @@ jobs:
         with:
           subject-checksums: BINARY_SHA256SUMS
           sbom-path: release/axiom-agent.spdx.json
+      - name: Stamp the release version into the notes
+        # docs/RELEASE_NOTES.md carries a {{VERSION}} placeholder so it cannot
+        # keep advertising whichever version was current when it was written.
+        # Previously it was a static file, so every release since 1.0.0 shipped
+        # notes headed "Axiom 1.0.0".
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          sed "s/{{VERSION}}/${version}/g" docs/RELEASE_NOTES.md > release/RELEASE_NOTES.md
+          if grep -q '{{VERSION}}' release/RELEASE_NOTES.md; then
+            echo "release notes still contain a {{VERSION}} placeholder" >&2
+            exit 1
+          fi
       - uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
           prerelease: ${{ contains(github.ref_name, '-') }}
           make_latest: ${{ contains(github.ref_name, '-') && 'false' || 'true' }}
-          body_path: docs/RELEASE_NOTES.md
+          body_path: release/RELEASE_NOTES.md
           files: |
             release/axiom-*
             release/SHA256SUMS
