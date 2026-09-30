@@ -2283,11 +2283,18 @@ impl ChatSession {
         &self,
         result: &SkillExecutionResult,
     ) -> Result<Option<SavedToolOutput>> {
+        // What gets stored keeps the {skill_id, output} wrapper: `/show` needs the
+        // provenance, and the wrapper is cheap.
         let content =
             serde_json::to_string_pretty(&redact_json_value(serde_json::to_value(result)?))?;
-        let total_lines = content.lines().count();
-        let total_chars = content.chars().count();
-        let longest_line = content
+        // What gets *shown* is the payload alone. Previewing the wrapper put a
+        // redundant "output" key, and a "skill_id" the heading already names, in
+        // front of every result. A fetch payload's `text` then rendered with a
+        // literal \n for every newline in the page.
+        let shown_content = human_readable_payload(result);
+        let total_lines = shown_content.lines().count();
+        let total_chars = shown_content.chars().count();
+        let longest_line = shown_content
             .lines()
             .map(|line| line.chars().count())
             .max()
@@ -2303,7 +2310,7 @@ impl ChatSession {
         std::fs::create_dir_all(&root)?;
         atomic_write(root.join(format!("{id}.json")), content.as_bytes())?;
         let preview = bounded_output_preview(
-            &content,
+            &shown_content,
             TOOL_OUTPUT_PREVIEW_LINES,
             TOOL_OUTPUT_PREVIEW_CHARS,
         );
@@ -2532,6 +2539,49 @@ impl ChatSession {
             });
         }
     }
+}
+
+/// Renders a tool payload the way a person would want to read it.
+///
+/// Two shapes get unwrapped:
+///
+/// - the `{skill_id, output}` result wrapper is dropped, because the heading
+///   already names the skill and the extra `output` level told the reader
+///   nothing;
+/// - fetch-shaped payloads (`{status, content_type, bytes, text, url}`) show
+///   their body directly, because pretty-printed JSON renders every newline in
+///   a fetched page as a literal `\n`.
+fn human_readable_payload(result: &SkillExecutionResult) -> String {
+    let payload = &result.output;
+    let Some(object) = payload.as_object() else {
+        return payload.to_string();
+    };
+
+    let unwraps_fetch = object.get("text").and_then(Value::as_str).is_some_and(|_| {
+        ["status", "content_type", "url", "bytes"]
+            .iter()
+            .any(|key| object.contains_key(*key))
+    }) && object.len() <= 6;
+
+    if unwraps_fetch {
+        let mut header = String::new();
+        if let Some(status) = object.get("status").and_then(Value::as_i64) {
+            header.push_str(&format!("HTTP {status}\n"));
+        }
+        if let Some(url) = object.get("url").and_then(Value::as_str) {
+            header.push_str(&format!("{url}\n"));
+        }
+        if let Some(content_type) = object.get("content_type").and_then(Value::as_str) {
+            header.push_str(&format!("{content_type}\n"));
+        }
+        let body = object
+            .get("text")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        return format!("{header}\n{body}");
+    }
+
+    serde_json::to_string_pretty(payload).unwrap_or_else(|_| payload.to_string())
 }
 
 /// Options for starting an interactive chat session.
@@ -5661,6 +5711,7 @@ mod tests {
 
     use axiom_agent::{AgentTransitionKind, TransitionCheckpoint, TransitionObserver};
     use rustyline::highlight::Highlighter;
+    use serde_json::json;
 
     use super::install_status::npm_package_version;
     use super::rendering::{
@@ -6888,6 +6939,67 @@ mod tests {
         assert_eq!(
             force.display_message(),
             "Model force-switched to my-custom-model (catalog validation bypassed)."
+        );
+    }
+
+    /// The transcript preview used to be built from `serde_json::to_value(result)`,
+    /// which is the whole `{skill_id, output}` wrapper, so every spilled result
+    /// opened with a redundant `output` key and a `skill_id` the heading had
+    /// already named. A fetch payload's `text` then rendered with a literal
+    /// `\n` for every newline in the page, which is unreadable in the terminal
+    /// and wasted the preview budget.
+    #[test]
+    fn spilled_preview_shows_the_payload_not_the_result_wrapper() {
+        let result = SkillExecutionResult {
+            skill_id: "web.fetch".to_string(),
+            output: json!({
+                "url": "https://example.com/search",
+                "status": 200,
+                "content_type": "text/markdown",
+                "bytes": 1926,
+                "text": "## Web Search Results\n\n1. **[Alpha](https://example.com/a)** — first hit\n2. **[Beta](https://example.com/b)** — second hit",
+            }),
+        };
+
+        let shown = human_readable_payload(&result);
+
+        assert!(
+            !shown.contains("\"output\""),
+            "the redundant output wrapper should be gone: {shown}"
+        );
+        assert!(
+            !shown.contains("\"skill_id\""),
+            "skill_id is already in the heading: {shown}"
+        );
+        assert!(
+            !shown.contains("\\n"),
+            "newlines should render as newlines, not escapes: {shown}"
+        );
+        assert!(shown.contains("## Web Search Results"));
+        assert!(shown.contains("first hit"));
+        assert!(
+            shown.contains("first hit\n2."),
+            "the body should keep real line breaks: {shown}"
+        );
+        assert!(shown.contains("HTTP 200"), "provenance kept: {shown}");
+        assert!(shown.contains("https://example.com/search"));
+    }
+
+    /// A non-fetch result is still shown as JSON, just without the wrapper.
+    #[test]
+    fn spilled_preview_keeps_json_for_structured_results() {
+        let result = SkillExecutionResult {
+            skill_id: "file.read".to_string(),
+            output: json!({"path": "notes.txt", "bytes": 12}),
+        };
+
+        let shown = human_readable_payload(&result);
+
+        assert!(shown.contains("\"path\""), "{shown}");
+        assert!(!shown.contains("\"output\""), "{shown}");
+        assert!(
+            shown.contains('\n'),
+            "structured results stay pretty-printed"
         );
     }
 }
