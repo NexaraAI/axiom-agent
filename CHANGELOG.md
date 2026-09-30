@@ -4,6 +4,14 @@ All notable changes to Axiom are documented here. Versions follow semantic
 versioning. Stable releases document user-visible changes, configuration or
 proof migrations, security fixes, and upgrade actions.
 
+## 1.0.28
+
+- Changed
+  - Spilled tool output is previewed far more briefly in the transcript: the inline preview drops from 16 lines / 1,600 characters to 4 lines / 280 characters. A fetched page no longer buries the model's actual answer under a wall of search results the user did not ask to read inline. The full payload is unchanged, still written to the session `outputs/` directory, and still one `/show out-NNNN` away, so nothing becomes unreachable. Display only, and no change to what the model is sent.
+  - A clipped preview now ends with `…`, so a short preview is never mistaken for the whole payload. A payload that fits is left untouched, and neither a trailing newline nor CRLF line endings count as truncation.
+- Fixed
+  - No changes to the CLI surface. `axiom --help`, `axiom chat --help`, and `axiom code --help` are unchanged.
+
 ## 1.0.27
 
 - Fixed
