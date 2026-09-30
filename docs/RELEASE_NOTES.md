@@ -38,6 +38,9 @@ endpoints are supported.
   83-field GitHub API object, about 89% of which was derived URLs and flags.
 - Fetch results reach the model as text rather than as re-escaped JSON, so
   newlines are newlines instead of `\n`.
+- Tool output in the transcript shows the payload, not the internal
+  `{skill_id, output}` wrapper, so a fetched page appears as readable text with
+  a short header instead of a JSON envelope.
 - `test.run` applies the destructive-command blocklist, so a command
   supplied as a test can no longer reach around the guard that protects
   every other spawn.

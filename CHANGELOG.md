@@ -4,6 +4,14 @@ All notable changes to Axiom are documented here. Versions follow semantic
 versioning. Stable releases document user-visible changes, configuration or
 proof migrations, security fixes, and upgrade actions.
 
+## 1.0.27
+
+- Fixed
+  - Tool output in the transcript now shows the payload instead of the internal result wrapper. A spilled preview was built from the whole `{skill_id, output}` structure, so every result opened with a redundant `output` key and a `skill_id` the heading had already named. A fetched page appeared as a JSON envelope with a literal `\n` for every newline in it, which is unreadable in the terminal and spent the preview budget on escape characters. Fetch-shaped results now display their body under a short `HTTP <status>` / URL / content-type header, with real line breaks. Saved outputs under the session `outputs/` directory keep the full structure, because `!show` relies on the provenance. This is display only and does not change what the model is sent, so it costs no tokens.
+- Changed
+  - No user-visible changes to chat, the TUI, the turn loop, or the CLI surface. `axiom --help`, `axiom chat --help`, and `axiom code --help` are unchanged.
+  - `npm publish` now runs automatically after a tagged release. Previously the `release: published` trigger could never fire, because the release is created with the default `GITHUB_TOKEN` and GitHub does not trigger workflows from events raised by that token. Publishing is chained off the release pipeline instead, and the release gate now asserts that wiring. This is why 1.0.24 and 1.0.25 were never published to npm.
+
 ## 1.0.26
 
 - Fixed

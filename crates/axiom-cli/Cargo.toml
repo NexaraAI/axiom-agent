@@ -11,15 +11,15 @@ path = "src/main.rs"
 
 [dependencies]
 anyhow.workspace = true
-axiom-agent = { path = "../axiom-agent", version = "=1.0.26" }
-axiom-coder = { path = "../axiom-coder", version = "=1.0.26" }
-axiom-core = { path = "../axiom-core", version = "=1.0.26" }
-axiom-engine = { path = "../axiom-engine", version = "=1.0.26" }
-axiom-lens = { path = "../axiom-lens", version = "=1.0.26" }
-axiom-llm = { path = "../axiom-llm", version = "=1.0.26" }
-axiom-mcp = { path = "../axiom-mcp", version = "=1.0.26" }
-axiom-proof = { path = "../axiom-proof", version = "=1.0.26" }
-axiom-upd = { package = "axiom-update", path = "../axiom-update", version = "=1.0.26" }
+axiom-agent = { path = "../axiom-agent", version = "=1.0.27" }
+axiom-coder = { path = "../axiom-coder", version = "=1.0.27" }
+axiom-core = { path = "../axiom-core", version = "=1.0.27" }
+axiom-engine = { path = "../axiom-engine", version = "=1.0.27" }
+axiom-lens = { path = "../axiom-lens", version = "=1.0.27" }
+axiom-llm = { path = "../axiom-llm", version = "=1.0.27" }
+axiom-mcp = { path = "../axiom-mcp", version = "=1.0.27" }
+axiom-proof = { path = "../axiom-proof", version = "=1.0.27" }
+axiom-upd = { package = "axiom-update", path = "../axiom-update", version = "=1.0.27" }
 clap.workspace = true
 futures-util = "0.3"
 nu-ansi-term.workspace = true
