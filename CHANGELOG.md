@@ -4,6 +4,17 @@ All notable changes to Axiom are documented here. Versions follow semantic
 versioning. Stable releases document user-visible changes, configuration or
 proof migrations, security fixes, and upgrade actions.
 
+## 1.0.26
+
+- Fixed
+  - A single tool result can no longer dominate a turn's context. Every observation is resent with each later model call in the turn and again in every later turn, so an uncapped result is multiplied by both. A `github.search` against a 15-repository organization was returning 90,811 characters into the transcript and turning a 1 kB answer into 79,007 prompt tokens. Tool results are now capped at 8,000 characters in the agent loop, which previously had no bound at all; the only truncation there applied to manifest hook output. The full result is still written to the session `outputs/` directory and stays available to `!show`, and the truncation note tells the model how to narrow the next call.
+  - `github.search` returns a projection instead of the raw GitHub API object. Each repository came back 83 fields wide, of which 73 were derived URLs and flags (`archive_url`, `assignees_url`, `blobs_url`, `clone_url`, and so on) that carry no information a model can act on — roughly 89% of every object. Ten fields survive, `license` reduces to its SPDX id, and unrecognized shapes are dropped rather than passed through. `readme` bodies are unaffected and no repository is dropped.
+  - Fetch-style results are unwrapped before they reach the model. `web.fetch` returned `{status, content_type, bytes, text}`, and re-serializing that as JSON made the model read `\n` escapes for every newline in the page body and spend tokens on the envelope. It now receives the text with a short provenance header.
+  - The per-result budget now lives in one place. `axiom-cli` already had an 8,000-character cap, with a correct explanation of why it matters, but it was only reachable from the single-shot path while the multi-step loop applied none. Both paths now read `TOOL_RESULT_BUDGET_CHARS` from `axiom-agent`, so they cannot drift apart again.
+- Changed
+  - No user-visible changes to chat, the TUI, the turn loop, or the CLI surface. `axiom --help`, `axiom chat --help`, and `axiom code --help` are unchanged.
+  - Regression tests for all of the above use a realistic 83-field repository fixture rather than a synthetic blob, and assert that no repository is dropped and the useful fields survive, so the projection cannot quietly become lossy.
+
 ## 1.0.25
 
 - Security

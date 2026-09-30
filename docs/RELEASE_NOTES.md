@@ -31,6 +31,13 @@ endpoints are supported.
 - One secret redactor instead of two. The chat session had its own weaker
   copy of the JSON key rules, which missed `private_key` and could write it
   to persisted session state in the clear.
+- A single tool result can no longer dominate a turn. Tool results are capped
+  at 8,000 characters in the agent loop, which previously applied no bound at
+  all. Full results are still saved and remain available to `!show`.
+- `github.search` returns the ten fields worth reading instead of the full
+  83-field GitHub API object, about 89% of which was derived URLs and flags.
+- Fetch results reach the model as text rather than as re-escaped JSON, so
+  newlines are newlines instead of `\n`.
 - `test.run` applies the destructive-command blocklist, so a command
   supplied as a test can no longer reach around the guard that protects
   every other spawn.

@@ -14,7 +14,7 @@ Proof Mode records what happened during each session: what you asked, which skil
 
 ## Current Status
 
-This repository contains Axiom `1.0.25`, a stable release that fixes several secret-handling and tool-execution gaps, unifies the provider/variant model table, and splits the largest modules into focused files. It also carries forward the clipboard paste, dynamic multiline expansion, Minecraft-style slash command autocomplete, non-empty tool call invocation history, initial stream timeouts, full-screen terminal UI, self-verifying agent loop, implementation-plan approval gate for Build mode, learning skill capture, selectable workspaces, and reduced per-turn system-message overhead from earlier releases:
+This repository contains Axiom `1.0.26`, a stable release that bounds how much a single tool result can cost you, projects GitHub search results down to the fields worth reading, and fixes several secret-handling and tool-execution gaps. It also carries forward the clipboard paste, dynamic multiline expansion, Minecraft-style slash command autocomplete, non-empty tool call invocation history, initial stream timeouts, full-screen terminal UI, self-verifying agent loop, implementation-plan approval gate for Build mode, learning skill capture, selectable workspaces, and reduced per-turn system-message overhead from earlier releases:
 
 ```bash
 npm install -g axiom-agent
