@@ -33,30 +33,58 @@ on:
           - "latest"
   release:
     types: [published]
+  # `release: published` never fires here in practice. release.yml creates the
+  # GitHub Release with the default GITHUB_TOKEN, and GitHub deliberately does
+  # not trigger workflows from events raised by that token, to stop recursive
+  # chains. Verified: across 15 npm-publish runs there were zero with
+  # event=release.
+  #
+  # So chain off the release pipeline instead. `head_branch` carries the tag for
+  # a tag-triggered run, and the publish job re-checks the checkout against the
+  # tag and the release assets before it writes anything, so a run that is not
+  # tied to a real published release cannot get through.
+  workflow_run:
+    # This matches the workflow's `name:`, not its filename. The file is
+    # release.yml but the name is "Release Binaries"; using the filename here
+    # would silently never match.
+    workflows: ["Release Binaries"]
+    types: [completed]
 
 permissions:
   contents: read
 
 concurrency:
-  group: npm-publish-${{ github.event.release.tag_name || inputs['release-tag'] || github.run_id }}
+  # Keyed by tag wherever a tag is known, so an automatic run and a manual
+  # retry for the same release serialize instead of racing. Falls back to the
+  # run id for triggers that carry no tag.
+  group: npm-publish-${{ github.event.release.tag_name || inputs['release-tag'] || github.event.workflow_run.head_branch || github.event.run_id }}
   cancel-in-progress: false
+
 
 jobs:
   smoke:
     name: Validate released npm package
     runs-on: ubuntu-22.04
+    # Do not spend a runner validating a release pipeline that failed, and do
+    # not start when there is no tag to bind to.
+    if: >-
+      github.event_name == 'release'
+      || github.event_name == 'workflow_dispatch'
+      || (github.event_name == 'workflow_run'
+          && github.event.workflow_run.conclusion == 'success'
+          && startsWith(github.event.workflow_run.head_branch, 'v'))
     outputs:
       dist_tag: ${{ steps.identity.outputs.dist_tag }}
       package_version: ${{ steps.identity.outputs.package_version }}
       release_tag: ${{ steps.identity.outputs.release_tag }}
     env:
-      RELEASE_TAG: ${{ github.event.release.tag_name || inputs['release-tag'] }}
+      RELEASE_TAG: ${{ github.event.release.tag_name || inputs['release-tag'] || github.event.workflow_run.head_branch }}
       REQUESTED_DIST_TAG: ${{ inputs['dist-tag'] }}
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           fetch-depth: 0
-          ref: ${{ github.event.release.tag_name || inputs['release-tag'] }}
+          ref: ${{ github.event.release.tag_name || inputs['release-tag'] || github.event.workflow_run.head_branch }}
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: "24"
@@ -101,7 +129,15 @@ jobs:
     name: Publish immutable npm version
     runs-on: ubuntu-22.04
     needs: smoke
-    if: github.event_name == 'workflow_dispatch' && inputs.publish == 'true'
+    # Automatic once a tagged release pipeline succeeds. workflow_dispatch keeps
+    # `publish` as an explicit opt-in so a retry stays deliberate; a release
+    # published outside CI publishes too. The smoke gate above must have run,
+    # and `--assert-unpublished` below still rejects an already-published
+    # version, so a duplicate trigger cannot publish twice.
+    if: >-
+      github.event_name == 'release'
+      || (github.event_name == 'workflow_dispatch' && inputs.publish == 'true')
+      || (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success')
     environment:
       name: npm-publish
     permissions:

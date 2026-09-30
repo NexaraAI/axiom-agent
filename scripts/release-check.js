@@ -216,6 +216,20 @@ function assertCostBudgetContract() {
   }
 }
 
+// Reads the `name:` of a workflow file.
+//
+// GitHub matches workflow_run.workflows against the workflow's name, not its
+// filename, so the release gate needs the real name to assert the wiring.
+function readReleaseWorkflowName() {
+  const file = path.join(REPO_ROOT, ".github", "workflows", "release.yml");
+  if (!fs.existsSync(file)) {
+    return null;
+  }
+  const source = fs.readFileSync(file, "utf8");
+  const match = source.match(/^name:\s*(.+?)\s*$/m);
+  return match ? match[1].trim() : null;
+}
+
 function assertReleaseFiles() {
   expectFile(".github/workflows/ci.yml");
   expectFile(".github/workflows/release.yml");
@@ -446,8 +460,42 @@ function assertNpmTrustedPublishing() {
     fail("npm workflow dispatch must require an existing GitHub Release tag.");
   }
 
+  // Publishing must be automatic after a tagged release. The `release:
+  // published` trigger cannot fire here, because release.yml creates the
+  // release with the default GITHUB_TOKEN and GitHub does not trigger
+  // workflows from events raised by that token. Without workflow_run, every
+  // release silently needs a manual dispatch.
+  //
+  // `workflows:` matches the workflow's name, not its filename. Asserting the
+  // name explicitly is the point: using "release.yml" here would parse fine
+  // and never match.
+  const releaseWorkflowName = readReleaseWorkflowName();
+  if (!releaseWorkflowName) {
+    fail("could not determine the name of .github/workflows/release.yml");
+  }
   for (const requirement of [
-    "ref: ${{ github.event.release.tag_name || inputs['release-tag'] }}",
+    "workflow_run:",
+    "types: [completed]",
+    `workflows: ["${releaseWorkflowName}"]`
+  ]) {
+    if (!workflow.includes(requirement)) {
+      fail(`npm workflow must chain off the release pipeline; missing: ${requirement}`);
+    }
+  }
+  if (!publishJob.includes("github.event.workflow_run.conclusion == 'success'")) {
+    fail(
+      "npm publish job must require a successful release pipeline, not run on any completion"
+    );
+  }
+  // The publish job must take its tag from the smoke job's validated output,
+  // not recompute it. Re-deriving the tag in a second place is how the two
+  // copies drift and how a publish ends up pointed at a different release.
+  if (!publishJob.includes("RELEASE_TAG: ${{ needs.smoke.outputs.release_tag }}")) {
+    fail("npm publish job must bind its tag to the validated smoke job output");
+  }
+
+  for (const requirement of [
+    "ref: ${{ github.event.release.tag_name || inputs['release-tag'] || github.event.workflow_run.head_branch }}",
     'expected_tag="v${package_version}"',
     'test "$RELEASE_TAG" = "$expected_tag"',
     'git rev-list -n 1 "$RELEASE_TAG"',
