@@ -25,8 +25,15 @@ pub(crate) const TOOL_OUTPUT_SPILL_LINES: usize = 40;
 pub(crate) const TOOL_OUTPUT_SPILL_CHARS: usize = 2_000;
 pub(crate) const TOOL_OUTPUT_SPILL_LONGEST_LINE: usize = 1_200;
 /// How much of a spilled payload is printed before pointing at `/show`.
-pub(crate) const TOOL_OUTPUT_PREVIEW_LINES: usize = 16;
-pub(crate) const TOOL_OUTPUT_PREVIEW_CHARS: usize = 1_600;
+///
+/// Deliberately tiny. The transcript is for following the conversation, not
+/// for reading fetched pages: a 16-line, 1,600-character preview of a search
+/// result buried the model's actual answer under a wall of fetched text that
+/// the user did not ask to read inline. The full payload is still on disk and
+/// still one command away, so nothing becomes unreachable — it just stops
+/// taking over the screen by default.
+pub(crate) const TOOL_OUTPUT_PREVIEW_LINES: usize = 4;
+pub(crate) const TOOL_OUTPUT_PREVIEW_CHARS: usize = 280;
 
 /// What to do with a plan the agent just proposed.
 pub(crate) enum PlanDecision {
@@ -159,11 +166,29 @@ pub(crate) fn valid_output_id(id: &str) -> bool {
     })
 }
 
+/// Head of `content`, clipped to both limits.
+///
+/// Ends with `…` whenever something was dropped, so a short preview is never
+/// mistaken for the whole payload. The caller already reports the full size
+/// and where to read it; this makes the cut legible in the line itself.
 pub(crate) fn bounded_output_preview(content: &str, max_lines: usize, max_chars: usize) -> String {
-    let by_lines = content
+    let kept = content
         .lines()
         .take(max_lines)
         .collect::<Vec<_>>()
         .join("\n");
-    by_lines.chars().take(max_chars).collect()
+    let clipped: String = kept.chars().take(max_chars).collect();
+    // Compare against the same normalisation `lines()` just applied, so a payload
+    // that fitted is never reported as clipped. Two things would otherwise trip
+    // this: `lines()` drops a single trailing newline, and it rewrites CRLF as LF,
+    // so both shrink the input without dropping any content.
+    let full = content.strip_suffix('\n').unwrap_or(content);
+    let full = full.lines().collect::<Vec<_>>().join("\n");
+    if clipped.is_empty() {
+        clipped
+    } else if clipped.chars().count() < full.chars().count() {
+        format!("{clipped}…")
+    } else {
+        clipped
+    }
 }

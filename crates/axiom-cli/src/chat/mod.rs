@@ -7002,4 +7002,74 @@ mod tests {
             "structured results stay pretty-printed"
         );
     }
+
+    /// A spilled preview stays small enough to read past, and says that it is cut.
+    #[test]
+    fn spilled_preview_is_clipped_and_marked_as_truncated() {
+        let body = (1..=200)
+            .map(|n| format!("line {n} of a long fetched page"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let result = SkillExecutionResult {
+            skill_id: "web.fetch".to_string(),
+            output: json!({
+                "url": "https://example.com/search",
+                "status": 200,
+                "content_type": "text/markdown",
+                "bytes": body.len(),
+                "text": body,
+            }),
+        };
+
+        let shown = human_readable_payload(&result);
+        let preview =
+            bounded_output_preview(&shown, TOOL_OUTPUT_PREVIEW_LINES, TOOL_OUTPUT_PREVIEW_CHARS);
+
+        let lines = preview.lines().count();
+        assert!(
+            lines <= TOOL_OUTPUT_PREVIEW_LINES,
+            "a 200-line page must not print 200 lines: {lines}"
+        );
+        assert!(
+            preview.chars().count() <= TOOL_OUTPUT_PREVIEW_CHARS + 1,
+            "the char budget has to hold once the ellipsis is added: {preview}"
+        );
+        assert!(
+            preview.ends_with('…'),
+            "a clipped preview must not read like the whole payload: {preview}"
+        );
+    }
+
+    /// Nothing was dropped, so nothing is marked as dropped.
+    #[test]
+    fn untruncated_preview_has_no_ellipsis() {
+        let short = "alpha\nbeta\ngamma";
+        assert_eq!(
+            bounded_output_preview(short, TOOL_OUTPUT_PREVIEW_LINES, TOOL_OUTPUT_PREVIEW_CHARS),
+            short,
+            "a payload that fits must come back untouched"
+        );
+    }
+
+    /// A trailing newline is not a reason to claim the output was clipped.
+    #[test]
+    fn preview_ending_in_newline_is_not_marked_truncated() {
+        let short = "alpha\nbeta\n";
+        assert_eq!(
+            bounded_output_preview(short, TOOL_OUTPUT_PREVIEW_LINES, TOOL_OUTPUT_PREVIEW_CHARS),
+            "alpha\nbeta",
+            "only the final newline is dropped, so there is nothing to mark"
+        );
+    }
+
+    /// Windows line endings shrink under `lines()` without any content being lost.
+    #[test]
+    fn preview_with_crlf_ends_is_not_marked_truncated() {
+        let short = "alpha\r\nbeta";
+        assert_eq!(
+            bounded_output_preview(short, TOOL_OUTPUT_PREVIEW_LINES, TOOL_OUTPUT_PREVIEW_CHARS),
+            "alpha\nbeta",
+            "CRLF to LF normalisation is not truncation"
+        );
+    }
 }
