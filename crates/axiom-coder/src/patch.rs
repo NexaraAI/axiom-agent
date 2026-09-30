@@ -396,6 +396,7 @@ fn resolve_secret_free(
 mod tests {
     use std::{
         path::PathBuf,
+        sync::atomic::{AtomicU64, Ordering},
         time::{SystemTime, UNIX_EPOCH},
     };
 
@@ -755,11 +756,45 @@ mod tests {
         }
     }
 
+    /// A temp directory that no sibling test can collide with.
+    ///
+    /// Wall-clock nanoseconds alone is not unique. These tests run in parallel and
+    /// each one deletes its directory on the way out, so two tests that landed on
+    /// the same timestamp shared a directory and one deleted the other's files
+    /// mid-assertion. That surfaced as a macOS-only failure of
+    /// `existing_full_file_replacement_requires_matching_base_hash`, which expects
+    /// a conflicting base hash to be rejected: with its file removed by a
+    /// neighbour, the write was treated as a create and quietly succeeded. macOS
+    /// hands out coarse `SystemTime` values often enough for this to happen.
+    ///
+    /// The process id separates concurrent test binaries and the counter separates
+    /// threads within one, so the pair is unique regardless of clock resolution.
+    /// Nanoseconds stay in the name only to keep stale directories from different
+    /// runs from ever being the same path.
     fn unique_temp_dir() -> PathBuf {
+        static SEQUENCE: AtomicU64 = AtomicU64::new(0);
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .expect("time")
             .as_nanos();
-        std::env::temp_dir().join(format!("axiom-coder-patch-test-{nanos}"))
+        let sequence = SEQUENCE.fetch_add(1, Ordering::Relaxed);
+        std::env::temp_dir().join(format!(
+            "axiom-coder-patch-test-{}-{nanos}-{sequence}",
+            std::process::id()
+        ))
+    }
+
+    /// The uniqueness guarantee itself, so a future edit cannot quietly restore the
+    /// collision that made these tests interfere with each other.
+    #[test]
+    fn sibling_tests_never_share_a_temp_dir() {
+        let dirs = (0..64)
+            .map(|_| unique_temp_dir())
+            .collect::<std::collections::HashSet<_>>();
+        assert_eq!(
+            dirs.len(),
+            64,
+            "64 sibling temp dirs must be 64 distinct paths, or one test can delete another"
+        );
     }
 }
